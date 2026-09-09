@@ -1,0 +1,22 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Build output
+[Bb]in/
+[Oo]bj/
+
+# NuGet
+packages/
+
+# Test results
+TestResults/
+*.trx
+
+# ASP.NET / local development
+appsettings.Development.json
+
+# OS files
+.DS_Store
+Thumbs.db
