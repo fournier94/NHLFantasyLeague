@@ -8,7 +8,9 @@
 
         public Player Player { get; set; } = null!;
 
-        public string Season { get; set; } = string.Empty;
+        public int SeasonId { get; set; }
+
+        public Season Season { get; set; } = null!;
 
         public int WeekNumber { get; set; }
 

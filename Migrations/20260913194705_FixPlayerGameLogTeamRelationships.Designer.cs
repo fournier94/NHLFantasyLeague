@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NhlFantasyLeague.api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NhlFantasyLeague.api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260913194705_FixPlayerGameLogTeamRelationships")]
+    partial class FixPlayerGameLogTeamRelationships
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -389,12 +392,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("Goals")
                         .HasColumnType("integer");
 
-                    b.Property<int>("GoalsAgainst")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("HatTrick")
-                        .HasColumnType("boolean");
-
                     b.Property<bool>("IsHomeGame")
                         .HasColumnType("boolean");
 
@@ -414,9 +411,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .HasColumnType("integer");
 
                     b.Property<int>("SeasonId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ShotsAgainst")
                         .HasColumnType("integer");
 
                     b.Property<bool>("Shutout")
@@ -447,9 +441,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("Assists")
                         .HasColumnType("integer");
 
-                    b.Property<int>("FantasyPoints")
-                        .HasColumnType("integer");
-
                     b.Property<int>("GameWinningGoals")
                         .HasColumnType("integer");
 
@@ -457,9 +448,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .HasColumnType("integer");
 
                     b.Property<int>("Goals")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("GoalsAgainst")
                         .HasColumnType("integer");
 
                     b.Property<decimal>("GoalsAgainstAverage")

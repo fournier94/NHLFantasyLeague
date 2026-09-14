@@ -20,6 +20,8 @@
 
         public DraftPick? DraftPick { get; set; }
 
+        public TradeItemType ItemType { get; set; }
+
         public bool IsProspect { get; set; }
     }
 }

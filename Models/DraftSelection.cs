@@ -4,10 +4,6 @@
     {
         public int Id { get; set; }
 
-        public int DraftId { get; set; }
-
-        public Draft Draft { get; set; } = null!;
-
         public int DraftPickId { get; set; }
 
         public DraftPick DraftPick { get; set; } = null!;

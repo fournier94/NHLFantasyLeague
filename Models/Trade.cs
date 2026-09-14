@@ -6,6 +6,10 @@
 
         public DateTime Date { get; set; }
 
+        public int SeasonId { get; set; }
+
+        public Season Season { get; set; } = null!;
+
         public int FromFantasyTeamId { get; set; }
 
         public FantasyTeam FromFantasyTeam { get; set; } = null!;
@@ -15,5 +19,7 @@
         public FantasyTeam ToFantasyTeam { get; set; } = null!;
 
         public string? Notes { get; set; }
+
+        public TradeStatus Status { get; set; }
     }
 }

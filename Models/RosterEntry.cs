@@ -19,5 +19,6 @@
         public RosterStatus RosterStatus { get; set; }
 
         public decimal FantasySalary { get; set; }
+        public int RosterSlot { get; set; }
     }
 }

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NhlFantasyLeague.api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NhlFantasyLeague.api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909194818_AddLeagueToFantasyTeam")]
+    partial class AddLeagueToFantasyTeam
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -57,26 +60,20 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("CurrentOwnerFantasyTeamId")
                         .HasColumnType("integer");
 
-                    b.Property<int>("DraftId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("OriginalOwnerFantasyTeamId")
-                        .HasColumnType("integer");
-
                     b.Property<int>("PickNumber")
                         .HasColumnType("integer");
 
                     b.Property<int>("Round")
                         .HasColumnType("integer");
 
+                    b.Property<int>("SeasonId")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CurrentOwnerFantasyTeamId");
 
-                    b.HasIndex("OriginalOwnerFantasyTeamId");
-
-                    b.HasIndex("DraftId", "Round", "PickNumber")
-                        .IsUnique();
+                    b.HasIndex("SeasonId");
 
                     b.ToTable("DraftPicks");
                 });
@@ -88,6 +85,9 @@ namespace NhlFantasyLeague.api.Migrations
                         .HasColumnType("integer");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("DraftId")
+                        .HasColumnType("integer");
 
                     b.Property<int>("DraftPickId")
                         .HasColumnType("integer");
@@ -103,8 +103,9 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DraftPickId")
-                        .IsUnique();
+                    b.HasIndex("DraftId");
+
+                    b.HasIndex("DraftPickId");
 
                     b.HasIndex("FantasyTeamId");
 
@@ -154,13 +155,9 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("HomeFantasyTeamId");
 
+                    b.HasIndex("SeasonId");
+
                     b.HasIndex("WinnerFantasyTeamId");
-
-                    b.HasIndex("SeasonId", "WeekNumber", "AwayFantasyTeamId")
-                        .IsUnique();
-
-                    b.HasIndex("SeasonId", "WeekNumber", "HomeFantasyTeamId")
-                        .IsUnique();
 
                     b.ToTable("FantasyMatchups");
                 });
@@ -182,8 +179,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("LeagueId", "Name")
-                        .IsUnique();
+                    b.HasIndex("LeagueId");
 
                     b.ToTable("FantasyTeams");
                 });
@@ -207,10 +203,9 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("SeasonId");
+                    b.HasIndex("FantasyTeamId");
 
-                    b.HasIndex("FantasyTeamId", "SeasonId")
-                        .IsUnique();
+                    b.HasIndex("SeasonId");
 
                     b.ToTable("FantasyTeamSeasons");
                 });
@@ -241,8 +236,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("PlayerId");
 
-                    b.HasIndex("SeasonId", "FantasyTeamId", "PlayerId")
-                        .IsUnique();
+                    b.HasIndex("SeasonId");
 
                     b.ToTable("KeeperSelections");
                 });
@@ -310,13 +304,7 @@ namespace NhlFantasyLeague.api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<int>("NhlTeamId")
-                        .HasColumnType("integer");
-
                     b.HasKey("Id");
-
-                    b.HasIndex("NhlTeamId")
-                        .IsUnique();
 
                     b.ToTable("NhlTeams");
                 });
@@ -343,9 +331,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<int>("NhlPlayerId")
-                        .HasColumnType("integer");
-
                     b.Property<int?>("NhlTeamId")
                         .HasColumnType("integer");
 
@@ -354,9 +339,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("NhlPlayerId")
-                        .IsUnique();
 
                     b.HasIndex("NhlTeamId");
 
@@ -380,26 +362,14 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<DateOnly>("GameDate")
                         .HasColumnType("date");
 
-                    b.Property<bool>("GoalieOvertimeLoss")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("GoalieWin")
-                        .HasColumnType("boolean");
+                    b.Property<int>("GamesPlayed")
+                        .HasColumnType("integer");
 
                     b.Property<int>("Goals")
                         .HasColumnType("integer");
 
-                    b.Property<int>("GoalsAgainst")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("HatTrick")
-                        .HasColumnType("boolean");
-
                     b.Property<bool>("IsHomeGame")
                         .HasColumnType("boolean");
-
-                    b.Property<long>("NhlGameId")
-                        .HasColumnType("bigint");
 
                     b.Property<int>("NhlTeamId")
                         .HasColumnType("integer");
@@ -413,14 +383,9 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("Points")
                         .HasColumnType("integer");
 
-                    b.Property<int>("SeasonId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ShotsAgainst")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("Shutout")
-                        .HasColumnType("boolean");
+                    b.Property<string>("Season")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -428,10 +393,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("OpponentNhlTeamId");
 
-                    b.HasIndex("SeasonId");
-
-                    b.HasIndex("PlayerId", "NhlGameId")
-                        .IsUnique();
+                    b.HasIndex("PlayerId");
 
                     b.ToTable("PlayerGameLogs");
                 });
@@ -447,68 +409,27 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("Assists")
                         .HasColumnType("integer");
 
-                    b.Property<int>("FantasyPoints")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("GameWinningGoals")
-                        .HasColumnType("integer");
-
                     b.Property<int>("GamesPlayed")
                         .HasColumnType("integer");
 
                     b.Property<int>("Goals")
                         .HasColumnType("integer");
 
-                    b.Property<int>("GoalsAgainst")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("GoalsAgainstAverage")
-                        .HasColumnType("numeric");
-
                     b.Property<int>("HatTricks")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Losses")
                         .HasColumnType("integer");
 
                     b.Property<int>("OvertimeLosses")
                         .HasColumnType("integer");
 
-                    b.Property<int>("PenaltyMinutes")
-                        .HasColumnType("integer");
-
                     b.Property<int>("PlayerId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PlusMinus")
                         .HasColumnType("integer");
 
                     b.Property<int>("Points")
                         .HasColumnType("integer");
 
-                    b.Property<int>("PowerPlayGoals")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PowerPlayPoints")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("SavePercentage")
-                        .HasColumnType("numeric");
-
-                    b.Property<int>("Saves")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("SeasonId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("ShootingPercentage")
-                        .HasColumnType("numeric");
-
-                    b.Property<int>("Shots")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ShotsAgainst")
-                        .HasColumnType("integer");
+                    b.Property<string>("Season")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<int>("Shutouts")
                         .HasColumnType("integer");
@@ -519,9 +440,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("PlayerId");
-
-                    b.HasIndex("SeasonId", "PlayerId")
-                        .IsUnique();
 
                     b.ToTable("PlayerSeasonStats");
                 });
@@ -543,9 +461,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("PlayerId")
                         .HasColumnType("integer");
 
-                    b.Property<int>("RosterSlot")
-                        .HasColumnType("integer");
-
                     b.Property<string>("RosterStatus")
                         .IsRequired()
                         .HasColumnType("text");
@@ -559,10 +474,38 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("PlayerId");
 
-                    b.HasIndex("SeasonId", "FantasyTeamId", "PlayerId")
-                        .IsUnique();
+                    b.HasIndex("SeasonId");
 
                     b.ToTable("RosterEntries");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.Season", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("SalaryCap")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("SalaryFloor")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Seasons");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.SeasonStanding", b =>
@@ -595,8 +538,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("FantasyTeamId");
 
-                    b.HasIndex("SeasonId", "FantasyTeamId")
-                        .IsUnique();
+                    b.HasIndex("SeasonId");
 
                     b.ToTable("SeasonStandings");
                 });
@@ -618,20 +560,12 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<string>("Notes")
                         .HasColumnType("text");
 
-                    b.Property<int>("SeasonId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
                     b.Property<int>("ToFantasyTeamId")
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
 
                     b.HasIndex("FromFantasyTeamId");
-
-                    b.HasIndex("SeasonId");
 
                     b.HasIndex("ToFantasyTeamId");
 
@@ -654,9 +588,6 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.Property<bool>("IsProspect")
                         .HasColumnType("boolean");
-
-                    b.Property<int>("ItemType")
-                        .HasColumnType("integer");
 
                     b.Property<int?>("PlayerId")
                         .HasColumnType("integer");
@@ -700,8 +631,9 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("PlayerId")
                         .HasColumnType("integer");
 
-                    b.Property<int>("SeasonId")
-                        .HasColumnType("integer");
+                    b.Property<string>("Season")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<int>("ShutoutBonus")
                         .HasColumnType("integer");
@@ -722,56 +654,12 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("PlayerId");
 
-                    b.HasIndex("SeasonId", "PlayerId", "WeekNumber")
-                        .IsUnique();
-
                     b.ToTable("WeeklyFantasyScores");
-                });
-
-            modelBuilder.Entity("Season", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateOnly>("EndDate")
-                        .HasColumnType("date");
-
-                    b.Property<int>("LeagueId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("NhlSeasonCode")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("SalaryCap")
-                        .HasColumnType("numeric");
-
-                    b.Property<decimal>("SalaryFloor")
-                        .HasColumnType("numeric");
-
-                    b.Property<DateOnly>("StartDate")
-                        .HasColumnType("date");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("NhlSeasonCode")
-                        .IsUnique();
-
-                    b.HasIndex("LeagueId", "Name")
-                        .IsUnique();
-
-                    b.ToTable("Seasons");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Draft", b =>
                 {
-                    b.HasOne("Season", "Season")
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
                         .WithMany()
                         .HasForeignKey("SeasonId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -785,30 +673,28 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "CurrentOwnerFantasyTeam")
                         .WithMany()
                         .HasForeignKey("CurrentOwnerFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
+                        .WithMany()
+                        .HasForeignKey("SeasonId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("CurrentOwnerFantasyTeam");
+
+                    b.Navigation("Season");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.DraftSelection", b =>
+                {
                     b.HasOne("NhlFantasyLeague.api.Models.Draft", "Draft")
                         .WithMany()
                         .HasForeignKey("DraftId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "OriginalOwnerFantasyTeam")
-                        .WithMany()
-                        .HasForeignKey("OriginalOwnerFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("CurrentOwnerFantasyTeam");
-
-                    b.Navigation("Draft");
-
-                    b.Navigation("OriginalOwnerFantasyTeam");
-                });
-
-            modelBuilder.Entity("NhlFantasyLeague.api.Models.DraftSelection", b =>
-                {
                     b.HasOne("NhlFantasyLeague.api.Models.DraftPick", "DraftPick")
                         .WithMany()
                         .HasForeignKey("DraftPickId")
@@ -827,6 +713,8 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.Navigation("Draft");
+
                     b.Navigation("DraftPick");
 
                     b.Navigation("FantasyTeam");
@@ -839,16 +727,16 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "AwayFantasyTeam")
                         .WithMany()
                         .HasForeignKey("AwayFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "HomeFantasyTeam")
                         .WithMany()
                         .HasForeignKey("HomeFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
                         .WithMany()
                         .HasForeignKey("SeasonId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -856,8 +744,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "WinnerFantasyTeam")
                         .WithMany()
-                        .HasForeignKey("WinnerFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .HasForeignKey("WinnerFantasyTeamId");
 
                     b.Navigation("AwayFantasyTeam");
 
@@ -887,7 +774,7 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
                         .WithMany()
                         .HasForeignKey("SeasonId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -912,7 +799,7 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
                         .WithMany()
                         .HasForeignKey("SeasonId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -929,9 +816,7 @@ namespace NhlFantasyLeague.api.Migrations
                 {
                     b.HasOne("NhlFantasyLeague.api.Models.NhlTeam", "NhlTeam")
                         .WithMany("Players")
-                        .HasForeignKey("NhlTeamId")
-                        .HasPrincipalKey("NhlTeamId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .HasForeignKey("NhlTeamId");
 
                     b.Navigation("NhlTeam");
                 });
@@ -941,15 +826,13 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasOne("NhlFantasyLeague.api.Models.NhlTeam", "NhlTeam")
                         .WithMany()
                         .HasForeignKey("NhlTeamId")
-                        .HasPrincipalKey("NhlTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("NhlFantasyLeague.api.Models.NhlTeam", "OpponentNhlTeam")
                         .WithMany()
                         .HasForeignKey("OpponentNhlTeamId")
-                        .HasPrincipalKey("NhlTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("NhlFantasyLeague.api.Models.Player", "Player")
@@ -958,19 +841,11 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
-                        .WithMany()
-                        .HasForeignKey("SeasonId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
                     b.Navigation("NhlTeam");
 
                     b.Navigation("OpponentNhlTeam");
 
                     b.Navigation("Player");
-
-                    b.Navigation("Season");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerSeasonStat", b =>
@@ -981,15 +856,7 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
-                        .WithMany()
-                        .HasForeignKey("SeasonId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
                     b.Navigation("Player");
-
-                    b.Navigation("Season");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.RosterEntry", b =>
@@ -1006,7 +873,7 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
                         .WithMany()
                         .HasForeignKey("SeasonId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -1027,7 +894,7 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
                         .WithMany()
                         .HasForeignKey("SeasonId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -1043,24 +910,16 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "FromFantasyTeam")
                         .WithMany()
                         .HasForeignKey("FromFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Season", "Season")
-                        .WithMany()
-                        .HasForeignKey("SeasonId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "ToFantasyTeam")
                         .WithMany()
                         .HasForeignKey("ToFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("FromFantasyTeam");
-
-                    b.Navigation("Season");
 
                     b.Navigation("ToFantasyTeam");
                 });
@@ -1074,7 +933,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "FromFantasyTeam")
                         .WithMany()
                         .HasForeignKey("FromFantasyTeamId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("NhlFantasyLeague.api.Models.Player", "Player")
@@ -1104,26 +963,7 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("Season", "Season")
-                        .WithMany()
-                        .HasForeignKey("SeasonId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
                     b.Navigation("Player");
-
-                    b.Navigation("Season");
-                });
-
-            modelBuilder.Entity("Season", b =>
-                {
-                    b.HasOne("NhlFantasyLeague.api.Models.League", "League")
-                        .WithMany()
-                        .HasForeignKey("LeagueId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("League");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.League", b =>

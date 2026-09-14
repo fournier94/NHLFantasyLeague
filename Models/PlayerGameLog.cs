@@ -8,9 +8,13 @@
 
         public Player Player { get; set; } = null!;
 
-        public string Season { get; set; } = string.Empty;
+        public int SeasonId { get; set; }
+
+        public Season Season { get; set; } = null!;
 
         public DateOnly GameDate { get; set; }
+
+        public long NhlGameId { get; set; }
 
         public int NhlTeamId { get; set; }
 
@@ -28,7 +32,17 @@
 
         public int Points { get; set; }
 
-        public int GamesPlayed { get; set; }
+        public bool HatTrick { get; set; }
+
+        public bool GoalieWin { get; set; }
+
+        public bool GoalieOvertimeLoss { get; set; }
+
+        public bool Shutout { get; set; }
+
+        public int GoalsAgainst { get; set; }
+
+        public int ShotsAgainst { get; set; }
 
         public int FantasyPoints { get; set; }
     }

@@ -4,13 +4,17 @@
     {
         public int Id { get; set; }
 
-        public int SeasonId { get; set; }
+        public int DraftId { get; set; }
 
-        public Season Season { get; set; } = null!;
+        public Draft Draft { get; set; } = null!;
 
         public int Round { get; set; }
 
         public int PickNumber { get; set; }
+
+        public int OriginalOwnerFantasyTeamId { get; set; }
+
+        public FantasyTeam OriginalOwnerFantasyTeam { get; set; } = null!;
 
         public int CurrentOwnerFantasyTeamId { get; set; }
 
