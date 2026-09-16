@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NhlFantasyLeague.api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NhlFantasyLeague.api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260916153047_AddPlayerIsRfa")]
+    partial class AddPlayerIsRfa
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -329,12 +332,6 @@ namespace NhlFantasyLeague.api.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("BirthCity")
-                        .HasColumnType("text");
-
-                    b.Property<string>("BirthCountry")
-                        .HasColumnType("text");
-
                     b.Property<DateOnly?>("BirthDate")
                         .HasColumnType("date");
 
@@ -343,12 +340,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("HeadshotUrl")
-                        .HasColumnType("text");
-
-                    b.Property<int?>("HeightInInches")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("HeroImageUrl")
                         .HasColumnType("text");
 
                     b.Property<bool>("IsRfa")
@@ -368,12 +359,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("ShootsCatches")
-                        .HasColumnType("text");
-
-                    b.Property<int?>("WeightInPounds")
-                        .HasColumnType("integer");
-
                     b.HasKey("Id");
 
                     b.HasIndex("NhlPlayerId")
@@ -382,119 +367,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("NhlTeamId");
 
                     b.ToTable("Players");
-                });
-
-            modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerCareerStat", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("Assists")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("AverageTimeOnIce")
-                        .HasColumnType("text");
-
-                    b.Property<decimal?>("FaceoffWinningPercentage")
-                        .HasColumnType("numeric");
-
-                    b.Property<int>("GameTypeId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("GameWinningGoals")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("GamesPlayed")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("GamesStarted")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Goals")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("GoalsAgainst")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("GoalsAgainstAverage")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("LeagueAbbreviation")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Losses")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("OvertimeGoals")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("OvertimeLosses")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PenaltyMinutes")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PlayerId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PlusMinus")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Points")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PowerPlayGoals")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PowerPlayPoints")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("SavePercentage")
-                        .HasColumnType("numeric");
-
-                    b.Property<int>("Saves")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Season")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Sequence")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("ShootingPercentage")
-                        .HasColumnType("numeric");
-
-                    b.Property<int>("ShorthandedGoals")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ShorthandedPoints")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Shots")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ShotsAgainst")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Shutouts")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("TeamName")
-                        .HasColumnType("text");
-
-                    b.Property<int>("Wins")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PlayerId", "Season", "GameTypeId", "Sequence")
-                        .IsUnique();
-
-                    b.ToTable("PlayerCareerStats");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerGameLog", b =>
@@ -1068,17 +940,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("NhlTeam");
-                });
-
-            modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerCareerStat", b =>
-                {
-                    b.HasOne("NhlFantasyLeague.api.Models.Player", "Player")
-                        .WithMany()
-                        .HasForeignKey("PlayerId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Player");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerGameLog", b =>

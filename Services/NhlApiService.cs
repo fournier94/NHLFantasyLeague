@@ -934,5 +934,461 @@ int seasonCode)
 
             return missingPlayers;
         }
+
+        public async Task<NhlPlayerSyncResult> DiscoverPlayerIdsAsync()
+        {
+            var teams = await _dbContext.NhlTeams
+                .ToListAsync();
+
+            if (teams.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "No NHL teams exist in the database. Sync teams first.");
+            }
+
+            var existingPlayerIds = (await _dbContext.Players
+                .Select(p => p.NhlPlayerId)
+                .ToListAsync())
+                .ToHashSet();
+
+            var result = new NhlPlayerSyncResult();
+
+            const int limit = 5;
+            const int maxAttempts = 5;
+
+            foreach (var team in teams)
+            {
+                result.TeamsProcessed++;
+
+                int startNumber = 0;
+                int currentNumber = 0;
+                int totalNumber = 0;
+
+                do
+                {
+                    var url =
+                        $"https://api.nhle.com/stats/rest/en/players" +
+                        $"?cayenneExp=currentTeamId%3D{team.NhlTeamId}" +
+                        $"&start={startNumber}" +
+                        $"&limit={limit}";
+
+                    NhlPlayerIdResponse? response = null;
+
+                    for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                    {
+                        using var httpResponse = await _httpClient.GetAsync(url);
+
+                        if (httpResponse.IsSuccessStatusCode)
+                        {
+                            response = await httpResponse.Content
+                                .ReadFromJsonAsync<NhlPlayerIdResponse>();
+
+                            break;
+                        }
+
+                        if ((int)httpResponse.StatusCode == 429)
+                        {
+                            await Task.Delay(
+                                TimeSpan.FromSeconds(2 * attempt));
+
+                            continue;
+                        }
+
+                        httpResponse.EnsureSuccessStatusCode();
+                    }
+
+                    if (response == null)
+                    {
+                        throw new HttpRequestException(
+                            $"NHL Stats API request failed after {maxAttempts} attempts.");
+                    }
+
+                    totalNumber = response.Total;
+
+                    foreach (var statsPlayer in response.Data)
+                    {
+                        result.PlayersProcessed++;
+
+                        if (existingPlayerIds.Contains(statsPlayer.Id))
+                        {
+                            continue;
+                        }
+
+                        var player = new Player
+                        {
+                            NhlPlayerId = statsPlayer.Id
+                        };
+
+                        _dbContext.Players.Add(player);
+
+                        existingPlayerIds.Add(statsPlayer.Id);
+
+                        result.PlayersAdded++;
+                    }
+
+                    currentNumber = startNumber + response.Data.Count;
+                    startNumber = currentNumber;
+
+                    // Small delay between Stats API requests.
+                    await Task.Delay(TimeSpan.FromSeconds(0.5));
+
+                } while (currentNumber < totalNumber);
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return result;
+        }
+
+        public async Task<Player?> PopulatePlayerFromLandingAsync(int nhlPlayerId)
+        {
+            var player = await _dbContext.Players
+                .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
+
+            if (player == null)
+            {
+                return null;
+            }
+
+            var nhlPlayer = await GetPlayerAsync(nhlPlayerId);
+
+            if (nhlPlayer == null)
+            {
+                return null;
+            }
+
+            player.FirstName = nhlPlayer.FirstName.Default;
+            player.LastName = nhlPlayer.LastName.Default;
+            player.Position = nhlPlayer.Position ?? string.Empty;
+            player.NhlTeamId = nhlPlayer.CurrentTeamId;
+
+            player.BirthDate = nhlPlayer.BirthDate.HasValue
+                ? DateOnly.FromDateTime(nhlPlayer.BirthDate.Value)
+                : null;
+
+            player.BirthCity = nhlPlayer.BirthCity?.Default;
+            player.BirthCountry = nhlPlayer.BirthCountry;
+            player.HeightInInches = nhlPlayer.HeightInInches;
+            player.WeightInPounds = nhlPlayer.WeightInPounds;
+            player.ShootsCatches = nhlPlayer.ShootsCatches;
+            player.HeroImageUrl = nhlPlayer.HeroImage;
+
+            player.HeadshotUrl = nhlPlayer.Headshot;
+
+            await _dbContext.SaveChangesAsync();
+
+            return player;
+        }
+
+        public async Task<NhlPlayerBatchResult> PopulatePlayersFromLandingBatchAsync()
+        {
+            var playerIds = await _dbContext.Players
+                .OrderBy(p => p.Id)
+                .Select(p => p.Id)
+                .ToListAsync();
+
+            var result = new NhlPlayerBatchResult
+            {
+                PlayersProcessed = playerIds.Count
+            };
+
+            foreach (var playerId in playerIds)
+            {
+                Player? player = null;
+
+                try
+                {
+                    player = await _dbContext.Players
+                        .FirstOrDefaultAsync(p => p.Id == playerId);
+
+                    if (player == null)
+                    {
+                        result.PlayersFailed++;
+                        result.FailedPlayers.Add(
+                            $"Database Player Id {playerId}: Player not found");
+
+                        continue;
+                    }
+
+                    var nhlPlayer = await GetPlayerAsync(player.NhlPlayerId);
+
+                    if (nhlPlayer == null)
+                    {
+                        result.PlayersFailed++;
+                        result.FailedPlayers.Add(
+                            $"{player.NhlPlayerId} - {player.FirstName} {player.LastName}: NHL API returned no data");
+
+                        continue;
+                    }
+
+                    player.FirstName = nhlPlayer.FirstName.Default;
+                    player.LastName = nhlPlayer.LastName.Default;
+                    player.Position = nhlPlayer.Position ?? string.Empty;
+                    player.NhlTeamId = nhlPlayer.CurrentTeamId;
+
+                    player.BirthDate = nhlPlayer.BirthDate.HasValue
+                        ? DateOnly.FromDateTime(nhlPlayer.BirthDate.Value)
+                        : null;
+
+                    player.BirthCity = nhlPlayer.BirthCity?.Default;
+                    player.BirthCountry = nhlPlayer.BirthCountry;
+                    player.HeightInInches = nhlPlayer.HeightInInches;
+                    player.WeightInPounds = nhlPlayer.WeightInPounds;
+                    player.ShootsCatches = nhlPlayer.ShootsCatches;
+                    player.HeroImageUrl = nhlPlayer.HeroImage;
+                    player.HeadshotUrl = nhlPlayer.Headshot;
+
+                    await SyncCareerStatsFromLandingAsync(
+                        player,
+                        nhlPlayer);
+
+                    await _dbContext.SaveChangesAsync();
+
+                    result.PlayersUpdated++;
+
+                    await Task.Delay(TimeSpan.FromSeconds(0.5));
+                }
+                catch (Exception ex)
+                {
+                    result.PlayersFailed++;
+
+                    var playerDescription = player == null
+                        ? $"Database Player Id {playerId}"
+                        : $"{player.NhlPlayerId} - {player.FirstName} {player.LastName}";
+
+                    result.FailedPlayers.Add(
+                        $"{playerDescription}: {ex.GetType().Name}: {ex.Message}");
+
+                    _dbContext.ChangeTracker.Clear();
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<List<PlayerCareerStat>> SyncPlayerCareerStatsAsync(int nhlPlayerId)
+        {
+            var player = await _dbContext.Players
+                .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
+
+            if (player == null)
+            {
+                return new List<PlayerCareerStat>();
+            }
+
+            var nhlPlayer = await GetPlayerAsync(nhlPlayerId);
+
+            if (nhlPlayer == null)
+            {
+                return new List<PlayerCareerStat>();
+            }
+
+            var existingStats = await _dbContext.PlayerCareerStats
+                .Where(s => s.PlayerId == player.Id)
+                .ToDictionaryAsync(
+                    s => (s.Season, s.GameTypeId, s.Sequence));
+
+            var apiKeys = nhlPlayer.SeasonTotals
+                .Select(s => (s.Season, s.GameTypeId, s.Sequence))
+                .ToHashSet();
+
+            foreach (var stats in nhlPlayer.SeasonTotals)
+            {
+                var key = (
+                    stats.Season,
+                    stats.GameTypeId,
+                    stats.Sequence);
+
+                if (!existingStats.TryGetValue(
+                        key,
+                        out var careerStat))
+                {
+                    careerStat = new PlayerCareerStat
+                    {
+                        PlayerId = player.Id,
+                        Season = stats.Season,
+                        GameTypeId = stats.GameTypeId,
+                        Sequence = stats.Sequence
+                    };
+
+                    _dbContext.PlayerCareerStats.Add(careerStat);
+
+                    existingStats[key] = careerStat;
+                }
+
+                careerStat.LeagueAbbreviation = stats.LeagueAbbrev;
+                careerStat.TeamName = stats.TeamName?.Default;
+
+                careerStat.GamesPlayed = stats.GamesPlayed;
+                careerStat.GamesStarted = stats.GamesStarted;
+
+                careerStat.Goals = stats.Goals;
+                careerStat.Assists = stats.Assists;
+                careerStat.Points = stats.Points;
+
+                careerStat.PlusMinus = stats.PlusMinus;
+                careerStat.PenaltyMinutes = stats.PenaltyMinutes;
+
+                careerStat.PowerPlayGoals = stats.PowerPlayGoals;
+                careerStat.PowerPlayPoints = stats.PowerPlayPoints;
+
+                careerStat.ShorthandedGoals = stats.ShorthandedGoals;
+                careerStat.ShorthandedPoints = stats.ShorthandedPoints;
+
+                careerStat.GameWinningGoals = stats.GameWinningGoals;
+                careerStat.OvertimeGoals = stats.OvertimeGoals;
+
+                careerStat.Shots = stats.Shots;
+                careerStat.ShootingPercentage = stats.ShootingPercentage;
+
+                careerStat.AverageTimeOnIce = stats.AverageTimeOnIce;
+                careerStat.FaceoffWinningPercentage =
+                    stats.FaceoffWinningPercentage;
+
+                careerStat.Wins = stats.Wins;
+                careerStat.Losses = stats.Losses;
+                careerStat.OvertimeLosses = stats.OvertimeLosses;
+                careerStat.Shutouts = stats.Shutouts;
+
+                careerStat.Saves = stats.Saves;
+                careerStat.ShotsAgainst = stats.ShotsAgainst;
+                careerStat.SavePercentage = stats.SavePercentage;
+
+                careerStat.GoalsAgainst = stats.GoalsAgainst;
+                careerStat.GoalsAgainstAverage =
+                    stats.GoalsAgainstAverage;
+            }
+
+            foreach (var existingStat in existingStats.Values)
+            {
+                var stillExists = apiKeys.Contains(
+                    (
+                        existingStat.Season,
+                        existingStat.GameTypeId,
+                        existingStat.Sequence
+                    ));
+
+                if (!stillExists)
+                {
+                    _dbContext.PlayerCareerStats.Remove(existingStat);
+                }
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return await _dbContext.PlayerCareerStats
+                .Where(s => s.PlayerId == player.Id)
+                .OrderBy(s => s.Season)
+                .ThenBy(s => s.GameTypeId)
+                .ThenBy(s => s.Sequence)
+                .ToListAsync();
+        }
+
+        private async Task SyncCareerStatsFromLandingAsync(
+    Player player,
+    NhlPlayerResponse nhlPlayer)
+        {
+            var existingStats = await _dbContext.PlayerCareerStats
+                .Where(s => s.PlayerId == player.Id)
+                .ToDictionaryAsync(
+                    s => (s.Season, s.GameTypeId, s.Sequence));
+
+            var apiKeys = nhlPlayer.SeasonTotals
+                .Select(s => (s.Season, s.GameTypeId, s.Sequence))
+                .ToHashSet();
+
+            foreach (var stats in nhlPlayer.SeasonTotals)
+            {
+                var key = (
+                    stats.Season,
+                    stats.GameTypeId,
+                    stats.Sequence);
+
+                if (!existingStats.TryGetValue(
+                        key,
+                        out var careerStat))
+                {
+                    careerStat = new PlayerCareerStat
+                    {
+                        PlayerId = player.Id,
+                        Season = stats.Season,
+                        GameTypeId = stats.GameTypeId,
+                        Sequence = stats.Sequence
+                    };
+
+                    _dbContext.PlayerCareerStats.Add(careerStat);
+
+                    existingStats[key] = careerStat;
+                }
+
+                careerStat.LeagueAbbreviation = stats.LeagueAbbrev;
+                careerStat.TeamName = stats.TeamName?.Default;
+
+                careerStat.GamesPlayed = stats.GamesPlayed;
+                careerStat.GamesStarted = stats.GamesStarted;
+
+                careerStat.Goals = stats.Goals;
+                careerStat.Assists = stats.Assists;
+                careerStat.Points = stats.Points;
+
+                careerStat.PlusMinus = stats.PlusMinus;
+                careerStat.PenaltyMinutes = stats.PenaltyMinutes;
+
+                careerStat.PowerPlayGoals = stats.PowerPlayGoals;
+                careerStat.PowerPlayPoints = stats.PowerPlayPoints;
+
+                careerStat.ShorthandedGoals = stats.ShorthandedGoals;
+                careerStat.ShorthandedPoints = stats.ShorthandedPoints;
+
+                careerStat.GameWinningGoals = stats.GameWinningGoals;
+                careerStat.OvertimeGoals = stats.OvertimeGoals;
+
+                careerStat.Shots = stats.Shots;
+                careerStat.ShootingPercentage = stats.ShootingPercentage;
+
+                careerStat.AverageTimeOnIce = stats.AverageTimeOnIce;
+                careerStat.FaceoffWinningPercentage =
+                    stats.FaceoffWinningPercentage;
+
+                careerStat.Wins = stats.Wins;
+                careerStat.Losses = stats.Losses;
+                careerStat.OvertimeLosses = stats.OvertimeLosses;
+                careerStat.Shutouts = stats.Shutouts;
+
+                careerStat.Saves = stats.Saves;
+                careerStat.ShotsAgainst = stats.ShotsAgainst;
+                careerStat.SavePercentage = stats.SavePercentage;
+
+                careerStat.GoalsAgainst = stats.GoalsAgainst;
+                careerStat.GoalsAgainstAverage =
+                    stats.GoalsAgainstAverage;
+            }
+
+            foreach (var existingStat in existingStats.Values)
+            {
+                var stillExists = apiKeys.Contains(
+                    (
+                        existingStat.Season,
+                        existingStat.GameTypeId,
+                        existingStat.Sequence
+                    ));
+
+                if (!stillExists)
+                {
+                    _dbContext.PlayerCareerStats.Remove(existingStat);
+                }
+            }
+        }
+    }
+
+    public class NhlPlayerBatchResult
+    {
+        public int PlayersProcessed { get; set; }
+
+        public int PlayersUpdated { get; set; }
+
+        public int PlayersFailed { get; set; }
+
+        public List<string> FailedPlayers { get; set; } = new();
     }
 }

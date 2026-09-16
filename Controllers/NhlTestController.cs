@@ -143,5 +143,50 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(players);
         }
+
+        [HttpGet("players/discover-ids")]
+        public async Task<IActionResult> DiscoverPlayerIds()
+        {
+            var result = await _nhlApiService.DiscoverPlayerIdsAsync();
+
+            return Ok(result);
+        }
+
+        [HttpGet("player/{id}/populate")]
+        public async Task<IActionResult> PopulatePlayer(int id)
+        {
+            var player =
+                await _nhlApiService.PopulatePlayerFromLandingAsync(id);
+
+            if (player == null)
+            {
+                return NotFound();
+            }
+
+            return Ok(player);
+        }
+
+        [HttpGet("players/populate-batch")]
+        public async Task<IActionResult> PopulatePlayersBatch()
+        {
+            var result =
+                await _nhlApiService.PopulatePlayersFromLandingBatchAsync();
+
+            return Ok(result);
+        }
+
+        [HttpGet("player/{id}/career-stats/sync")]
+        public async Task<IActionResult> SyncPlayerCareerStats(int id)
+        {
+            var stats =
+                await _nhlApiService.SyncPlayerCareerStatsAsync(id);
+
+            if (stats.Count == 0)
+            {
+                return NotFound();
+            }
+
+            return Ok(stats);
+        }
     }
 }

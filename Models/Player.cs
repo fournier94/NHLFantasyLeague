@@ -21,7 +21,19 @@ namespace NhlFantasyLeague.api.Models
 
         public DateOnly? BirthDate { get; set; }
 
+        public string? BirthCity { get; set; }
+
+        public string? BirthCountry { get; set; }
+
+        public int? HeightInInches { get; set; }
+
+        public int? WeightInPounds { get; set; }
+
+        public string? ShootsCatches { get; set; }
+
         public string? HeadshotUrl { get; set; }
+
+        public string? HeroImageUrl { get; set; }
 
         public bool IsRfa { get; set; }
     }

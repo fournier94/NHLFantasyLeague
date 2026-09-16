@@ -25,8 +25,26 @@ namespace NhlFantasyLeague.api.Services
         [JsonPropertyName("headshot")]
         public string? Headshot { get; set; }
 
+        [JsonPropertyName("heroImage")]
+        public string? HeroImage { get; set; }
+
         [JsonPropertyName("birthDate")]
         public DateTime? BirthDate { get; set; }
+
+        [JsonPropertyName("birthCity")]
+        public NhlLocalizedName? BirthCity { get; set; }
+
+        [JsonPropertyName("birthCountry")]
+        public string? BirthCountry { get; set; }
+
+        [JsonPropertyName("heightInInches")]
+        public int? HeightInInches { get; set; }
+
+        [JsonPropertyName("weightInPounds")]
+        public int? WeightInPounds { get; set; }
+
+        [JsonPropertyName("shootsCatches")]
+        public string? ShootsCatches { get; set; }
 
         [JsonPropertyName("featuredStats")]
         public NhlFeaturedStats? FeaturedStats { get; set; }

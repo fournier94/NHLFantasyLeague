@@ -28,6 +28,7 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<PlayerGameLog> PlayerGameLogs { get; set; }
         public DbSet<WeeklyFantasyScore> WeeklyFantasyScores { get; set; }
         public DbSet<FantasyMatchup> FantasyMatchups { get; set; }
+        public DbSet<PlayerCareerStat> PlayerCareerStats { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -169,6 +170,22 @@ namespace NhlFantasyLeague.api.Data
             modelBuilder.Entity<PlayerGameLog>()
                 .HasIndex(x => new { x.PlayerId, x.NhlGameId })
                 .IsUnique();
+
+            modelBuilder.Entity<PlayerCareerStat>()
+                .HasIndex(x => new
+                {
+                x.PlayerId,
+                x.Season,
+                x.GameTypeId,
+                x.Sequence
+                })
+                .IsUnique();
+
+            modelBuilder.Entity<PlayerCareerStat>()
+                .HasOne(s => s.Player)
+                .WithMany()
+                .HasForeignKey(s => s.PlayerId)
+                .OnDelete(DeleteBehavior.Restrict);
         }
     }
 }

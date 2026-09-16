@@ -12,8 +12,17 @@ public class NhlSeasonTotal
     [JsonPropertyName("leagueAbbrev")]
     public string LeagueAbbrev { get; set; } = string.Empty;
 
+    [JsonPropertyName("sequence")]
+    public int Sequence { get; set; }
+
     [JsonPropertyName("teamName")]
     public NhlLocalizedName? TeamName { get; set; }
+
+    [JsonPropertyName("teamCommonName")]
+    public NhlLocalizedName? TeamCommonName { get; set; }
+
+    [JsonPropertyName("teamPlaceNameWithPreposition")]
+    public NhlLocalizedName? TeamPlaceNameWithPreposition { get; set; }
 
     [JsonPropertyName("gamesPlayed")]
     public int GamesPlayed { get; set; }
@@ -54,6 +63,9 @@ public class NhlSeasonTotal
     [JsonPropertyName("savePctg")]
     public decimal SavePercentage { get; set; }
 
+    [JsonPropertyName("saves")]
+    public int Saves { get; set; }
+
     [JsonPropertyName("pim")]
     public int PenaltyMinutes { get; set; }
 
@@ -66,8 +78,17 @@ public class NhlSeasonTotal
     [JsonPropertyName("powerPlayPoints")]
     public int PowerPlayPoints { get; set; }
 
+    [JsonPropertyName("shorthandedGoals")]
+    public int ShorthandedGoals { get; set; }
+
+    [JsonPropertyName("shorthandedPoints")]
+    public int ShorthandedPoints { get; set; }
+
     [JsonPropertyName("gameWinningGoals")]
     public int GameWinningGoals { get; set; }
+
+    [JsonPropertyName("otGoals")]
+    public int OvertimeGoals { get; set; }
 
     [JsonPropertyName("shots")]
     public int Shots { get; set; }
@@ -75,6 +96,9 @@ public class NhlSeasonTotal
     [JsonPropertyName("shootingPctg")]
     public decimal ShootingPercentage { get; set; }
 
-    [JsonPropertyName("saves")]
-    public int Saves { get; set; }
+    [JsonPropertyName("avgToi")]
+    public string? AverageTimeOnIce { get; set; }
+
+    [JsonPropertyName("faceoffWinningPctg")]
+    public decimal? FaceoffWinningPercentage { get; set; }
 }
