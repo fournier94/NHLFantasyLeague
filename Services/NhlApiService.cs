@@ -879,5 +879,60 @@ int seasonCode)
                     s.PlayerId == player.Id &&
                     s.SeasonId == season.Id);
         }
+
+        public async Task<List<NhlMissingPlayerResult>> FindMissingPlayersAsync()
+        {
+            var teams = await _dbContext.NhlTeams
+                .ToListAsync();
+
+            if (teams.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "No NHL teams exist in the database. Sync teams first.");
+            }
+
+            var existingPlayerIds = (await _dbContext.Players
+    .Select(p => p.NhlPlayerId)
+    .ToListAsync())
+    .ToHashSet();
+
+            var missingPlayers = new List<NhlMissingPlayerResult>();
+
+            foreach (var team in teams)
+            {
+                var roster = await GetRosterAsync(team.Abbreviation);
+
+                if (roster == null)
+                {
+                    continue;
+                }
+
+                var rosterPlayers = roster.Forwards
+                    .Concat(roster.Defensemen)
+                    .Concat(roster.Goalies);
+
+                foreach (var player in rosterPlayers)
+                {
+                    if (existingPlayerIds.Contains(player.Id))
+                    {
+                        continue;
+                    }
+
+                    missingPlayers.Add(
+                        new NhlMissingPlayerResult
+                        {
+                            NhlPlayerId = player.Id,
+                            FirstName = player.FirstName.Default,
+                            LastName = player.LastName.Default,
+                            Position = player.PositionCode ?? string.Empty,
+                            NhlTeamAbbreviation = team.Abbreviation
+                        });
+
+                    existingPlayerIds.Add(player.Id);
+                }
+            }
+
+            return missingPlayers;
+        }
     }
 }

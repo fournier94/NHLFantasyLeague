@@ -135,5 +135,13 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(stats);
         }
+
+        [HttpGet("missing-players")]
+        public async Task<IActionResult> FindMissingPlayers()
+        {
+            var players = await _nhlApiService.FindMissingPlayersAsync();
+
+            return Ok(players);
+        }
     }
 }

@@ -22,5 +22,7 @@ namespace NhlFantasyLeague.api.Models
         public DateOnly? BirthDate { get; set; }
 
         public string? HeadshotUrl { get; set; }
+
+        public bool IsRfa { get; set; }
     }
 }
