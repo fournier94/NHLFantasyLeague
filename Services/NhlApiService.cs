@@ -2328,6 +2328,25 @@ int seasonCode)
                     !string.IsNullOrWhiteSpace(p.LastName))
                 .ToListAsync();
 
+            var playerIds =
+                currentTeamPlayers
+                    .Concat(previousTeamPlayers)
+                    .Select(p => p.Id)
+                    .Distinct()
+                    .ToList();
+
+            var preloadedContracts =
+                await _dbContext.PlayerContracts
+                    .Where(c => playerIds.Contains(c.PlayerId))
+                    .ToListAsync();
+
+            var contractsByPlayerId =
+                preloadedContracts
+                    .GroupBy(c => c.PlayerId)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.ToList());
+
             var normalizedDeadCapNames =
                 deadCap
                     .Select(NormalizePlayerName)
@@ -2442,7 +2461,8 @@ int seasonCode)
                     await SyncPlayerContractsAsync(
                         player.Id,
                         capFreezeSlug,
-                        false);
+                        false,
+                        contractsByPlayerId);
                 }
 
                 processedPlayers.Add(
@@ -2740,7 +2760,8 @@ int seasonCode)
         public async Task<List<PlayerContract>> SyncPlayerContractsAsync(
     int playerId,
     string playerSlug,
-    bool saveChanges = true)
+    bool saveChanges = true,
+    Dictionary<int, List<PlayerContract>>? preloadedContracts = null)
         {
             var player =
                 await _dbContext.Players
@@ -2768,11 +2789,25 @@ int seasonCode)
                     player.Id,
                     contractData);
 
-            var existingContracts =
-                await _dbContext.PlayerContracts
-                    .Where(c => c.PlayerId == player.Id)
-                    .ToDictionaryAsync(
+            Dictionary<int, PlayerContract> existingContracts;
+
+            if (preloadedContracts != null &&
+                preloadedContracts.TryGetValue(
+                    playerId,
+                    out var playerContracts))
+            {
+                existingContracts =
+                    playerContracts.ToDictionary(
                         c => c.StartSeason);
+            }
+            else
+            {
+                existingContracts =
+                    await _dbContext.PlayerContracts
+                        .Where(c => c.PlayerId == playerId)
+                        .ToDictionaryAsync(
+                            c => c.StartSeason);
+            }
 
             var expectedStartSeasons =
                 expectedContracts
