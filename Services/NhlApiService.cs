@@ -1861,9 +1861,11 @@ int seasonCode)
         }
 
         public async Task<Player?> FindAndRecordCapFreezePlayerMatchAsync(
-            string capFreezeName,
-            int nhlTeamId,
-            bool saveChanges = true)
+    string capFreezeName,
+    int nhlTeamId,
+    bool saveChanges = true,
+    List<Player>? currentTeamPlayers = null,
+    List<Player>? previousTeamPlayers = null)
         {
             var normalizedCapFreezeName =
                 NormalizePlayerName(capFreezeName);
@@ -1874,9 +1876,12 @@ int seasonCode)
             // ---------------------------------------------------------
             // STEP 1:
             // Find players currently belonging to this NHL team.
+            //
+            // If the team sync already loaded them, reuse that list.
+            // Otherwise, query the database as before.
             // ---------------------------------------------------------
 
-            var currentTeamPlayers = await _dbContext.Players
+            currentTeamPlayers ??= await _dbContext.Players
                 .Where(p =>
                     p.NhlTeamId == nhlTeamId &&
                     !string.IsNullOrWhiteSpace(p.FirstName) &&
@@ -1936,14 +1941,11 @@ int seasonCode)
             // STEP 4:
             // Find players whose PREVIOUS team was this CapFreeze team.
             //
-            // This is what allows us to find Montembeault when:
-            //
-            // Current team       = 1
-            // Previous team      = 8
-            // CapFreeze team     = 8
+            // If the team sync already loaded them, reuse that list.
+            // Otherwise, query the database as before.
             // ---------------------------------------------------------
 
-            var previousTeamPlayers = await _dbContext.Players
+            previousTeamPlayers ??= await _dbContext.Players
                 .Where(p =>
                     p.PreviousNhlTeamId == nhlTeamId &&
                     !string.IsNullOrWhiteSpace(p.FirstName) &&
@@ -2277,122 +2279,53 @@ int seasonCode)
     string teamSlug,
     int nhlTeamId)
         {
-            // ---------------------------------------------------------
-            // STEP 1:
-            // Download the CapFreeze team page.
-            // ---------------------------------------------------------
-
             var html = await GetCapFreezeTeamPageAsync(teamSlug);
 
-            // ---------------------------------------------------------
-            // STEP 2:
-            // Extract all relevant CapFreeze sections.
-            //
-            // Player sections return:
-            //   - CapFreeze player name
-            //   - Exact CapFreeze player slug
-            //
-            // Dead Cap is extracted only so we can identify and
-            // completely ignore those players.
-            // ---------------------------------------------------------
-
             var forwards =
-                ExtractCapFreezePlayerLinks(
-                    html,
-                    "Forwards");
+                ExtractCapFreezePlayerLinks(html, "Forwards");
 
             var defense =
-                ExtractCapFreezePlayerLinks(
-                    html,
-                    "Defense");
+                ExtractCapFreezePlayerLinks(html, "Defense");
 
             var goalies =
-                ExtractCapFreezePlayerLinks(
-                    html,
-                    "Goalies");
+                ExtractCapFreezePlayerLinks(html, "Goalies");
 
             var minors =
-                ExtractCapFreezePlayerLinks(
-                    html,
-                    "Non-Roster / Minors");
+                ExtractCapFreezePlayerLinks(html, "Non-Roster / Minors");
 
             var unsignedRfas =
-                ExtractCapFreezePlayerLinks(
-                    html,
-                    "Unsigned RFAs");
+                ExtractCapFreezePlayerLinks(html, "Unsigned RFAs");
 
             var deadCap =
-                ExtractCapFreezeSectionPlayers(
-                    html,
-                    "Dead Cap");
-
-            // ---------------------------------------------------------
-            // STEP 3:
-            // Build one collection containing every player that
-            // CapFreeze says belongs to this team's non-dead-cap
-            // sections.
-            // ---------------------------------------------------------
+                ExtractCapFreezeSectionPlayers(html, "Dead Cap");
 
             var playerLinks =
                 new List<(CapFreezePlayerLink Player, PlayerStatus Status)>();
 
             foreach (var player in forwards)
-            {
-                playerLinks.Add(
-                    (
-                        player,
-                        PlayerStatus.Rostered
-                    ));
-            }
+                playerLinks.Add((player, PlayerStatus.Rostered));
 
             foreach (var player in defense)
-            {
-                playerLinks.Add(
-                    (
-                        player,
-                        PlayerStatus.Rostered
-                    ));
-            }
+                playerLinks.Add((player, PlayerStatus.Rostered));
 
             foreach (var player in goalies)
-            {
-                playerLinks.Add(
-                    (
-                        player,
-                        PlayerStatus.Rostered
-                    ));
-            }
+                playerLinks.Add((player, PlayerStatus.Rostered));
 
             foreach (var player in minors)
-            {
-                playerLinks.Add(
-                    (
-                        player,
-                        PlayerStatus.FarmPlayer
-                    ));
-            }
+                playerLinks.Add((player, PlayerStatus.FarmPlayer));
 
             foreach (var player in unsignedRfas)
-            {
-                playerLinks.Add(
-                    (
-                        player,
-                        PlayerStatus.RFA
-                    ));
-            }
-
-            // ---------------------------------------------------------
-            // STEP 4:
-            // Get the players currently assigned to this NHL team.
-            //
-            // We reset ONLY these players to Unsigned first.
-            //
-            // We do NOT reset previous-team players because they may
-            // already belong to another NHL team.
-            // ---------------------------------------------------------
+                playerLinks.Add((player, PlayerStatus.RFA));
 
             var currentTeamPlayers = await _dbContext.Players
                 .Where(p => p.NhlTeamId == nhlTeamId)
+                .ToListAsync();
+
+            var previousTeamPlayers = await _dbContext.Players
+                .Where(p =>
+                    p.PreviousNhlTeamId == nhlTeamId &&
+                    !string.IsNullOrWhiteSpace(p.FirstName) &&
+                    !string.IsNullOrWhiteSpace(p.LastName))
                 .ToListAsync();
 
             var normalizedDeadCapNames =
@@ -2430,13 +2363,11 @@ int seasonCode)
                 player.Status = PlayerStatus.Unsigned;
             }
 
-            // ---------------------------------------------------------
-            // STEP 5:
-            // Process every player found on the CapFreeze page.
-            // ---------------------------------------------------------
+            var processedPlayers =
+                new List<object>();
 
-            var processedPlayers = new List<object>();
-            var unmatchedPlayers = new List<string>();
+            var unmatchedPlayers =
+                new List<string>();
 
             foreach (var entry in playerLinks)
             {
@@ -2453,22 +2384,17 @@ int seasonCode)
                     await FindAndRecordCapFreezePlayerMatchAsync(
                         capFreezeName,
                         nhlTeamId,
-                        false);
-
-                // -----------------------------------------------------
-                // No player could be matched at all.
-                // -----------------------------------------------------
+                        false,
+                        currentTeamPlayers,
+                        previousTeamPlayers);
 
                 if (player == null)
                 {
-                    unmatchedPlayers.Add(capFreezeName);
+                    unmatchedPlayers.Add(
+                        capFreezeName);
+
                     continue;
                 }
-
-                // -----------------------------------------------------
-                // Compare the CapFreeze name against the official
-                // database name.
-                // -----------------------------------------------------
 
                 var normalizedCapFreezeName =
                     NormalizePlayerName(
@@ -2481,11 +2407,6 @@ int seasonCode)
                 var namesMatch =
                     normalizedCapFreezeName ==
                     normalizedDatabaseName;
-
-                // -----------------------------------------------------
-                // Track whether this exact CapFreeze/player pair has
-                // already been reviewed.
-                // -----------------------------------------------------
 
                 var isReviewed = false;
 
@@ -2500,38 +2421,16 @@ int seasonCode)
 
                     if (!isReviewed)
                     {
-                        unmatchedPlayers.Add(capFreezeName);
+                        unmatchedPlayers.Add(
+                            capFreezeName);
                     }
                 }
                 else
                 {
-                    // An exact normalized name match does not require
-                    // manual review.
                     isReviewed = true;
                 }
 
-                // -----------------------------------------------------
-                // Set the CapFreeze-derived status.
-                //
-                // This does NOT modify:
-                //   NhlTeamId
-                //   PreviousNhlTeamId
-                // -----------------------------------------------------
-
                 player.Status = status;
-
-                // -----------------------------------------------------
-                // STEP 5A:
-                // Synchronize the player's CapFreeze contract.
-                //
-                // Only signed players are synchronized.
-                //
-                // RFA players intentionally have no PlayerContract row.
-                //
-                // Players with an unreviewed name discrepancy are also
-                // skipped because we do not want to synchronize a
-                // contract against a potentially incorrect player match.
-                // -----------------------------------------------------
 
                 var shouldSyncContract =
                     status != PlayerStatus.RFA
@@ -2546,48 +2445,48 @@ int seasonCode)
                         false);
                 }
 
-                processedPlayers.Add(new
-                {
-                    player.Id,
-                    player.NhlPlayerId,
-                    player.FirstName,
-                    player.LastName,
-                    CapFreezeName = player.CapFreezeName,
-                    CapFreezeSlug = capFreezeSlug,
-                    Status = player.Status.ToString(),
-                    ContractSynchronized = shouldSyncContract,
-                    player.NhlTeamId,
-                    player.PreviousNhlTeamId
-                });
+                processedPlayers.Add(
+                    new
+                    {
+                        player.Id,
+                        player.NhlPlayerId,
+                        player.FirstName,
+                        player.LastName,
+                        CapFreezeName =
+                            player.CapFreezeName,
+                        CapFreezeSlug =
+                            capFreezeSlug,
+                        Status =
+                            player.Status.ToString(),
+                        ContractSynchronized =
+                            shouldSyncContract,
+                        player.NhlTeamId,
+                        player.PreviousNhlTeamId
+                    });
             }
 
             await _dbContext.SaveChangesAsync();
-
-            // ---------------------------------------------------------
-            // STEP 6:
-            // Return diagnostic information so we can test the sync.
-            // ---------------------------------------------------------
 
             return new
             {
                 TeamSlug = teamSlug,
                 NhlTeamId = nhlTeamId,
-
-                ForwardsCount = forwards.Count,
-                DefenseCount = defense.Count,
-                GoaliesCount = goalies.Count,
-                MinorsCount = minors.Count,
-                UnsignedRfasCount = unsignedRfas.Count,
-
+                ForwardsCount =
+                    forwards.Count,
+                DefenseCount =
+                    defense.Count,
+                GoaliesCount =
+                    goalies.Count,
+                MinorsCount =
+                    minors.Count,
+                UnsignedRfasCount =
+                    unsignedRfas.Count,
                 TotalPlayersFound =
                     playerLinks.Count,
-
                 PlayersProcessed =
                     processedPlayers.Count,
-
                 UnmatchedPlayers =
                     unmatchedPlayers,
-
                 Players =
                     processedPlayers
             };
