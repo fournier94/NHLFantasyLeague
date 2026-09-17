@@ -1861,8 +1861,9 @@ int seasonCode)
         }
 
         public async Task<Player?> FindAndRecordCapFreezePlayerMatchAsync(
-    string capFreezeName,
-    int nhlTeamId)
+            string capFreezeName,
+            int nhlTeamId,
+            bool saveChanges = true)
         {
             var normalizedCapFreezeName =
                 NormalizePlayerName(capFreezeName);
@@ -1898,7 +1899,10 @@ int seasonCode)
                 currentOfficialNameMatch.CapFreezeName =
                     capFreezeName;
 
-                await _dbContext.SaveChangesAsync();
+                if (saveChanges)
+                {
+                    await _dbContext.SaveChangesAsync();
+                }
 
                 return currentOfficialNameMatch;
             }
@@ -1920,7 +1924,10 @@ int seasonCode)
                 currentAliasMatch.CapFreezeName =
                     capFreezeName;
 
-                await _dbContext.SaveChangesAsync();
+                if (saveChanges)
+                {
+                    await _dbContext.SaveChangesAsync();
+                }
 
                 return currentAliasMatch;
             }
@@ -1959,7 +1966,10 @@ int seasonCode)
                 previousOfficialNameMatch.CapFreezeName =
                     capFreezeName;
 
-                await _dbContext.SaveChangesAsync();
+                if (saveChanges)
+                {
+                    await _dbContext.SaveChangesAsync();
+                }
 
                 return previousOfficialNameMatch;
             }
@@ -1980,7 +1990,10 @@ int seasonCode)
                 previousAliasMatch.CapFreezeName =
                     capFreezeName;
 
-                await _dbContext.SaveChangesAsync();
+                if (saveChanges)
+                {
+                    await _dbContext.SaveChangesAsync();
+                }
 
                 return previousAliasMatch;
             }
@@ -2108,7 +2121,10 @@ int seasonCode)
                 _dbContext.CapFreezePlayerReviews.Add(review);
             }
 
-            await _dbContext.SaveChangesAsync();
+            if (saveChanges)
+            {
+                await _dbContext.SaveChangesAsync();
+            }
 
             return bestMatch.Player;
         }
@@ -2436,7 +2452,8 @@ int seasonCode)
                 var player =
                     await FindAndRecordCapFreezePlayerMatchAsync(
                         capFreezeName,
-                        nhlTeamId);
+                        nhlTeamId,
+                        false);
 
                 // -----------------------------------------------------
                 // No player could be matched at all.
@@ -2525,7 +2542,8 @@ int seasonCode)
                 {
                     await SyncPlayerContractsAsync(
                         player.Id,
-                        capFreezeSlug);
+                        capFreezeSlug,
+                        false);
                 }
 
                 processedPlayers.Add(new
@@ -2821,8 +2839,9 @@ int seasonCode)
         }
 
         public async Task<List<PlayerContract>> SyncPlayerContractsAsync(
-    int playerId,
-    string playerSlug)
+            int playerId,
+            string playerSlug,
+            bool saveChanges = true)
         {
             var player =
                 await _dbContext.Players
@@ -2890,7 +2909,10 @@ int seasonCode)
                 }
             }
 
-            await _dbContext.SaveChangesAsync();
+            if (saveChanges)
+            {
+                await _dbContext.SaveChangesAsync();
+            }
 
             return await _dbContext.PlayerContracts
                 .Where(c => c.PlayerId == player.Id)
