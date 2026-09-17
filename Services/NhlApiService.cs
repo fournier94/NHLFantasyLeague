@@ -2839,9 +2839,9 @@ int seasonCode)
         }
 
         public async Task<List<PlayerContract>> SyncPlayerContractsAsync(
-            int playerId,
-            string playerSlug,
-            bool saveChanges = true)
+    int playerId,
+    string playerSlug,
+    bool saveChanges = true)
         {
             var player =
                 await _dbContext.Players
@@ -2912,12 +2912,14 @@ int seasonCode)
             if (saveChanges)
             {
                 await _dbContext.SaveChangesAsync();
+
+                return await _dbContext.PlayerContracts
+                    .Where(c => c.PlayerId == player.Id)
+                    .OrderBy(c => c.StartSeason)
+                    .ToListAsync();
             }
 
-            return await _dbContext.PlayerContracts
-                .Where(c => c.PlayerId == player.Id)
-                .OrderBy(c => c.StartSeason)
-                .ToListAsync();
+            return expectedContracts;
         }
 
         public List<CapFreezePlayerLink> ExtractCapFreezePlayerLinks(
