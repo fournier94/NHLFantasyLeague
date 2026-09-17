@@ -1379,6 +1379,365 @@ int seasonCode)
                 }
             }
         }
+
+        public async Task<string> GetCapFreezeTeamPageAsync(string teamSlug)
+        {
+            var url = $"https://capfreeze.com/teams/{teamSlug}.html";
+
+            return await _httpClient.GetStringAsync(url);
+        }
+
+        private int? ExtractContractYears(
+    string html,
+    string playerName)
+        {
+            var text = System.Net.WebUtility.HtmlDecode(html);
+
+            var nameYrCount = System.Text.RegularExpressions.Regex
+                .Matches(
+                    playerName,
+                    @"yr",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                .Count;
+
+            var yrMatches = System.Text.RegularExpressions.Regex
+                .Matches(
+                    text,
+                    @"\byr\b",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            var targetIndex = nameYrCount;
+
+            if (targetIndex >= yrMatches.Count)
+                return null;
+
+            var yrMatch = yrMatches[targetIndex];
+
+            var textBeforeYr = text[..yrMatch.Index];
+
+            var numberMatch = System.Text.RegularExpressions.Regex.Match(
+                textBeforeYr,
+                @"(\d+)\s*$");
+
+            if (!numberMatch.Success)
+                return null;
+
+            if (!int.TryParse(
+                    numberMatch.Groups[1].Value,
+                    out var years))
+            {
+                return null;
+            }
+
+            return years;
+        }
+
+        public async Task<decimal?> TestExtractCapHitAsync(
+    string teamSlug,
+    string playerSlug,
+    int season)
+        {
+            var teamUrl =
+                $"https://capfreeze.com/teams/{teamSlug}.html";
+
+            var html = await _httpClient.GetStringAsync(teamUrl);
+
+            var playerMarker =
+                $"../players/{playerSlug}.html";
+
+            var playerIndex = html.IndexOf(
+                playerMarker,
+                StringComparison.OrdinalIgnoreCase);
+
+            if (playerIndex == -1)
+                return null;
+
+            var nextTableEnd = html.IndexOf(
+                "</tr>",
+                playerIndex,
+                StringComparison.OrdinalIgnoreCase);
+
+            if (nextTableEnd == -1)
+                return null;
+
+            var row = html[playerIndex..nextTableEnd];
+
+            var pattern =
+                $@"data-season=""{season}""[^>]*data-cap=""(\d+(?:\.\d+)?)""";
+
+            var match = System.Text.RegularExpressions.Regex.Match(
+                row,
+                pattern,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+                return null;
+
+            if (!decimal.TryParse(
+                    match.Groups[1].Value,
+                    out var capHit))
+            {
+                return null;
+            }
+
+            return capHit;
+        }
+
+        public List<decimal> TestExtractCapHitsFromRow()
+        {
+            var row = """
+        <tr><td><a href="../players/ivan-demidov.html">Ivan Demidov</a></td><td>RW</td>
+        <td class="num" data-v="20">20</td>
+        <td class="num moneycell" data-cap="940833" data-cash="975000" data-v="940833">$940,833</td><td class="num moneycell" data-cap="9150000" data-cash="12500000" data-v="9150000">$9,150,000</td><td class="num moneycell" data-cap="9150000" data-cash="12500000" data-v="9150000">$9,150,000</td><td class="num moneycell" data-cap="9150000" data-cash="10500000" data-v="9150000">$9,150,000</td><td class="num moneycell" data-cap="9150000" data-cash="7700000" data-v="9150000">$9,150,000</td>
+        <td class="num" data-v="0.00905">0.9%</td></tr>
+        """;
+
+            var matches = System.Text.RegularExpressions.Regex.Matches(
+                row,
+                @"<td[^>]*class=""[^""]*moneycell[^""]*""[^>]*data-cap=""(\d+(?:\.\d+)?)""",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            var capHits = new List<decimal>();
+
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                if (decimal.TryParse(
+                        match.Groups[1].Value,
+                        out var capHit))
+                {
+                    capHits.Add(capHit);
+                }
+            }
+
+            return capHits;
+        }
+
+        public List<string> ExtractCapFreezeSectionPlayers(
+    string html,
+    string sectionName)
+        {
+            var document = new HtmlAgilityPack.HtmlDocument();
+
+            document.LoadHtml(html);
+
+            var sectionHeader = document.DocumentNode
+                .SelectSingleNode(
+                    $"//h2[contains(normalize-space(), '{sectionName}')]");
+
+            if (sectionHeader == null)
+                return new List<string>();
+
+            var players = new List<string>();
+
+            var table = sectionHeader
+                .SelectSingleNode("following-sibling::table[1]");
+
+            if (table == null)
+                return players;
+
+            var rows = table.SelectNodes(".//tr");
+
+            if (rows == null)
+                return players;
+
+            foreach (var row in rows)
+            {
+                var playerLink = row.SelectSingleNode(".//a");
+
+                if (playerLink == null)
+                    continue;
+
+                var playerName = System.Net.WebUtility.HtmlDecode(
+                    playerLink.InnerText.Trim());
+
+                if (!string.IsNullOrWhiteSpace(playerName))
+                    players.Add(playerName);
+            }
+
+            return players;
+        }
+        
+        private string NormalizePlayerName(string name)
+        {
+            var normalized = name
+                .Normalize(
+                    System.Text.NormalizationForm.FormD);
+
+            var characters = normalized
+                .Where(c =>
+                    System.Globalization.CharUnicodeInfo
+                        .GetUnicodeCategory(c)
+                    != System.Globalization.UnicodeCategory.NonSpacingMark)
+                .ToArray();
+
+            return new string(characters)
+                .Normalize(
+                    System.Text.NormalizationForm.FormC)
+                .ToLowerInvariant()
+                .Replace("-", "")
+                .Replace("'", "")
+                .Replace(" ", "");
+        }
+
+        private double CalculateSimilarity(
+    string first,
+    string second)
+        {
+            if (first == second)
+                return 1.0;
+
+            var distance = LevenshteinDistance(
+                first,
+                second);
+
+            var maxLength =
+                Math.Max(first.Length, second.Length);
+
+            if (maxLength == 0)
+                return 1.0;
+
+            return 1.0 -
+                   ((double)distance / maxLength);
+        }
+
+        private int LevenshteinDistance(
+    string first,
+    string second)
+        {
+            var matrix =
+                new int[first.Length + 1, second.Length + 1];
+
+            for (var i = 0; i <= first.Length; i++)
+                matrix[i, 0] = i;
+
+            for (var j = 0; j <= second.Length; j++)
+                matrix[0, j] = j;
+
+            for (var i = 1; i <= first.Length; i++)
+            {
+                for (var j = 1; j <= second.Length; j++)
+                {
+                    var cost =
+                        first[i - 1] == second[j - 1]
+                            ? 0
+                            : 1;
+
+                    matrix[i, j] = Math.Min(
+                        Math.Min(
+                            matrix[i - 1, j] + 1,
+                            matrix[i, j - 1] + 1),
+                        matrix[i - 1, j - 1] + cost);
+                }
+            }
+
+            return matrix[
+                first.Length,
+                second.Length];
+        }
+
+        public async Task<Player?> FindPlayerByCapFreezeNameAsync(
+    string capFreezeName)
+        {
+            var normalizedName =
+                NormalizePlayerName(capFreezeName);
+
+            var players = await _dbContext.Players
+                .Where(p => p.CapFreezeName != null)
+                .ToListAsync();
+
+            return players.FirstOrDefault(p =>
+                NormalizePlayerName(p.CapFreezeName!) == normalizedName);
+        }
+
+        public async Task<string> TestFindTeamPlayerMatchesAsync(
+    string capFreezeName,
+    int nhlTeamId)
+        {
+            var players = await _dbContext.Players
+                .Where(p =>
+                    p.NhlTeamId == nhlTeamId &&
+                    !string.IsNullOrWhiteSpace(p.FirstName) &&
+                    !string.IsNullOrWhiteSpace(p.LastName))
+                .ToListAsync();
+
+            if (players.Count == 0)
+                return "No players found for this NHL team.";
+
+            var parts = capFreezeName
+                .Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length < 2)
+                return "Could not split player name.";
+
+            var capFreezeFirstName = parts[0];
+
+            var capFreezeLastName = string.Join(
+                " ",
+                parts.Skip(1));
+
+            var normalizedCapFreezeFirstName =
+                NormalizePlayerName(capFreezeFirstName);
+
+            var normalizedCapFreezeLastName =
+                NormalizePlayerName(capFreezeLastName);
+
+            var normalizedCapFreezeFullName =
+                NormalizePlayerName(capFreezeName);
+
+            var matches = players
+                .Select(player =>
+                {
+                    var normalizedDatabaseFirstName =
+                        NormalizePlayerName(player.FirstName);
+
+                    var normalizedDatabaseLastName =
+                        NormalizePlayerName(player.LastName);
+
+                    var normalizedDatabaseFullName =
+                        NormalizePlayerName(
+                            $"{player.FirstName} {player.LastName}");
+
+                    return new
+                    {
+                        player.Id,
+                        player.NhlPlayerId,
+                        player.FirstName,
+                        player.LastName,
+                        player.NhlTeamId,
+
+                        FirstNameSimilarity =
+                            CalculateSimilarity(
+                                normalizedCapFreezeFirstName,
+                                normalizedDatabaseFirstName),
+
+                        LastNameSimilarity =
+                            CalculateSimilarity(
+                                normalizedCapFreezeLastName,
+                                normalizedDatabaseLastName),
+
+                        FullNameSimilarity =
+                            CalculateSimilarity(
+                                normalizedCapFreezeFullName,
+                                normalizedDatabaseFullName)
+                    };
+                })
+                .OrderByDescending(x => x.FullNameSimilarity)
+                .ThenByDescending(x => x.LastNameSimilarity)
+                .ThenByDescending(x => x.FirstNameSimilarity)
+                .Take(5)
+                .ToList();
+
+            return System.Text.Json.JsonSerializer.Serialize(
+                new
+                {
+                    CapFreezeName = capFreezeName,
+                    NhlTeamId = nhlTeamId,
+                    CandidateCount = players.Count,
+                    Matches = matches
+                });
+        }
     }
 
     public class NhlPlayerBatchResult

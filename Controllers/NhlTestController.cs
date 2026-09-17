@@ -188,5 +188,139 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(stats);
         }
+
+        [HttpGet("capfreeze/test-cap-hits")]
+        public IActionResult TestCapHits()
+        {
+            var capHits =
+                _nhlApiService.TestExtractCapHitsFromRow();
+
+            return Ok(capHits);
+        }
+
+        [HttpGet("capfreeze/test-forwards")]
+        public async Task<IActionResult> TestCapFreezeForwards()
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    "montreal-canadiens");
+
+            var players =
+                _nhlApiService.ExtractCapFreezeSectionPlayers(
+                    html,
+                    "Forwards");
+
+            return Ok(players);
+        }
+
+        [HttpGet("capfreeze/test-defense")]
+        public async Task<IActionResult> TestCapFreezeDefense()
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    "montreal-canadiens");
+
+            var players =
+                _nhlApiService.ExtractCapFreezeSectionPlayers(
+                    html,
+                    "Defense");
+
+            return Ok(players);
+        }
+
+        [HttpGet("capfreeze/test-goalies")]
+        public async Task<IActionResult> TestCapFreezeGoalies()
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    "montreal-canadiens");
+
+            var players =
+                _nhlApiService.ExtractCapFreezeSectionPlayers(
+                    html,
+                    "Goalies");
+
+            return Ok(players);
+        }
+
+        [HttpGet("capfreeze/test-minors")]
+        public async Task<IActionResult> TestCapFreezeMinors()
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    "montreal-canadiens");
+
+            var players =
+                _nhlApiService.ExtractCapFreezeSectionPlayers(
+                    html,
+                    "Non-Roster / Minors");
+
+            return Ok(players);
+        }
+
+        [HttpGet("capfreeze/test-rfas")]
+        public async Task<IActionResult> TestCapFreezeRfas()
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    "montreal-canadiens");
+
+            var players =
+                _nhlApiService.ExtractCapFreezeSectionPlayers(
+                    html,
+                    "Unsigned RFAs");
+
+            return Ok(players);
+        }
+
+        [HttpGet("capfreeze/test-dead-cap")]
+        public async Task<IActionResult> TestCapFreezeDeadCap()
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    "montreal-canadiens");
+
+            var players =
+                _nhlApiService.ExtractCapFreezeSectionPlayers(
+                    html,
+                    "Dead Cap");
+
+            return Ok(players);
+        }
+
+        [HttpGet("capfreeze/test-alias-match")]
+        public async Task<IActionResult> TestCapFreezeAliasMatch(
+    [FromQuery] string name)
+        {
+            var player =
+                await _nhlApiService.FindPlayerByCapFreezeNameAsync(name);
+
+            if (player == null)
+                return NotFound();
+
+            return Ok(new
+            {
+                player.Id,
+                player.NhlPlayerId,
+                player.FirstName,
+                player.LastName,
+                player.CapFreezeName
+            });
+        }
+
+        [HttpGet("capfreeze/test-team-player-matches")]
+        public async Task<IActionResult> TestTeamPlayerMatches(
+    [FromQuery] string name,
+    [FromQuery] int nhlTeamId)
+        {
+            var result =
+                await _nhlApiService.TestFindTeamPlayerMatchesAsync(
+                    name,
+                    nhlTeamId);
+
+            return Content(
+                result,
+                "application/json");
+        }
     }
 }

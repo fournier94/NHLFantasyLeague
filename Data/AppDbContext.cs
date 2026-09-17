@@ -29,6 +29,7 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<WeeklyFantasyScore> WeeklyFantasyScores { get; set; }
         public DbSet<FantasyMatchup> FantasyMatchups { get; set; }
         public DbSet<PlayerCareerStat> PlayerCareerStats { get; set; }
+        public DbSet<PlayerContract> PlayerContracts { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -186,6 +187,28 @@ namespace NhlFantasyLeague.api.Data
                 .WithMany()
                 .HasForeignKey(s => s.PlayerId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<PlayerContract>()
+                .HasOne(c => c.Player)
+                .WithMany(p => p.Contracts)
+                .HasForeignKey(c => c.PlayerId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<PlayerContract>()
+                .HasIndex(c => new
+                {
+                    c.PlayerId,
+                    c.StartSeason
+                })
+                .IsUnique();
+
+            modelBuilder.Entity<PlayerContract>()
+                .Property(c => c.Salary)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<Player>()
+                .Property(p => p.Status)
+                .HasConversion<string>();
         }
     }
 }

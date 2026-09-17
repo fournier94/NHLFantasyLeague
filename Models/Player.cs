@@ -12,6 +12,8 @@ namespace NhlFantasyLeague.api.Models
 
         public string LastName { get; set; } = string.Empty;
 
+        public string? CapFreezeName { get; set; }
+
         public string Position { get; set; } = string.Empty;
 
         public int? NhlTeamId { get; set; }
@@ -35,6 +37,9 @@ namespace NhlFantasyLeague.api.Models
 
         public string? HeroImageUrl { get; set; }
 
-        public bool IsRfa { get; set; }
+        public PlayerStatus Status { get; set; } = PlayerStatus.Unsigned;
+
+        public ICollection<PlayerContract> Contracts { get; set; }
+            = new List<PlayerContract>();
     }
 }
