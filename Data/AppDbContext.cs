@@ -30,6 +30,7 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<FantasyMatchup> FantasyMatchups { get; set; }
         public DbSet<PlayerCareerStat> PlayerCareerStats { get; set; }
         public DbSet<PlayerContract> PlayerContracts { get; set; }
+        public DbSet<CapFreezePlayerReview> CapFreezePlayerReviews { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -209,6 +210,31 @@ namespace NhlFantasyLeague.api.Data
             modelBuilder.Entity<Player>()
                 .Property(p => p.Status)
                 .HasConversion<string>();
+
+            modelBuilder.Entity<CapFreezePlayerReview>()
+                .HasOne(r => r.Player)
+                .WithMany()
+                .HasForeignKey(r => r.PlayerId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<CapFreezePlayerReview>()
+                .HasIndex(r => new
+                {
+                    r.CapFreezeName,
+                    r.PlayerId
+                });
+
+            modelBuilder.Entity<CapFreezePlayerReview>()
+                .Property(r => r.FullNameSimilarity)
+                .HasPrecision(5, 4);
+
+            modelBuilder.Entity<CapFreezePlayerReview>()
+                .Property(r => r.FirstNameSimilarity)
+                .HasPrecision(5, 4);
+
+            modelBuilder.Entity<CapFreezePlayerReview>()
+                .Property(r => r.LastNameSimilarity)
+                .HasPrecision(5, 4);
         }
     }
 }

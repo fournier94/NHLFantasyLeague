@@ -1,4 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Services;
 
 namespace NhlFantasyLeague.api.Controllers
@@ -8,10 +10,14 @@ namespace NhlFantasyLeague.api.Controllers
     public class NhlTestController : ControllerBase
     {
         private readonly NhlApiService _nhlApiService;
+        private readonly AppDbContext _dbContext;
 
-        public NhlTestController(NhlApiService nhlApiService)
+        public NhlTestController(
+            NhlApiService nhlApiService,
+            AppDbContext dbContext)
         {
             _nhlApiService = nhlApiService;
+            _dbContext = dbContext;
         }
 
         [HttpGet("player/{id}/save")]
@@ -321,6 +327,135 @@ namespace NhlFantasyLeague.api.Controllers
             return Content(
                 result,
                 "application/json");
+        }
+
+        [HttpGet("capfreeze/test-record-match")]
+        public async Task<IActionResult> TestRecordCapFreezeMatch(
+    [FromQuery] string name,
+    [FromQuery] int nhlTeamId)
+        {
+            var result =
+                await _nhlApiService.TestCapFreezeMatchPathAsync(
+                    name,
+                    nhlTeamId);
+
+            if (result == null)
+                return NotFound();
+
+            return Ok(result);
+        }
+
+        [HttpGet("capfreeze/test-production-match")]
+        public async Task<IActionResult> TestProductionCapFreezeMatch(
+    [FromQuery] string name,
+    [FromQuery] int nhlTeamId)
+        {
+            var player =
+                await _nhlApiService.FindAndRecordCapFreezePlayerMatchAsync(
+                    name,
+                    nhlTeamId);
+
+            if (player == null)
+                return NotFound();
+
+            return Ok(new
+            {
+                player.Id,
+                player.NhlPlayerId,
+                player.FirstName,
+                player.LastName,
+                player.NhlTeamId,
+                player.PreviousNhlTeamId,
+                player.CapFreezeName
+            });
+        }
+
+        [HttpGet("player/{id}/test-team-change/{newTeamId}")]
+        public async Task<IActionResult> TestTeamChange(
+    int id,
+    int newTeamId)
+        {
+            var player =
+                await _nhlApiService.TestUpdatePlayerNhlTeamAsync(
+                    id,
+                    newTeamId);
+
+            if (player == null)
+                return NotFound();
+
+            return Ok(new
+            {
+                player.Id,
+                player.NhlPlayerId,
+                player.FirstName,
+                player.LastName,
+                player.NhlTeamId,
+                player.PreviousNhlTeamId
+            });
+        }
+
+        [HttpGet("capfreeze/test-sync-team")]
+        public async Task<IActionResult> TestSyncCapFreezeTeam(
+    [FromQuery] string teamSlug,
+    [FromQuery] int nhlTeamId)
+        {
+            var result =
+                await _nhlApiService.SyncCapFreezeTeamAsync(
+                    teamSlug,
+                    nhlTeamId);
+
+            return Ok(result);
+        }
+
+        [HttpGet("capfreeze/test-player-page")]
+        public async Task<IActionResult> TestCapFreezePlayerPage(
+    [FromQuery] string playerSlug)
+        {
+            var html =
+                await _nhlApiService.GetCapFreezePlayerPageAsync(
+                    playerSlug);
+
+            return Content(
+                html,
+                "text/html");
+        }
+
+        [HttpGet("capfreeze/test-contract-sync")]
+        public async Task<IActionResult> TestCapFreezeContractSync(
+    [FromQuery] string playerSlug,
+    [FromQuery] int playerId)
+        {
+            var contracts =
+                await _nhlApiService.SyncPlayerContractsAsync(
+                    playerId,
+                    playerSlug);
+
+            return Ok(
+                contracts.Select(c => new
+                {
+                    c.Id,
+                    c.PlayerId,
+                    c.StartSeason,
+                    c.EndSeason,
+                    c.Salary
+                }));
+        }
+
+        [HttpGet("capfreeze/test-player-slugs")]
+        public async Task<IActionResult> TestCapFreezePlayerSlugs(
+    [FromQuery] string teamSlug,
+    [FromQuery] string sectionName)
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    teamSlug);
+
+            var slugs =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    sectionName);
+
+            return Ok(slugs);
         }
     }
 }

@@ -18,6 +18,8 @@ namespace NhlFantasyLeague.api.Models
 
         public int? NhlTeamId { get; set; }
 
+        public int? PreviousNhlTeamId { get; set; }
+
         [ForeignKey(nameof(NhlTeamId))]
         public NhlTeam? NhlTeam { get; set; }
 
