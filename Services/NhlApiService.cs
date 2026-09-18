@@ -2356,19 +2356,31 @@ int seasonCode)
                 playerLinks.Add((player, PlayerStatus.RFA));
 
 
-            var currentTeamPlayers =
+            // ---------------------------------------------------------
+            // LOAD CURRENT + PREVIOUS TEAM PLAYERS IN ONE QUERY
+            // ---------------------------------------------------------
+
+            var teamPlayers =
                 await _dbContext.Players
-                    .Where(p => p.NhlTeamId == nhlTeamId)
+                    .Where(p =>
+                        p.NhlTeamId == nhlTeamId ||
+                        p.PreviousNhlTeamId == nhlTeamId)
                     .ToListAsync();
 
 
+            var currentTeamPlayers =
+                teamPlayers
+                    .Where(p => p.NhlTeamId == nhlTeamId)
+                    .ToList();
+
+
             var previousTeamPlayers =
-                await _dbContext.Players
+                teamPlayers
                     .Where(p =>
                         p.PreviousNhlTeamId == nhlTeamId &&
                         !string.IsNullOrWhiteSpace(p.FirstName) &&
                         !string.IsNullOrWhiteSpace(p.LastName))
-                    .ToListAsync();
+                    .ToList();
 
 
             // ---------------------------------------------------------
@@ -2383,6 +2395,7 @@ int seasonCode)
                     .Distinct()
                     .ToList();
 
+
             var preloadedContracts =
                 await _dbContext.PlayerContracts
                     .Where(c =>
@@ -2391,6 +2404,29 @@ int seasonCode)
                     .ToDictionaryAsync(
                         g => g.Key,
                         g => g.ToList());
+
+
+            // ---------------------------------------------------------
+            // PRELOAD CAPFREEZE REVIEWS FOR ALL PLAYERS INVOLVED
+            // ---------------------------------------------------------
+
+            var preloadedReviews =
+                await _dbContext.CapFreezePlayerReviews
+                    .Where(r =>
+                        teamPlayerIds.Contains(r.PlayerId))
+                    .ToListAsync();
+
+
+            var reviewLookup =
+                preloadedReviews
+                    .GroupBy(r =>
+                        (
+                            r.CapFreezeName,
+                            r.PlayerId
+                        ))
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.First());
 
 
             var normalizedDeadCapNames =
@@ -2491,12 +2527,20 @@ int seasonCode)
 
                 if (!namesMatch)
                 {
-                    isReviewed =
-                        await _dbContext.CapFreezePlayerReviews
-                            .AnyAsync(r =>
-                                r.CapFreezeName == capFreezeName &&
-                                r.PlayerId == player.Id &&
-                                r.IsReviewed);
+                    var reviewKey =
+                        (
+                            capFreezeName,
+                            player.Id
+                        );
+
+
+                    if (reviewLookup.TryGetValue(
+                            reviewKey,
+                            out var review))
+                    {
+                        isReviewed =
+                            review.IsReviewed;
+                    }
 
 
                     if (!isReviewed)
