@@ -1677,7 +1677,7 @@ int seasonCode)
 
             return players;
         }
-        
+
         private string NormalizePlayerName(string name)
         {
             var normalized = name
@@ -1862,6 +1862,7 @@ int seasonCode)
 
         public async Task<Player?> FindAndRecordCapFreezePlayerMatchAsync(
     string capFreezeName,
+    string capFreezePosition,
     int nhlTeamId,
     bool saveChanges = true,
     List<Player>? currentTeamPlayers = null,
@@ -1869,6 +1870,11 @@ int seasonCode)
         {
             var normalizedCapFreezeName =
                 NormalizePlayerName(capFreezeName);
+
+            var normalizedPosition =
+                capFreezePosition
+                    .Trim()
+                    .ToUpperInvariant();
 
             if (string.IsNullOrWhiteSpace(normalizedCapFreezeName))
                 return null;
@@ -1878,7 +1884,6 @@ int seasonCode)
             // Find players currently belonging to this NHL team.
             //
             // If the team sync already loaded them, reuse that list.
-            // Otherwise, query the database as before.
             // ---------------------------------------------------------
 
             currentTeamPlayers ??= await _dbContext.Players
@@ -1890,14 +1895,22 @@ int seasonCode)
 
             // ---------------------------------------------------------
             // STEP 2:
-            // Check for an exact official-name match on the current team.
+            // Exact official NHL name match on current team.
             // ---------------------------------------------------------
 
             var currentOfficialNameMatch =
                 currentTeamPlayers.FirstOrDefault(p =>
                     NormalizePlayerName(
                         $"{p.FirstName} {p.LastName}") ==
-                    normalizedCapFreezeName);
+                    normalizedCapFreezeName
+                    &&
+                    (
+                        string.IsNullOrWhiteSpace(normalizedPosition)
+                        ||
+                        p.Position
+                            .ToUpperInvariant()
+                            .Contains(normalizedPosition)
+                    ));
 
             if (currentOfficialNameMatch != null)
             {
@@ -1905,17 +1918,14 @@ int seasonCode)
                     capFreezeName;
 
                 if (saveChanges)
-                {
                     await _dbContext.SaveChangesAsync();
-                }
 
                 return currentOfficialNameMatch;
             }
 
             // ---------------------------------------------------------
             // STEP 3:
-            // Check for a previously saved CapFreezeName on the
-            // current team.
+            // Existing CapFreeze alias match on current team.
             // ---------------------------------------------------------
 
             var currentAliasMatch =
@@ -1930,19 +1940,14 @@ int seasonCode)
                     capFreezeName;
 
                 if (saveChanges)
-                {
                     await _dbContext.SaveChangesAsync();
-                }
 
                 return currentAliasMatch;
             }
 
             // ---------------------------------------------------------
             // STEP 4:
-            // Find players whose PREVIOUS team was this CapFreeze team.
-            //
-            // If the team sync already loaded them, reuse that list.
-            // Otherwise, query the database as before.
+            // Find players who previously belonged to this NHL team.
             // ---------------------------------------------------------
 
             previousTeamPlayers ??= await _dbContext.Players
@@ -1954,14 +1959,22 @@ int seasonCode)
 
             // ---------------------------------------------------------
             // STEP 5:
-            // Check exact official name among previous-team players.
+            // Exact official NHL name match among previous players.
             // ---------------------------------------------------------
 
             var previousOfficialNameMatch =
                 previousTeamPlayers.FirstOrDefault(p =>
                     NormalizePlayerName(
                         $"{p.FirstName} {p.LastName}") ==
-                    normalizedCapFreezeName);
+                    normalizedCapFreezeName
+                    &&
+                    (
+                        string.IsNullOrWhiteSpace(normalizedPosition)
+                        ||
+                        p.Position
+                            .ToUpperInvariant()
+                            .Contains(normalizedPosition)
+                    ));
 
             if (previousOfficialNameMatch != null)
             {
@@ -1969,16 +1982,14 @@ int seasonCode)
                     capFreezeName;
 
                 if (saveChanges)
-                {
                     await _dbContext.SaveChangesAsync();
-                }
 
                 return previousOfficialNameMatch;
             }
 
             // ---------------------------------------------------------
             // STEP 6:
-            // Check saved CapFreezeName among previous-team players.
+            // Existing CapFreeze alias match among previous players.
             // ---------------------------------------------------------
 
             var previousAliasMatch =
@@ -1993,43 +2004,42 @@ int seasonCode)
                     capFreezeName;
 
                 if (saveChanges)
-                {
                     await _dbContext.SaveChangesAsync();
-                }
 
                 return previousAliasMatch;
             }
 
             // ---------------------------------------------------------
             // STEP 7:
-            // No exact/alias match.
-            //
-            // Combine CURRENT team + PREVIOUS team candidates and
-            // find the most compatible name.
+            // No exact match.
+            // Combine current + previous team players and fuzzy match.
             // ---------------------------------------------------------
 
-            var candidatePlayers = currentTeamPlayers
-                .Concat(previousTeamPlayers)
-                .GroupBy(p => p.Id)
-                .Select(g => g.First())
-                .ToList();
+            var candidatePlayers =
+                currentTeamPlayers
+                    .Concat(previousTeamPlayers)
+                    .GroupBy(p => p.Id)
+                    .Select(g => g.First())
+                    .ToList();
 
             if (candidatePlayers.Count == 0)
                 return null;
 
-            var parts = capFreezeName
-                .Split(
+            var parts =
+                capFreezeName.Split(
                     ' ',
                     StringSplitOptions.RemoveEmptyEntries);
 
             if (parts.Length < 2)
                 return null;
 
-            var capFreezeFirstName = parts[0];
+            var capFreezeFirstName =
+                parts[0];
 
-            var capFreezeLastName = string.Join(
-                " ",
-                parts.Skip(1));
+            var capFreezeLastName =
+                string.Join(
+                    " ",
+                    parts.Skip(1));
 
             var normalizedCapFreezeFirstName =
                 NormalizePlayerName(capFreezeFirstName);
@@ -2037,59 +2047,78 @@ int seasonCode)
             var normalizedCapFreezeLastName =
                 NormalizePlayerName(capFreezeLastName);
 
-            var matches = candidatePlayers
-                .Select(player =>
-                {
-                    var normalizedDatabaseFirstName =
-                        NormalizePlayerName(player.FirstName);
 
-                    var normalizedDatabaseLastName =
-                        NormalizePlayerName(player.LastName);
-
-                    var normalizedDatabaseFullName =
-                        NormalizePlayerName(
-                            $"{player.FirstName} {player.LastName}");
-
-                    return new
+            var matches =
+                candidatePlayers
+                    .Select(player =>
                     {
-                        Player = player,
+                        var normalizedDatabaseFirstName =
+                            NormalizePlayerName(player.FirstName);
 
-                        FirstNameSimilarity =
-                            CalculateSimilarity(
-                                normalizedCapFreezeFirstName,
-                                normalizedDatabaseFirstName),
+                        var normalizedDatabaseLastName =
+                            NormalizePlayerName(player.LastName);
 
-                        LastNameSimilarity =
-                            CalculateSimilarity(
-                                normalizedCapFreezeLastName,
-                                normalizedDatabaseLastName),
+                        var normalizedDatabaseFullName =
+                            NormalizePlayerName(
+                                $"{player.FirstName} {player.LastName}");
 
-                        FullNameSimilarity =
-                            CalculateSimilarity(
-                                normalizedCapFreezeName,
-                                normalizedDatabaseFullName)
-                    };
-                })
-                .OrderByDescending(x => x.FullNameSimilarity)
-                .ThenByDescending(x => x.LastNameSimilarity)
-                .ThenByDescending(x => x.FirstNameSimilarity)
-                .ToList();
+                        return new
+                        {
+                            Player = player,
 
-            var bestMatch = matches.First();
+                            FirstNameSimilarity =
+                                CalculateSimilarity(
+                                    normalizedCapFreezeFirstName,
+                                    normalizedDatabaseFirstName),
+
+                            LastNameSimilarity =
+                                CalculateSimilarity(
+                                    normalizedCapFreezeLastName,
+                                    normalizedDatabaseLastName),
+
+                            FullNameSimilarity =
+                                CalculateSimilarity(
+                                    normalizedCapFreezeName,
+                                    normalizedDatabaseFullName)
+                        };
+                    })
+                    .OrderByDescending(x => x.FullNameSimilarity)
+                    .ThenByDescending(x => x.LastNameSimilarity)
+                    .ThenByDescending(x => x.FirstNameSimilarity)
+                    .ToList();
+
+
+            var bestMatch =
+                matches.First();
+
 
             // ---------------------------------------------------------
             // STEP 8:
-            // We found a match.
+            // Reject weak fuzzy matches.
             //
-            // Save the CapFreeze name on the Player itself.
+            // Prevents wrong players receiving CapFreeze contracts.
+            // ---------------------------------------------------------
+
+            if (
+                bestMatch.FullNameSimilarity < 0.80 &&
+                bestMatch.LastNameSimilarity < 0.85)
+            {
+                return null;
+            }
+
+
+            // ---------------------------------------------------------
+            // STEP 9:
+            // Save CapFreeze name on matched player.
             // ---------------------------------------------------------
 
             bestMatch.Player.CapFreezeName =
                 capFreezeName;
 
+
             // ---------------------------------------------------------
-            // STEP 9:
-            // Keep the review record for the fuzzy match.
+            // STEP 10:
+            // Save fuzzy match review record.
             // ---------------------------------------------------------
 
             var existingReview =
@@ -2100,25 +2129,33 @@ int seasonCode)
 
             if (existingReview == null)
             {
-                var review = new CapFreezePlayerReview
-                {
-                    CapFreezeName = capFreezeName,
-                    PlayerId = bestMatch.Player.Id,
+                var review =
+                    new CapFreezePlayerReview
+                    {
+                        CapFreezeName =
+                            capFreezeName,
 
-                    FullNameSimilarity =
-                        bestMatch.FullNameSimilarity,
+                        PlayerId =
+                            bestMatch.Player.Id,
 
-                    FirstNameSimilarity =
-                        bestMatch.FirstNameSimilarity,
+                        FullNameSimilarity =
+                            bestMatch.FullNameSimilarity,
 
-                    LastNameSimilarity =
-                        bestMatch.LastNameSimilarity,
+                        FirstNameSimilarity =
+                            bestMatch.FirstNameSimilarity,
 
-                    NhlTeamId = nhlTeamId,
+                        LastNameSimilarity =
+                            bestMatch.LastNameSimilarity,
 
-                    IsReviewed = false,
-                    IsApproved = null
-                };
+                        NhlTeamId =
+                            nhlTeamId,
+
+                        IsReviewed =
+                            false,
+
+                        IsApproved =
+                            null
+                    };
 
                 _dbContext.CapFreezePlayerReviews.Add(review);
             }
@@ -2299,6 +2336,7 @@ int seasonCode)
             var deadCap =
                 ExtractCapFreezeSectionPlayers(html, "Dead Cap");
 
+
             var playerLinks =
                 new List<(CapFreezePlayerLink Player, PlayerStatus Status)>();
 
@@ -2317,40 +2355,27 @@ int seasonCode)
             foreach (var player in unsignedRfas)
                 playerLinks.Add((player, PlayerStatus.RFA));
 
-            var currentTeamPlayers = await _dbContext.Players
-                .Where(p => p.NhlTeamId == nhlTeamId)
-                .ToListAsync();
 
-            var previousTeamPlayers = await _dbContext.Players
-                .Where(p =>
-                    p.PreviousNhlTeamId == nhlTeamId &&
-                    !string.IsNullOrWhiteSpace(p.FirstName) &&
-                    !string.IsNullOrWhiteSpace(p.LastName))
-                .ToListAsync();
-
-            var playerIds =
-                currentTeamPlayers
-                    .Concat(previousTeamPlayers)
-                    .Select(p => p.Id)
-                    .Distinct()
-                    .ToList();
-
-            var preloadedContracts =
-                await _dbContext.PlayerContracts
-                    .Where(c => playerIds.Contains(c.PlayerId))
+            var currentTeamPlayers =
+                await _dbContext.Players
+                    .Where(p => p.NhlTeamId == nhlTeamId)
                     .ToListAsync();
 
-            var contractsByPlayerId =
-                preloadedContracts
-                    .GroupBy(c => c.PlayerId)
-                    .ToDictionary(
-                        g => g.Key,
-                        g => g.ToList());
+
+            var previousTeamPlayers =
+                await _dbContext.Players
+                    .Where(p =>
+                        p.PreviousNhlTeamId == nhlTeamId &&
+                        !string.IsNullOrWhiteSpace(p.FirstName) &&
+                        !string.IsNullOrWhiteSpace(p.LastName))
+                    .ToListAsync();
+
 
             var normalizedDeadCapNames =
                 deadCap
                     .Select(NormalizePlayerName)
                     .ToHashSet();
+
 
             foreach (var player in currentTeamPlayers)
             {
@@ -2364,6 +2389,7 @@ int seasonCode)
                         : NormalizePlayerName(
                             player.CapFreezeName!);
 
+
                 var isDeadCap =
                     normalizedDeadCapNames.Contains(
                         normalizedOfficialName)
@@ -2376,17 +2402,21 @@ int seasonCode)
                             normalizedCapFreezeName)
                     );
 
+
                 if (isDeadCap)
                     continue;
 
+
                 player.Status = PlayerStatus.Unsigned;
             }
+
 
             var processedPlayers =
                 new List<object>();
 
             var unmatchedPlayers =
                 new List<string>();
+
 
             foreach (var entry in playerLinks)
             {
@@ -2399,13 +2429,16 @@ int seasonCode)
                 var status =
                     entry.Status;
 
+
                 var player =
                     await FindAndRecordCapFreezePlayerMatchAsync(
                         capFreezeName,
+                        entry.Player.Position,
                         nhlTeamId,
                         false,
                         currentTeamPlayers,
                         previousTeamPlayers);
+
 
                 if (player == null)
                 {
@@ -2415,19 +2448,24 @@ int seasonCode)
                     continue;
                 }
 
+
                 var normalizedCapFreezeName =
                     NormalizePlayerName(
                         capFreezeName);
+
 
                 var normalizedDatabaseName =
                     NormalizePlayerName(
                         $"{player.FirstName} {player.LastName}");
 
+
                 var namesMatch =
                     normalizedCapFreezeName ==
                     normalizedDatabaseName;
 
+
                 var isReviewed = false;
+
 
                 if (!namesMatch)
                 {
@@ -2437,6 +2475,7 @@ int seasonCode)
                                 r.CapFreezeName == capFreezeName &&
                                 r.PlayerId == player.Id &&
                                 r.IsReviewed);
+
 
                     if (!isReviewed)
                     {
@@ -2449,21 +2488,24 @@ int seasonCode)
                     isReviewed = true;
                 }
 
+
                 player.Status = status;
+
 
                 var shouldSyncContract =
                     status != PlayerStatus.RFA
                     &&
                     (namesMatch || isReviewed);
 
+
                 if (shouldSyncContract)
                 {
                     await SyncPlayerContractsAsync(
                         player.Id,
                         capFreezeSlug,
-                        false,
-                        contractsByPlayerId);
+                        false);
                 }
+
 
                 processedPlayers.Add(
                     new
@@ -2472,41 +2514,58 @@ int seasonCode)
                         player.NhlPlayerId,
                         player.FirstName,
                         player.LastName,
+
                         CapFreezeName =
                             player.CapFreezeName,
+
                         CapFreezeSlug =
                             capFreezeSlug,
+
                         Status =
                             player.Status.ToString(),
+
                         ContractSynchronized =
                             shouldSyncContract,
+
                         player.NhlTeamId,
                         player.PreviousNhlTeamId
                     });
             }
 
+
             await _dbContext.SaveChangesAsync();
+
 
             return new
             {
                 TeamSlug = teamSlug,
+
                 NhlTeamId = nhlTeamId,
+
                 ForwardsCount =
                     forwards.Count,
+
                 DefenseCount =
                     defense.Count,
+
                 GoaliesCount =
                     goalies.Count,
+
                 MinorsCount =
                     minors.Count,
+
                 UnsignedRfasCount =
                     unsignedRfas.Count,
+
                 TotalPlayersFound =
                     playerLinks.Count,
+
                 PlayersProcessed =
                     processedPlayers.Count,
+
                 UnmatchedPlayers =
                     unmatchedPlayers,
+
                 Players =
                     processedPlayers
             };
@@ -2572,7 +2631,7 @@ int seasonCode)
 
             var startSeason =
                 startYear * 10000 +
-                startYear + 1;
+                (startYear + 1);
 
             // ---------------------------------------------------------
             // STEP 3:
@@ -2744,17 +2803,14 @@ int seasonCode)
         }
 
         private int CalculateContractEndSeason(
-    int startSeason,
-    int termYears)
+            int startSeason,
+            int termYears)
         {
-            var startYear =
-                startSeason / 10000;
+            int startYear = startSeason / 10000;
 
-            var endYear =
-                startYear + termYears - 1;
+            int endYear = startYear + termYears - 1;
 
-            return endYear * 10000 +
-                   (endYear + 1);
+            return (endYear * 10000) + (endYear + 1);
         }
 
         public async Task<List<PlayerContract>> SyncPlayerContractsAsync(
@@ -2774,7 +2830,7 @@ int seasonCode)
                 await GetCapFreezePlayerPageAsync(playerSlug);
 
             var playerName =
-                player.FirstName + " " + player.LastName;
+                $"{player.FirstName} {player.LastName}";
 
             var contractData =
                 ExtractCapFreezeContractData(
@@ -2789,30 +2845,39 @@ int seasonCode)
                     player.Id,
                     contractData);
 
-            Dictionary<int, PlayerContract> existingContracts;
+
+            List<PlayerContract> existingContractsList;
+
 
             if (preloadedContracts != null &&
                 preloadedContracts.TryGetValue(
                     playerId,
-                    out var playerContracts))
+                    out var cachedContracts))
             {
-                existingContracts =
-                    playerContracts.ToDictionary(
-                        c => c.StartSeason);
+                existingContractsList = cachedContracts;
             }
             else
             {
-                existingContracts =
+                existingContractsList =
                     await _dbContext.PlayerContracts
                         .Where(c => c.PlayerId == playerId)
-                        .ToDictionaryAsync(
-                            c => c.StartSeason);
+                        .ToListAsync();
             }
+
+
+            var existingContracts =
+                existingContractsList
+                    .GroupBy(c => c.StartSeason)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.First());
+
 
             var expectedStartSeasons =
                 expectedContracts
                     .Select(c => c.StartSeason)
                     .ToHashSet();
+
 
             foreach (var expectedContract in expectedContracts)
             {
@@ -2830,28 +2895,43 @@ int seasonCode)
                 {
                     _dbContext.PlayerContracts.Add(
                         expectedContract);
+
+                    existingContracts.Add(
+                        expectedContract.StartSeason,
+                        expectedContract);
+
+                    existingContractsList.Add(
+                        expectedContract);
                 }
             }
 
-            foreach (var existingContract in existingContracts.Values)
+
+            foreach (var existingContract in existingContracts.Values.ToList())
             {
                 if (!expectedStartSeasons.Contains(
                         existingContract.StartSeason))
                 {
                     _dbContext.PlayerContracts.Remove(
                         existingContract);
+
+                    existingContractsList.Remove(
+                        existingContract);
                 }
             }
+
+
+            if (preloadedContracts != null)
+            {
+                preloadedContracts[playerId] =
+                    existingContractsList;
+            }
+
 
             if (saveChanges)
             {
                 await _dbContext.SaveChangesAsync();
-
-                return await _dbContext.PlayerContracts
-                    .Where(c => c.PlayerId == player.Id)
-                    .OrderBy(c => c.StartSeason)
-                    .ToListAsync();
             }
+
 
             return expectedContracts;
         }
@@ -2920,22 +3000,28 @@ int seasonCode)
                     System.IO.Path.GetFileNameWithoutExtension(
                         uri.AbsolutePath);
 
-                if (string.IsNullOrWhiteSpace(slug))
-                    continue;
+                // Position column is usually the second td
+                var positionCell =
+                    row.SelectSingleNode("./td[2]");
+
+                var position =
+                    positionCell == null
+                        ? string.Empty
+                        : positionCell.InnerText.Trim();
 
                 players.Add(
                     new CapFreezePlayerLink
                     {
                         Name = name,
-                        Slug = slug
+                        Slug = slug,
+                        Position = position
                     });
             }
 
             return players;
         }
     }
-
-    public class NhlPlayerBatchResult
+        public class NhlPlayerBatchResult
     {
         public int PlayersProcessed { get; set; }
 

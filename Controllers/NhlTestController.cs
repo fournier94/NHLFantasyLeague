@@ -348,11 +348,13 @@ namespace NhlFantasyLeague.api.Controllers
         [HttpGet("capfreeze/test-production-match")]
         public async Task<IActionResult> TestProductionCapFreezeMatch(
     [FromQuery] string name,
+    [FromQuery] string position,
     [FromQuery] int nhlTeamId)
         {
             var player =
                 await _nhlApiService.FindAndRecordCapFreezePlayerMatchAsync(
                     name,
+                    position,
                     nhlTeamId);
 
             if (player == null)
@@ -366,7 +368,8 @@ namespace NhlFantasyLeague.api.Controllers
                 player.LastName,
                 player.NhlTeamId,
                 player.PreviousNhlTeamId,
-                player.CapFreezeName
+                player.CapFreezeName,
+                player.Position
             });
         }
 
