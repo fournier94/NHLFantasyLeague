@@ -2371,6 +2371,28 @@ int seasonCode)
                     .ToListAsync();
 
 
+            // ---------------------------------------------------------
+            // PRELOAD EXISTING CONTRACTS FOR ALL PLAYERS INVOLVED
+            // ---------------------------------------------------------
+
+            var teamPlayerIds =
+                currentTeamPlayers
+                    .Select(p => p.Id)
+                    .Concat(
+                        previousTeamPlayers.Select(p => p.Id))
+                    .Distinct()
+                    .ToList();
+
+            var preloadedContracts =
+                await _dbContext.PlayerContracts
+                    .Where(c =>
+                        teamPlayerIds.Contains(c.PlayerId))
+                    .GroupBy(c => c.PlayerId)
+                    .ToDictionaryAsync(
+                        g => g.Key,
+                        g => g.ToList());
+
+
             var normalizedDeadCapNames =
                 deadCap
                     .Select(NormalizePlayerName)
@@ -2503,7 +2525,9 @@ int seasonCode)
                     await SyncPlayerContractsAsync(
                         player.Id,
                         capFreezeSlug,
-                        false);
+                        false,
+                        preloadedContracts,
+                        player);
                 }
 
 
@@ -2817,14 +2841,18 @@ int seasonCode)
     int playerId,
     string playerSlug,
     bool saveChanges = true,
-    Dictionary<int, List<PlayerContract>>? preloadedContracts = null)
+    Dictionary<int, List<PlayerContract>>? preloadedContracts = null,
+    Player? player = null)
         {
-            var player =
-                await _dbContext.Players
-                    .FirstOrDefaultAsync(p => p.Id == playerId);
-
             if (player == null)
-                return new List<PlayerContract>();
+            {
+                player =
+                    await _dbContext.Players
+                        .FirstOrDefaultAsync(p => p.Id == playerId);
+
+                if (player == null)
+                    return new List<PlayerContract>();
+            }
 
             var html =
                 await GetCapFreezePlayerPageAsync(playerSlug);
