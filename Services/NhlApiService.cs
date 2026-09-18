@@ -1866,7 +1866,8 @@ int seasonCode)
     int nhlTeamId,
     bool saveChanges = true,
     List<Player>? currentTeamPlayers = null,
-    List<Player>? previousTeamPlayers = null)
+    List<Player>? previousTeamPlayers = null,
+    Dictionary<(string CapFreezeName, int PlayerId), CapFreezePlayerReview>? preloadedReviews = null)
         {
             var normalizedCapFreezeName =
                 NormalizePlayerName(capFreezeName);
@@ -1959,7 +1960,7 @@ int seasonCode)
 
             // ---------------------------------------------------------
             // STEP 5:
-            // Exact official NHL name match among previous players.
+            // Exact official name match among previous players.
             // ---------------------------------------------------------
 
             var previousOfficialNameMatch =
@@ -2118,14 +2119,41 @@ int seasonCode)
 
             // ---------------------------------------------------------
             // STEP 10:
-            // Save fuzzy match review record.
+            // Check for an existing review.
+            //
+            // If reviews were preloaded, use the in-memory dictionary.
+            // Otherwise, preserve the original database query behavior.
             // ---------------------------------------------------------
 
-            var existingReview =
-                await _dbContext.CapFreezePlayerReviews
-                    .FirstOrDefaultAsync(r =>
-                        r.CapFreezeName == capFreezeName &&
-                        r.PlayerId == bestMatch.Player.Id);
+            CapFreezePlayerReview? existingReview = null;
+
+            var reviewKey =
+                (
+                    capFreezeName,
+                    bestMatch.Player.Id
+                );
+
+
+            if (preloadedReviews != null)
+            {
+                preloadedReviews.TryGetValue(
+                    reviewKey,
+                    out existingReview);
+            }
+            else
+            {
+                existingReview =
+                    await _dbContext.CapFreezePlayerReviews
+                        .FirstOrDefaultAsync(r =>
+                            r.CapFreezeName == capFreezeName &&
+                            r.PlayerId == bestMatch.Player.Id);
+            }
+
+
+            // ---------------------------------------------------------
+            // STEP 11:
+            // Create review if one does not already exist.
+            // ---------------------------------------------------------
 
             if (existingReview == null)
             {
@@ -2158,7 +2186,14 @@ int seasonCode)
                     };
 
                 _dbContext.CapFreezePlayerReviews.Add(review);
+
+                if (preloadedReviews != null)
+                {
+                    preloadedReviews[reviewKey] =
+                        review;
+                }
             }
+
 
             if (saveChanges)
             {
@@ -2419,14 +2454,10 @@ int seasonCode)
 
             var reviewLookup =
                 preloadedReviews
-                    .GroupBy(r =>
-                        (
-                            r.CapFreezeName,
-                            r.PlayerId
-                        ))
                     .ToDictionary(
-                        g => g.Key,
-                        g => g.First());
+                        r => (
+                            r.CapFreezeName,
+                            r.PlayerId));
 
 
             var normalizedDeadCapNames =
@@ -2495,7 +2526,8 @@ int seasonCode)
                         nhlTeamId,
                         false,
                         currentTeamPlayers,
-                        previousTeamPlayers);
+                        previousTeamPlayers,
+                        reviewLookup);
 
 
                 if (player == null)
