@@ -12,6 +12,42 @@ namespace NhlFantasyLeague.api.Controllers
         private readonly NhlApiService _nhlApiService;
         private readonly AppDbContext _dbContext;
 
+        public class CapFreezePlayerPageReview
+        {
+            public string Category { get; set; } = string.Empty;
+            public string Name { get; set; } = string.Empty;
+            public string Slug { get; set; } = string.Empty;
+            public string PlayerPageUrl { get; set; } = string.Empty;
+            public string Position { get; set; } = string.Empty;
+            public bool PageRequestSucceeded { get; set; }
+            public int? HtmlLength { get; set; }
+            public string? ErrorType { get; set; }
+            public string? ErrorMessage { get; set; }
+        }
+
+        public class CapFreezePlayerContractReview
+        {
+            public string Category { get; set; } = string.Empty;
+            public string Name { get; set; } = string.Empty;
+            public string Slug { get; set; } = string.Empty;
+            public string PlayerPageUrl { get; set; } = string.Empty;
+            public string Position { get; set; } = string.Empty;
+
+            public bool PageRequestSucceeded { get; set; }
+
+            public int? ExtractedTermYears { get; set; }
+            public decimal? ExtractedFirstSalary { get; set; }
+            public decimal? ExtractedSecondSalary { get; set; }
+
+            public int GeneratedContractCount { get; set; }
+
+            public List<object> Contracts { get; set; } =
+                new List<object>();
+
+            public string? ErrorType { get; set; }
+            public string? ErrorMessage { get; set; }
+        }
+
         public NhlTestController(
             NhlApiService nhlApiService,
             AppDbContext dbContext)
@@ -459,6 +495,317 @@ namespace NhlFantasyLeague.api.Controllers
                     sectionName);
 
             return Ok(slugs);
+        }
+
+        [HttpGet("capfreeze/review-team-page")]
+        public async Task<IActionResult> ReviewCapFreezeTeamPage(
+    [FromQuery] string teamSlug)
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    teamSlug);
+
+            var forwards =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Forwards");
+
+            var defense =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Defense");
+
+            var goalies =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Goalies");
+
+            var minors =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Non-Roster / Minors");
+
+            var unsignedRfas =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Unsigned RFAs");
+
+            return Ok(new
+            {
+                TeamSlug = teamSlug,
+
+                Forwards = new
+                {
+                    Count = forwards.Count,
+                    Players = forwards.Select(p => new
+                    {
+                        p.Name,
+                        p.Slug,
+                        p.Position
+                    })
+                },
+
+                Defense = new
+                {
+                    Count = defense.Count,
+                    Players = defense.Select(p => new
+                    {
+                        p.Name,
+                        p.Slug,
+                        p.Position
+                    })
+                },
+
+                Goalies = new
+                {
+                    Count = goalies.Count,
+                    Players = goalies.Select(p => new
+                    {
+                        p.Name,
+                        p.Slug,
+                        p.Position
+                    })
+                },
+
+                NonRosterMinors = new
+                {
+                    Count = minors.Count,
+                    Players = minors.Select(p => new
+                    {
+                        p.Name,
+                        p.Slug,
+                        p.Position
+                    })
+                },
+
+                UnsignedRfas = new
+                {
+                    Count = unsignedRfas.Count,
+                    Players = unsignedRfas.Select(p => new
+                    {
+                        p.Name,
+                        p.Slug,
+                        p.Position
+                    })
+                },
+
+                TotalPlayersFound =
+                    forwards.Count +
+                    defense.Count +
+                    goalies.Count +
+                    minors.Count +
+                    unsignedRfas.Count
+            });
+        }
+
+        [HttpGet("capfreeze/review-player-contracts")]
+        public async Task<IActionResult> ReviewCapFreezePlayerContracts(
+            [FromQuery] string teamSlug)
+        {
+            var html =
+                await _nhlApiService.GetCapFreezeTeamPageAsync(
+                    teamSlug);
+
+            var forwards =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Forwards");
+
+            var defense =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Defense");
+
+            var goalies =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Goalies");
+
+            var minors =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Non-Roster / Minors");
+
+            var unsignedRfas =
+                _nhlApiService.ExtractCapFreezePlayerLinks(
+                    html,
+                    "Unsigned RFAs");
+
+            var players =
+                forwards
+                    .Select(p => new
+                    {
+                        Player = p,
+                        Category = "Forwards"
+                    })
+                    .Concat(
+                        defense.Select(p => new
+                        {
+                            Player = p,
+                            Category = "Defense"
+                        }))
+                    .Concat(
+                        goalies.Select(p => new
+                        {
+                            Player = p,
+                            Category = "Goalies"
+                        }))
+                    .Concat(
+                        minors.Select(p => new
+                        {
+                            Player = p,
+                            Category = "Non-Roster / Minors"
+                        }))
+                    .Concat(
+                        unsignedRfas.Select(p => new
+                        {
+                            Player = p,
+                            Category = "Unsigned RFAs"
+                        }))
+                    .ToList();
+
+            var results =
+                new List<CapFreezePlayerContractReview>();
+
+            foreach (var entry in players)
+            {
+                var playerPageUrl =
+                    $"https://capfreeze.com/players/{entry.Player.Slug}.html";
+
+                try
+                {
+                    // Production method
+                    var playerHtml =
+                        await _nhlApiService.GetCapFreezePlayerPageAsync(
+                            entry.Player.Slug);
+
+                    // Use the same player name production sync uses
+                    // for contract extraction.
+                    var contractData =
+                        _nhlApiService.ExtractCapFreezeContractData(
+                            playerHtml,
+                            entry.Player.Name);
+
+                    if (contractData == null)
+                    {
+                        results.Add(
+                            new CapFreezePlayerContractReview
+                            {
+                                Category = entry.Category,
+                                Name = entry.Player.Name,
+                                Slug = entry.Player.Slug,
+                                PlayerPageUrl = playerPageUrl,
+                                Position = entry.Player.Position,
+                                PageRequestSucceeded = true,
+                                GeneratedContractCount = 0
+                            });
+
+                        continue;
+                    }
+
+                    // Use the exact production contract-building method.
+                    var contracts =
+                        _nhlApiService.BuildPlayerContracts(
+                            0,
+                            contractData);
+
+                    results.Add(
+                        new CapFreezePlayerContractReview
+                        {
+                            Category = entry.Category,
+                            Name = entry.Player.Name,
+                            Slug = entry.Player.Slug,
+                            PlayerPageUrl = playerPageUrl,
+                            Position = entry.Player.Position,
+                            PageRequestSucceeded = true,
+
+                            ExtractedTermYears =
+                                contractData.TermYears,
+
+                            ExtractedFirstSalary =
+                                contractData.FirstSalary,
+
+                            ExtractedSecondSalary =
+                                contractData.SecondSalary,
+
+                            GeneratedContractCount =
+                                contracts.Count,
+
+                            Contracts =
+                                contracts
+                                    .Select(c => (object)new
+                                    {
+                                        StartSeason = c.StartSeason,
+                                        EndSeason = c.EndSeason,
+                                        Salary = c.Salary
+                                    })
+                                    .ToList()
+                        });
+                }
+                catch (Exception ex)
+                {
+                    results.Add(
+                        new CapFreezePlayerContractReview
+                        {
+                            Category = entry.Category,
+                            Name = entry.Player.Name,
+                            Slug = entry.Player.Slug,
+                            PlayerPageUrl = playerPageUrl,
+                            Position = entry.Player.Position,
+                            PageRequestSucceeded = false,
+                            GeneratedContractCount = 0,
+                            ErrorType = ex.GetType().Name,
+                            ErrorMessage = ex.Message
+                        });
+                }
+            }
+
+            return Ok(new
+            {
+                TeamSlug = teamSlug,
+
+                TotalPlayers = results.Count,
+
+                SuccessfulPages =
+                    results.Count(r => r.PageRequestSucceeded),
+
+                FailedPages =
+                    results.Count(r => !r.PageRequestSucceeded),
+
+                ContractExtractionSucceeded =
+                    results.Count(r =>
+                        r.PageRequestSucceeded &&
+                        r.ExtractedTermYears.HasValue),
+
+                ContractExtractionFailed =
+                    results.Count(r =>
+                        r.PageRequestSucceeded &&
+                        !r.ExtractedTermYears.HasValue),
+
+                OneContract =
+                    results.Count(r =>
+                        r.GeneratedContractCount == 1),
+
+                TwoContracts =
+                    results.Count(r =>
+                        r.GeneratedContractCount == 2),
+
+                OtherContractCount =
+                    results.Count(r =>
+                        r.GeneratedContractCount != 1 &&
+                        r.GeneratedContractCount != 2),
+
+                Players = results
+            });
+        }
+
+        [HttpGet("capfreeze/sync-all-teams")]
+        public async Task<IActionResult> SyncAllCapFreezeTeams()
+        {
+            var result =
+                await _nhlApiService.SyncAllCapFreezeTeamsAsync();
+
+            return Ok(result);
         }
     }
 }

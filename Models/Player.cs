@@ -43,5 +43,9 @@ namespace NhlFantasyLeague.api.Models
 
         public ICollection<PlayerContract> Contracts { get; set; }
             = new List<PlayerContract>();
+
+        public DateTime? CapFreezeStatusLastUpdated { get; set; }
+
+        public DateTime? CapFreezeContractLastUpdated { get; set; }
     }
 }
