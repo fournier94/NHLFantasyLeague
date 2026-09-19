@@ -1,4 +1,4 @@
-﻿namespace NhlFantasyLeague.api.Models
+﻿namespace NhlFantasyLeague.api.Models.CapFreeze
 {
     public class CapFreezePlayerReview
     {

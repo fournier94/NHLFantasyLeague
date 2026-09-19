@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Models;
+using NhlFantasyLeague.api.Models.CapFreeze;
 
 namespace NhlFantasyLeague.api.Data
 {

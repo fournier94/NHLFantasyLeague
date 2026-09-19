@@ -1,4 +1,4 @@
-﻿namespace NhlFantasyLeague.api.Services
+﻿namespace NhlFantasyLeague.api.Models.NHL
 {
     public class NhlMissingPlayerResult
     {
