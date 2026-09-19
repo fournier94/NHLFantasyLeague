@@ -10,16 +10,13 @@ namespace NhlFantasyLeague.api.Services.NHL
     {
         private readonly HttpClient _httpClient;
         private readonly AppDbContext _dbContext;
-        private readonly NhlPlayerService _nhlPlayerService;
 
         public NhlStatsService(
-    HttpClient httpClient,
-    AppDbContext dbContext,
-    NhlPlayerService nhlPlayerService)
+            HttpClient httpClient,
+            AppDbContext dbContext)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
-            _nhlPlayerService = nhlPlayerService;
         }
 
         public async Task<int> SavePlayerSeasonStatsAsync(
@@ -250,7 +247,8 @@ int seasonCode)
                 return new List<PlayerCareerStat>();
             }
 
-            var nhlPlayer = await _nhlPlayerService.GetPlayerAsync(nhlPlayerId);
+            var nhlPlayer = await _httpClient.GetFromJsonAsync<NhlPlayerResponse>(
+    $"https://api-web.nhle.com/v1/player/{nhlPlayerId}/landing");
 
             if (nhlPlayer == null)
             {

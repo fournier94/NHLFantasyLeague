@@ -237,89 +237,85 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             var result = new NhlPlayerSyncResult();
 
-            const int limit = 5;
-            const int maxAttempts = 5;
+            Console.WriteLine(
+                $"[NHL DISCOVERY] Starting player discovery for {teams.Count} NHL teams.");
 
             foreach (var team in teams)
             {
+                Console.WriteLine(
+                    $"[NHL DISCOVERY] Processing team {team.Abbreviation} " +
+                    $"({result.TeamsProcessed + 1}/{teams.Count})...");
+
+                Console.WriteLine(
+                    $"[NHL DISCOVERY] Requesting roster for {team.Abbreviation}...");
+
+                await Task.Delay(TimeSpan.FromSeconds(1));
+
+                var roster = await _nhlTeamService.GetRosterAsync(
+                    team.Abbreviation);
+
+                if (roster == null)
+                {
+                    Console.WriteLine(
+                        $"[NHL DISCOVERY] FAILED: Could not retrieve roster for " +
+                        $"{team.Abbreviation}.");
+
+                    continue;
+                }
+
                 result.TeamsProcessed++;
 
-                int startNumber = 0;
-                int currentNumber = 0;
-                int totalNumber = 0;
+                var rosterPlayers = roster.Forwards
+                    .Concat(roster.Defensemen)
+                    .Concat(roster.Goalies)
+                    .ToList();
 
-                do
+                Console.WriteLine(
+                    $"[NHL DISCOVERY] Roster retrieved for {team.Abbreviation}. " +
+                    $"Found {rosterPlayers.Count} players.");
+
+                foreach (var rosterPlayer in rosterPlayers)
                 {
-                    var url =
-                        $"https://api.nhle.com/stats/rest/en/players" +
-                        $"?cayenneExp=currentTeamId%3D{team.NhlTeamId}" +
-                        $"&start={startNumber}" +
-                        $"&limit={limit}";
+                    result.PlayersProcessed++;
 
-                    NhlPlayerIdResponse? response = null;
-
-                    for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                    if (existingPlayerIds.Contains(rosterPlayer.Id))
                     {
-                        using var httpResponse = await _httpClient.GetAsync(url);
-
-                        if (httpResponse.IsSuccessStatusCode)
-                        {
-                            response = await httpResponse.Content
-                                .ReadFromJsonAsync<NhlPlayerIdResponse>();
-
-                            break;
-                        }
-
-                        if ((int)httpResponse.StatusCode == 429)
-                        {
-                            await Task.Delay(
-                                TimeSpan.FromSeconds(2 * attempt));
-
-                            continue;
-                        }
-
-                        httpResponse.EnsureSuccessStatusCode();
+                        continue;
                     }
 
-                    if (response == null)
+                    var player = new Player
                     {
-                        throw new HttpRequestException(
-                            $"NHL Stats API request failed after {maxAttempts} attempts.");
-                    }
+                        NhlPlayerId = rosterPlayer.Id,
+                        FirstName = rosterPlayer.FirstName.Default,
+                        LastName = rosterPlayer.LastName.Default,
+                        Position = rosterPlayer.PositionCode ?? string.Empty,
+                        NhlTeamId = team.NhlTeamId,
+                        HeadshotUrl = rosterPlayer.Headshot
+                    };
 
-                    totalNumber = response.Total;
+                    _dbContext.Players.Add(player);
 
-                    foreach (var statsPlayer in response.Data)
-                    {
-                        result.PlayersProcessed++;
+                    existingPlayerIds.Add(rosterPlayer.Id);
 
-                        if (existingPlayerIds.Contains(statsPlayer.Id))
-                        {
-                            continue;
-                        }
+                    result.PlayersAdded++;
+                }
 
-                        var player = new Player
-                        {
-                            NhlPlayerId = statsPlayer.Id
-                        };
-
-                        _dbContext.Players.Add(player);
-
-                        existingPlayerIds.Add(statsPlayer.Id);
-
-                        result.PlayersAdded++;
-                    }
-
-                    currentNumber = startNumber + response.Data.Count;
-                    startNumber = currentNumber;
-
-                    // Small delay between Stats API requests.
-                    await Task.Delay(TimeSpan.FromSeconds(0.5));
-
-                } while (currentNumber < totalNumber);
+                Console.WriteLine(
+                    $"[NHL DISCOVERY] Finished {team.Abbreviation}. " +
+                    $"Players processed so far: {result.PlayersProcessed}. " +
+                    $"Players added so far: {result.PlayersAdded}.");
             }
 
+            Console.WriteLine(
+                "[NHL DISCOVERY] Saving discovered players to database...");
+
             await _dbContext.SaveChangesAsync();
+
+            Console.WriteLine(
+                $"[NHL DISCOVERY] COMPLETE. " +
+                $"Teams processed: {result.TeamsProcessed}/{teams.Count}. " +
+                $"Players processed: {result.PlayersProcessed}. " +
+                $"Players added: {result.PlayersAdded}.");
 
             return result;
         }
@@ -373,14 +369,29 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .Select(p => p.Id)
                 .ToListAsync();
 
+            if (playerIds.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "No players exist in the database. Run player ID discovery first.");
+            }
+
             var result = new NhlPlayerBatchResult
             {
                 PlayersProcessed = playerIds.Count
             };
 
-            foreach (var playerId in playerIds)
+            Console.WriteLine(
+                $"[NHL POPULATION] Starting population of {playerIds.Count} players.");
+
+            for (int i = 0; i < playerIds.Count; i++)
             {
+                var playerId = playerIds[i];
+
                 Player? player = null;
+
+                Console.WriteLine(
+                    $"[NHL POPULATION] Processing player {i + 1}/{playerIds.Count} " +
+                    $"(Database Id: {playerId})...");
 
                 try
                 {
@@ -394,8 +405,15 @@ namespace NhlFantasyLeague.api.Services.NHL
                         result.FailedPlayers.Add(
                             $"Database Player Id {playerId}: Player not found");
 
+                        Console.WriteLine(
+                            $"[NHL POPULATION] FAILED: " +
+                            $"Database Player Id {playerId}: Player not found");
+
                         continue;
                     }
+
+                    Console.WriteLine(
+                        $"[NHL POPULATION] NHL Player ID: {player.NhlPlayerId}");
 
                     var nhlPlayer = await GetPlayerAsync(
                         player.NhlPlayerId);
@@ -405,7 +423,12 @@ namespace NhlFantasyLeague.api.Services.NHL
                         result.PlayersFailed++;
 
                         result.FailedPlayers.Add(
-                            $"{player.NhlPlayerId} - {player.FirstName} {player.LastName}: NHL API returned no data");
+                            $"{player.NhlPlayerId} - {player.FirstName} {player.LastName}: " +
+                            "NHL API returned no data");
+
+                        Console.WriteLine(
+                            $"[NHL POPULATION] FAILED: " +
+                            $"NHL ID {player.NhlPlayerId} - NHL API returned no data");
 
                         continue;
                     }
@@ -444,13 +467,27 @@ namespace NhlFantasyLeague.api.Services.NHL
                     player.HeadshotUrl =
                         nhlPlayer.Headshot;
 
+                    Console.WriteLine(
+                        $"[NHL POPULATION] Retrieved: " +
+                        $"{player.FirstName} {player.LastName} " +
+                        $"(NHL ID: {player.NhlPlayerId})");
+
                     await _nhlStatsService.SyncCareerStatsFromLandingAsync(
                         player,
                         nhlPlayer);
 
+                    Console.WriteLine(
+                        $"[NHL POPULATION] Career stats synced for " +
+                        $"{player.FirstName} {player.LastName}");
+
                     await _dbContext.SaveChangesAsync();
 
                     result.PlayersUpdated++;
+
+                    Console.WriteLine(
+                        $"[NHL POPULATION] SUCCESS: " +
+                        $"{player.FirstName} {player.LastName} " +
+                        $"({i + 1}/{playerIds.Count})");
 
                     await Task.Delay(
                         TimeSpan.FromSeconds(0.5));
@@ -466,9 +503,20 @@ namespace NhlFantasyLeague.api.Services.NHL
                     result.FailedPlayers.Add(
                         $"{playerDescription}: {ex.GetType().Name}: {ex.Message}");
 
+                    Console.WriteLine(
+                        $"[NHL POPULATION] FAILED: " +
+                        $"{playerDescription}: " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+
                     _dbContext.ChangeTracker.Clear();
                 }
             }
+
+            Console.WriteLine(
+                $"[NHL POPULATION] COMPLETE. " +
+                $"Processed={result.PlayersProcessed}, " +
+                $"Updated={result.PlayersUpdated}, " +
+                $"Failed={result.PlayersFailed}");
 
             return result;
         }
@@ -528,7 +576,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             return missingPlayers;
         }
 
-        public void UpdatePlayerNhlTeam(Player player, int? newNhlTeamId)
+        public static void UpdatePlayerNhlTeam(Player player, int? newNhlTeamId)
         {
             if (player.NhlTeamId != newNhlTeamId)
             {

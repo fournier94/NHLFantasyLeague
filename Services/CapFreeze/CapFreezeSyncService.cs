@@ -9,7 +9,6 @@ namespace NhlFantasyLeague.api.Services.CapFreeze
 {
     public class CapFreezeSyncService
     {
-        private readonly HttpClient _httpClient;
         private readonly AppDbContext _dbContext;
         private readonly CapFreezePageService _capFreezePageService;
         private readonly CapFreezeMatchingService _capFreezeMatchingService;
@@ -65,13 +64,11 @@ new(StringComparer.OrdinalIgnoreCase)
 
 
         public CapFreezeSyncService(
-    HttpClient httpClient,
     AppDbContext dbContext,
     CapFreezePageService capFreezePageService,
     CapFreezeMatchingService capFreezeMatchingService,
     CapFreezeContractService capFreezeContractService)
         {
-            _httpClient = httpClient;
             _dbContext = dbContext;
             _capFreezePageService = capFreezePageService;
             _capFreezeMatchingService = capFreezeMatchingService;

@@ -12,11 +12,41 @@ namespace NhlFantasyLeague.api.Controllers.NHL
     public class NhlPlayerController : ControllerBase
     {
         private readonly NhlPlayerService _nhlPlayerService;
+        private readonly NhlPopulationService _nhlPopulationService;
+        private readonly ILogger<NhlPlayerController> _logger;
 
         public NhlPlayerController(
-            NhlPlayerService playerService)
+            NhlPlayerService nhlPlayerService,
+            NhlPopulationService nhlPopulationService,
+            ILogger<NhlPlayerController> logger)
         {
-            _nhlPlayerService = playerService;
+            _nhlPlayerService = nhlPlayerService;
+            _nhlPopulationService = nhlPopulationService;
+            _logger = logger;
+        }
+
+        [HttpPost("populate-entire-database")]
+        public async Task<IActionResult> PopulateEntireDatabase()
+        {
+            Console.WriteLine("========== POPULATE ENTIRE DATABASE ENDPOINT HIT ==========");
+
+            var result =
+                await _nhlPopulationService.PopulateEntirePlayerDatabaseAsync();
+
+            return Ok(result);
+        }
+
+        [HttpPost("TEST")]
+        public IActionResult TEST()
+        {
+            _logger.LogInformation("POPULATE ENTIRE DATABASE ENDPOINT HIT awdwadadaww");
+            return Ok("========== POPULATE ENTIRE DATABASE ENDPOINT HIT ==========");
+        }
+
+        [HttpGet("TEST2")]
+        public IActionResult TEST2()
+        {
+            return Ok("========== POPULATE ENTIRE DATABASE ENDPOINT HIT ==========");
         }
 
         [HttpGet("player/{id}/save")]

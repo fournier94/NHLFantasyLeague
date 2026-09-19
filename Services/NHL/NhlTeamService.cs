@@ -10,16 +10,13 @@ namespace NhlFantasyLeague.api.Services.NHL
     {
         private readonly HttpClient _httpClient;
         private readonly AppDbContext _dbContext;
-        private readonly NhlPlayerService _nhlPlayerService;
 
         public NhlTeamService(
-    HttpClient httpClient,
-    AppDbContext dbContext,
-    NhlPlayerService nhlPlayerService)
+            HttpClient httpClient,
+            AppDbContext dbContext)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
-            _nhlPlayerService = nhlPlayerService;
         }
 
         public async Task<List<NhlTeamResponse>> GetTeamsAsync()
@@ -308,9 +305,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                         if (existingPlayer.NhlTeamId !=
                             team.NhlTeamId)
                         {
-                            _nhlPlayerService.UpdatePlayerNhlTeam(
-                                existingPlayer,
-                                team.NhlTeamId);
+                            NhlPlayerService.UpdatePlayerNhlTeam(existingPlayer, team.NhlTeamId);
 
                             changed = true;
                         }
