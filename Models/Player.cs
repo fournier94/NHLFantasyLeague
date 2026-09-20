@@ -14,6 +14,8 @@ namespace NhlFantasyLeague.api.Models
 
         public string? CapFreezeName { get; set; }
 
+        public string? CapFreezeSlug { get; set; }
+
         public string Position { get; set; } = string.Empty;
 
         public int? NhlTeamId { get; set; }

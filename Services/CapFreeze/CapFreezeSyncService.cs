@@ -1,8 +1,10 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
+using NhlFantasyLeague.api.Models.CapFreeze;
 using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.NHL;
+using System.Collections.Generic;
 using System.Net.Http;
 
 namespace NhlFantasyLeague.api.Services.CapFreeze
@@ -14,10 +16,34 @@ namespace NhlFantasyLeague.api.Services.CapFreeze
         private readonly CapFreezeMatchingService _capFreezeMatchingService;
         private readonly CapFreezeContractService _capFreezeContractService;
 
-        private static readonly HashSet<int> ProtectedStatusPlayerIds = new()
-{
-        2237,
-        2241
+        // Players that are handled manually and skipped by the CapFreeze
+        // status/contract sync (matched by NAME, so it survives DB rebuilds).
+        private static bool IsEliasPettersson(Player player)
+        {
+            return string.Equals(
+                       player.FirstName?.Trim(),
+                       "Elias",
+                       StringComparison.OrdinalIgnoreCase)
+                   &&
+                   string.Equals(
+                       player.LastName?.Trim(),
+                       "Pettersson",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private sealed record ManualPlayerOverride(
+            int NhlPlayerId,
+            int StartSeason,
+            int EndSeason,
+            decimal Salary);
+
+        // Manual values applied AFTER the whole CapFreeze sync.
+        // Status is always forced to Rostered for these players.
+        // The contract is only created if the player has no contract at all.
+        private static readonly ManualPlayerOverride[] ManualPlayerOverrides =
+        {
+    new(8480012, 20262027, 20312032, 11600000.00m),
+    new(8483678, 20262027, 20262027, 913333.00m)
 };
 
         private static readonly Dictionary<string, string> CapFreezeTeamSlugs =
@@ -76,88 +102,73 @@ new(StringComparer.OrdinalIgnoreCase)
         }
 
         public async Task<object> SyncCapFreezeTeamAsync(
-string teamSlug,
-int nhlTeamId)
+            string teamSlug,
+            int nhlTeamId,
+            DateTime? runStartedUtc = null)
         {
             var html =
                 await _capFreezePageService.GetCapFreezeTeamPageAsync(teamSlug);
 
             var forwards =
-                _capFreezePageService.ExtractCapFreezePlayerLinks(
-                    html,
-                    "Forwards");
+                _capFreezePageService.ExtractCapFreezePlayerLinks(html, "Forwards");
 
             var defense =
-                _capFreezePageService.ExtractCapFreezePlayerLinks(
-                    html,
-                    "Defense");
+                _capFreezePageService.ExtractCapFreezePlayerLinks(html, "Defense");
 
             var goalies =
-                _capFreezePageService.ExtractCapFreezePlayerLinks(
-                    html,
-                    "Goalies");
+                _capFreezePageService.ExtractCapFreezePlayerLinks(html, "Goalies");
 
             var minors =
-                _capFreezePageService.ExtractCapFreezePlayerLinks(
-                    html,
-                    "Non-Roster / Minors");
+                _capFreezePageService.ExtractCapFreezePlayerLinks(html, "Non-Roster / Minors");
 
             var unsignedRfas =
-                _capFreezePageService.ExtractCapFreezePlayerLinks(
-                    html,
-                    "Unsigned RFAs");
+                _capFreezePageService.ExtractCapFreezePlayerLinks(html, "Unsigned RFAs");
 
             var deadCap =
-                _capFreezePageService.ExtractCapFreezeSectionPlayers(
-                    html,
-                    "Dead Cap");
+                _capFreezePageService.ExtractCapFreezeSectionPlayers(html, "Dead Cap");
+
+            // ---------------------------------------------------------
+            // BUILD ENTRY LIST (a slug can only appear once)
+            // ---------------------------------------------------------
 
             var playerLinks =
                 new List<(CapFreezePlayerLink Player, PlayerStatus Status)>();
 
-            foreach (var player in forwards)
-                playerLinks.Add(
-                    (player, PlayerStatus.Rostered));
+            var seenSlugs =
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var player in defense)
-                playerLinks.Add(
-                    (player, PlayerStatus.Rostered));
+            void AddLinks(List<CapFreezePlayerLink> links, PlayerStatus status)
+            {
+                foreach (var link in links)
+                {
+                    if (seenSlugs.Add(link.Slug))
+                        playerLinks.Add((link, status));
+                }
+            }
 
-            foreach (var player in goalies)
-                playerLinks.Add(
-                    (player, PlayerStatus.Rostered));
-
-            foreach (var player in minors)
-                playerLinks.Add(
-                    (player, PlayerStatus.FarmPlayer));
-
-            foreach (var player in unsignedRfas)
-                playerLinks.Add(
-                    (player, PlayerStatus.RFA));
+            AddLinks(forwards, PlayerStatus.Rostered);
+            AddLinks(defense, PlayerStatus.Rostered);
+            AddLinks(goalies, PlayerStatus.Rostered);
+            AddLinks(minors, PlayerStatus.FarmPlayer);
+            AddLinks(unsignedRfas, PlayerStatus.RFA);
 
             // ---------------------------------------------------------
-            // LOAD CURRENT + PREVIOUS TEAM PLAYERS IN ONE QUERY
+            // LOAD PLAYERS
             // ---------------------------------------------------------
+
+            var allPlayers =
+                await _dbContext.Players.ToListAsync();
 
             var teamPlayers =
-                await _dbContext.Players
+                allPlayers
                     .Where(p =>
                         p.NhlTeamId == nhlTeamId ||
                         p.PreviousNhlTeamId == nhlTeamId)
-                    .ToListAsync();
-
-            var currentTeamPlayers =
-                teamPlayers
-                    .Where(p =>
-                        p.NhlTeamId == nhlTeamId)
                     .ToList();
 
-            var previousTeamPlayers =
-                teamPlayers
-                    .Where(p =>
-                        p.PreviousNhlTeamId == nhlTeamId &&
-                        !string.IsNullOrWhiteSpace(p.FirstName) &&
-                        !string.IsNullOrWhiteSpace(p.LastName))
+            var currentTeamPlayers =
+                allPlayers
+                    .Where(p => p.NhlTeamId == nhlTeamId)
                     .ToList();
 
             // ---------------------------------------------------------
@@ -165,46 +176,33 @@ int nhlTeamId)
             // ---------------------------------------------------------
 
             var teamPlayerIds =
-                currentTeamPlayers
-                    .Select(p => p.Id)
-                    .Concat(
-                        previousTeamPlayers.Select(p => p.Id))
-                    .Distinct()
-                    .ToList();
+                teamPlayers.Select(p => p.Id).Distinct().ToList();
 
             var preloadedContracts =
                 await _dbContext.PlayerContracts
-                    .Where(c =>
-                        teamPlayerIds.Contains(c.PlayerId))
+                    .Where(c => teamPlayerIds.Contains(c.PlayerId))
                     .GroupBy(c => c.PlayerId)
                     .ToDictionaryAsync(
                         g => g.Key,
                         g => g.ToList());
 
             // ---------------------------------------------------------
-            // PRELOAD CAPFREEZE REVIEWS
+            // PRELOAD ALL REVIEWS (duplicate-safe)
             // ---------------------------------------------------------
 
-            var preloadedReviews =
-                await _dbContext.CapFreezePlayerReviews
-                    .Where(r =>
-                        teamPlayerIds.Contains(r.PlayerId))
-                    .ToListAsync();
+            var existingReviews =
+                await _dbContext.CapFreezePlayerReviews.ToListAsync();
 
             var reviewLookup =
-                preloadedReviews
-                    .ToDictionary(
-                        r => (
-                            r.CapFreezeName,
-                            r.PlayerId));
+                new Dictionary<(string CapFreezeName, int PlayerId), CapFreezePlayerReview>();
+
+            foreach (var review in existingReviews)
+                reviewLookup.TryAdd((review.CapFreezeName, review.PlayerId), review);
 
             // ---------------------------------------------------------
             // MARK CURRENT PLAYERS AS UNSIGNED FIRST.
-            //
-            // Players actually found on CapFreeze will be assigned
-            // their real status below.
-            //
-            // Protected players are NOT changed automatically.
+            // Skipped: Elias Pettersson (handled manually), dead-cap
+            // players, and players already resolved earlier in THIS run.
             // ---------------------------------------------------------
 
             var normalizedDeadCapNames =
@@ -214,12 +212,14 @@ int nhlTeamId)
 
             foreach (var player in currentTeamPlayers)
             {
-                var isProtectedStatusPlayer =
-                    ProtectedStatusPlayerIds.Contains(
-                        player.Id);
-
-                if (isProtectedStatusPlayer)
+                if (IsEliasPettersson(player))
                     continue;
+
+                if (runStartedUtc.HasValue &&
+                    player.CapFreezeStatusLastUpdated >= runStartedUtc.Value)
+                {
+                    continue;
+                }
 
                 var normalizedOfficialName =
                     _capFreezeMatchingService.NormalizePlayerName(
@@ -232,156 +232,85 @@ int nhlTeamId)
                             player.CapFreezeName!);
 
                 var isDeadCap =
-                    normalizedDeadCapNames.Contains(
-                        normalizedOfficialName)
+                    normalizedDeadCapNames.Contains(normalizedOfficialName)
                     ||
                     (
-                        !string.IsNullOrWhiteSpace(
-                            normalizedCapFreezeName)
+                        !string.IsNullOrWhiteSpace(normalizedCapFreezeName)
                         &&
-                        normalizedDeadCapNames.Contains(
-                            normalizedCapFreezeName)
+                        normalizedDeadCapNames.Contains(normalizedCapFreezeName)
                     );
 
                 if (isDeadCap)
                     continue;
 
-                player.Status =
-                    PlayerStatus.Unsigned;
+                player.Status = PlayerStatus.Unsigned;
             }
 
-            var processedPlayers =
-                new List<object>();
-
-            var unmatchedPlayers =
-                new List<string>();
-
             // ---------------------------------------------------------
-            // PROCESS EVERY CAPFREEZE PLAYER
+            // MATCH ALL CAPFREEZE ENTRIES AT ONCE
             // ---------------------------------------------------------
 
-            foreach (var entry in playerLinks)
+            var matchResults =
+                _capFreezeMatchingService.MatchCapFreezeTeamEntries(
+                    playerLinks.Select(x => x.Player).ToList(),
+                    nhlTeamId,
+                    allPlayers,
+                    reviewLookup);
+
+            var processedPlayers = new List<object>();
+            var unmatchedPlayers = new List<string>();
+            var pendingReviews = new List<string>();
+            var skippedManualPlayers = new List<string>();
+
+            // ---------------------------------------------------------
+            // APPLY STATUS + CONTRACTS FOR MATCHED PLAYERS ONLY
+            // ---------------------------------------------------------
+
+            for (var i = 0; i < playerLinks.Count; i++)
             {
-                var capFreezeName =
-                    entry.Player.Name;
-
-                var capFreezeSlug =
-                    entry.Player.Slug;
-
-                var status =
-                    entry.Status;
-
-                var player =
-                    await _capFreezeMatchingService.FindAndRecordCapFreezePlayerMatchAsync(
-                        capFreezeName,
-                        entry.Player.Position,
-                        nhlTeamId,
-                        false,
-                        currentTeamPlayers,
-                        previousTeamPlayers,
-                        reviewLookup);
-
-                // -----------------------------------------------------
-                // No DB player could be matched.
-                // -----------------------------------------------------
+                var status = playerLinks[i].Status;
+                var match = matchResults[i];
+                var player = match.Player;
 
                 if (player == null)
                 {
-                    unmatchedPlayers.Add(
-                        capFreezeName);
+                    unmatchedPlayers.Add(match.Entry.Name);
+
+                    if (match.ReviewCandidate != null)
+                    {
+                        pendingReviews.Add(
+                            $"{match.Entry.Name} -> " +
+                            $"{match.ReviewCandidate.FirstName} {match.ReviewCandidate.LastName} " +
+                            $"(player id {match.ReviewCandidate.Id})");
+                    }
 
                     continue;
                 }
 
-                // -----------------------------------------------------
-                // Determine whether this was an exact name match.
-                // -----------------------------------------------------
-
-                var normalizedCapFreezeName =
-                    _capFreezeMatchingService.NormalizePlayerName(
-                        capFreezeName);
-
-                var normalizedDatabaseName =
-                    _capFreezeMatchingService.NormalizePlayerName(
-                        $"{player.FirstName} {player.LastName}");
-
-                var namesMatch =
-                    normalizedCapFreezeName ==
-                    normalizedDatabaseName;
-
-                // -----------------------------------------------------
-                // Fuzzy/alias matches are still recorded for review.
-                // The review does NOT block contract synchronization.
-                // -----------------------------------------------------
-
-                var isReviewed = false;
-
-                if (!namesMatch)
+                // Elias Pettersson is handled manually after the whole sync.
+                // No status change, no contract change, no timestamps.
+                if (IsEliasPettersson(player))
                 {
-                    var reviewKey =
-                        (
-                            capFreezeName,
-                            player.Id
-                        );
+                    skippedManualPlayers.Add(
+                        $"{match.Entry.Name} (NhlPlayerId {player.NhlPlayerId})");
 
-                    if (reviewLookup.TryGetValue(
-                            reviewKey,
-                            out var review))
-                    {
-                        isReviewed =
-                            review.IsReviewed;
-                    }
-
-                    if (!isReviewed)
-                    {
-                        unmatchedPlayers.Add(
-                            capFreezeName);
-                    }
-                }
-                else
-                {
-                    isReviewed = true;
+                    continue;
                 }
 
-                // -----------------------------------------------------
-                // Successfully matched player.
-                //
-                // Protected players 2237 and 2241 keep their existing
-                // status permanently and are never changed automatically.
-                //
-                // All other successfully matched players receive the
-                // CapFreeze status and status timestamp.
-                // -----------------------------------------------------
+                // Remember the link so next week's sync resolves this player instantly.
+                player.CapFreezeName = match.Entry.Name;
+                player.CapFreezeSlug = match.Entry.Slug;
 
-                var isProtectedStatusPlayer =
-                    ProtectedStatusPlayerIds.Contains(
-                        player.Id);
+                player.Status = status;
+                player.CapFreezeStatusLastUpdated = DateTime.UtcNow;
 
-                if (!isProtectedStatusPlayer)
-                {
-                    player.Status =
-                        status;
-
-                    player.CapFreezeStatusLastUpdated =
-                        DateTime.UtcNow;
-                }
-
-                // -----------------------------------------------------
-                // CONTRACTS
-                //
-                // Every non-RFA gets its contract synchronized.
-                //
-                // Fuzzy matches are NOT blocked by review status.
-                // -----------------------------------------------------
-
-                var shouldSyncContract =
-                    status != PlayerStatus.RFA;
+                var shouldSyncContract = status != PlayerStatus.RFA;
 
                 if (shouldSyncContract)
                 {
                     await _capFreezeContractService.SyncPlayerContractsAsync(
                         player.Id,
-                        capFreezeSlug,
+                        match.Entry.Slug,
                         false,
                         preloadedContracts,
                         player);
@@ -394,29 +323,20 @@ int nhlTeamId)
                         player.NhlPlayerId,
                         player.FirstName,
                         player.LastName,
-
-                        CapFreezeName =
-                            player.CapFreezeName,
-
-                        CapFreezeSlug =
-                            capFreezeSlug,
-
-                        Status =
-                            player.Status.ToString(),
-
-                        ContractSynchronized =
-                            shouldSyncContract,
-
+                        CapFreezeName = player.CapFreezeName,
+                        CapFreezeSlug = match.Entry.Slug,
+                        MatchType = match.MatchType,
+                        Status = player.Status.ToString(),
+                        ContractSynchronized = shouldSyncContract,
                         player.CapFreezeStatusLastUpdated,
                         player.CapFreezeContractLastUpdated,
-
                         player.NhlTeamId,
                         player.PreviousNhlTeamId
                     });
             }
 
             // ---------------------------------------------------------
-            // SAVE EVERYTHING ONCE AT THE END
+            // SAVE THIS TEAM
             // ---------------------------------------------------------
 
             await _dbContext.SaveChangesAsync();
@@ -424,35 +344,18 @@ int nhlTeamId)
             return new
             {
                 TeamSlug = teamSlug,
-
                 NhlTeamId = nhlTeamId,
-
-                ForwardsCount =
-                    forwards.Count,
-
-                DefenseCount =
-                    defense.Count,
-
-                GoaliesCount =
-                    goalies.Count,
-
-                MinorsCount =
-                    minors.Count,
-
-                UnsignedRfasCount =
-                    unsignedRfas.Count,
-
-                TotalPlayersFound =
-                    playerLinks.Count,
-
-                PlayersProcessed =
-                    processedPlayers.Count,
-
-                UnmatchedPlayers =
-                    unmatchedPlayers,
-
-                Players =
-                    processedPlayers
+                ForwardsCount = forwards.Count,
+                DefenseCount = defense.Count,
+                GoaliesCount = goalies.Count,
+                MinorsCount = minors.Count,
+                UnsignedRfasCount = unsignedRfas.Count,
+                TotalPlayersFound = playerLinks.Count,
+                PlayersProcessed = processedPlayers.Count,
+                SkippedManualPlayers = skippedManualPlayers,
+                UnmatchedPlayers = unmatchedPlayers,
+                PendingReviews = pendingReviews,
+                Players = processedPlayers
             };
         }
 
@@ -504,15 +407,10 @@ int nhlTeamId)
             var failedTeams =
                 new List<object>();
 
+            var runStartedUtc = DateTime.UtcNow;
+
             // ---------------------------------------------------------
-            // SYNC EACH TEAM SEQUENTIALLY
-            //
-            // Each team gets its own transaction.
-            //
-            // If a team fails:
-            // - its database changes are rolled back
-            // - all tracked entities are detached
-            // - the next team starts cleanly
+            // SYNC EACH TEAM SEQUENTIALLY (one transaction per team)
             // ---------------------------------------------------------
 
             foreach (var team in teams)
@@ -531,7 +429,8 @@ int nhlTeamId)
                     var result =
                         await SyncCapFreezeTeamAsync(
                             teamSlug,
-                            team.NhlTeamId);
+                            team.NhlTeamId,
+                            runStartedUtc);
 
                     await transaction.CommitAsync();
 
@@ -548,10 +447,6 @@ int nhlTeamId)
                 }
                 catch (Exception ex)
                 {
-                    // -------------------------------------------------
-                    // ROLLBACK DATABASE CHANGES FOR THIS TEAM
-                    // -------------------------------------------------
-
                     try
                     {
                         await transaction.RollbackAsync();
@@ -560,18 +455,6 @@ int nhlTeamId)
                     {
                         // Preserve the original synchronization error.
                     }
-
-                    // -------------------------------------------------
-                    // CLEAR ALL TRACKED ENTITIES
-                    //
-                    // A transaction rollback only rolls back the
-                    // database. EF Core can still have modified,
-                    // added, or deleted entities in its ChangeTracker.
-                    //
-                    // Detaching them ensures that a later team's
-                    // SaveChangesAsync() cannot accidentally persist
-                    // changes belonging to this failed team.
-                    // -------------------------------------------------
 
                     foreach (var entry in
                         _dbContext.ChangeTracker
@@ -597,26 +480,113 @@ int nhlTeamId)
             }
 
             // ---------------------------------------------------------
+            // MANUAL OVERRIDES (LAST STEP, ONE FINAL SAVE)
+            //
+            // Runs after every team has been processed, so nothing in the
+            // CapFreeze sync can overwrite these values.
+            // ---------------------------------------------------------
+
+            List<string> manualOverrideResults;
+
+            try
+            {
+                manualOverrideResults =
+                    await ApplyManualPlayerOverridesAsync();
+            }
+            catch (Exception ex)
+            {
+                manualOverrideResults =
+                    new List<string>
+                    {
+                $"Manual overrides FAILED: {ex.GetType().Name}: {ex.Message}"
+                    };
+            }
+
+            // ---------------------------------------------------------
             // RETURN COMPLETE SYNC SUMMARY
             // ---------------------------------------------------------
 
             return new
             {
-                TotalTeams =
-                    teams.Count,
-
-                SuccessfulTeamsCount =
-                    successfulTeams.Count,
-
-                FailedTeamsCount =
-                    failedTeams.Count,
-
-                SuccessfulTeams =
-                    successfulTeams,
-
-                FailedTeams =
-                    failedTeams
+                TotalTeams = teams.Count,
+                SuccessfulTeamsCount = successfulTeams.Count,
+                FailedTeamsCount = failedTeams.Count,
+                ManualOverrides = manualOverrideResults,
+                SuccessfulTeams = successfulTeams,
+                FailedTeams = failedTeams
             };
+        }
+
+        private async Task<List<string>> ApplyManualPlayerOverridesAsync()
+        {
+            var messages = new List<string>();
+
+            var nhlPlayerIds =
+                ManualPlayerOverrides
+                    .Select(o => o.NhlPlayerId)
+                    .ToList();
+
+            var players =
+                await _dbContext.Players
+                    .Where(p => nhlPlayerIds.Contains(p.NhlPlayerId))
+                    .ToListAsync();
+
+            var databasePlayerIds =
+                players.Select(p => p.Id).ToList();
+
+            var playerIdsWithContracts =
+                (await _dbContext.PlayerContracts
+                    .Where(c => databasePlayerIds.Contains(c.PlayerId))
+                    .Select(c => c.PlayerId)
+                    .Distinct()
+                    .ToListAsync())
+                .ToHashSet();
+
+            foreach (var manual in ManualPlayerOverrides)
+            {
+                var player =
+                    players.FirstOrDefault(p =>
+                        p.NhlPlayerId == manual.NhlPlayerId);
+
+                if (player == null)
+                {
+                    messages.Add(
+                        $"NhlPlayerId {manual.NhlPlayerId}: player not found in database, skipped.");
+
+                    continue;
+                }
+
+                // Locked property: always Rostered.
+                player.Status = PlayerStatus.Rostered;
+
+                if (playerIdsWithContracts.Contains(player.Id))
+                {
+                    messages.Add(
+                        $"NhlPlayerId {manual.NhlPlayerId} ({player.FirstName} {player.LastName}): " +
+                        "status set to Rostered, contract already exists (unchanged).");
+                }
+                else
+                {
+                    _dbContext.PlayerContracts.Add(
+                        new PlayerContract
+                        {
+                            // Database Id of the player, NOT the NhlPlayerId.
+                            PlayerId = player.Id,
+                            StartSeason = manual.StartSeason,
+                            EndSeason = manual.EndSeason,
+                            Salary = manual.Salary
+                        });
+
+                    messages.Add(
+                        $"NhlPlayerId {manual.NhlPlayerId} ({player.FirstName} {player.LastName}): " +
+                        $"status set to Rostered, contract created " +
+                        $"({manual.StartSeason}-{manual.EndSeason}, {manual.Salary}).");
+                }
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return messages;
         }
     }
 }

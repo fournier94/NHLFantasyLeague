@@ -237,6 +237,9 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             var result = new NhlPlayerSyncResult();
 
+            const int limit = 5;
+            const int maxAttempts = 5;
+
             Console.WriteLine(
                 $"[NHL DISCOVERY] Starting player discovery for {teams.Count} NHL teams.");
 
@@ -247,58 +250,101 @@ namespace NhlFantasyLeague.api.Services.NHL
                     $"({result.TeamsProcessed + 1}/{teams.Count})...");
 
                 Console.WriteLine(
-                    $"[NHL DISCOVERY] Requesting roster for {team.Abbreviation}...");
+                    $"[NHL DISCOVERY] Requesting players for {team.Abbreviation}...");
 
                 await Task.Delay(TimeSpan.FromSeconds(1));
 
-                var roster = await _nhlTeamService.GetRosterAsync(
-                    team.Abbreviation);
+                int startNumber = 0;
+                int currentNumber = 0;
+                int totalNumber = 0;
+                bool teamFailed = false;
 
-                if (roster == null)
+                do
                 {
-                    Console.WriteLine(
-                        $"[NHL DISCOVERY] FAILED: Could not retrieve roster for " +
-                        $"{team.Abbreviation}.");
+                    var url =
+                        $"https://api.nhle.com/stats/rest/en/players" +
+                        $"?cayenneExp=currentTeamId%3D{team.NhlTeamId}" +
+                        $"&start={startNumber}" +
+                        $"&limit={limit}";
 
+                    NhlPlayerIdResponse? response = null;
+
+                    for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                    {
+                        using var httpResponse = await _httpClient.GetAsync(url);
+
+                        if (httpResponse.IsSuccessStatusCode)
+                        {
+                            response = await httpResponse.Content
+                                .ReadFromJsonAsync<NhlPlayerIdResponse>();
+
+                            break;
+                        }
+
+                        if ((int)httpResponse.StatusCode == 429)
+                        {
+                            await Task.Delay(
+                                TimeSpan.FromSeconds(2 * attempt));
+
+                            continue;
+                        }
+
+                        httpResponse.EnsureSuccessStatusCode();
+                    }
+
+                    if (response == null)
+                    {
+                        Console.WriteLine(
+                            $"[NHL DISCOVERY] FAILED: Could not retrieve players for " +
+                            $"{team.Abbreviation}.");
+
+                        teamFailed = true;
+
+                        break;
+                    }
+
+                    totalNumber = response.Total;
+
+                    foreach (var statsPlayer in response.Data)
+                    {
+                        result.PlayersProcessed++;
+
+                        if (existingPlayerIds.Contains(statsPlayer.Id))
+                        {
+                            continue;
+                        }
+
+                        var player = new Player
+                        {
+                            NhlPlayerId = statsPlayer.Id,
+                            NhlTeamId = team.NhlTeamId
+                        };
+
+                        _dbContext.Players.Add(player);
+
+                        existingPlayerIds.Add(statsPlayer.Id);
+
+                        result.PlayersAdded++;
+                    }
+
+                    currentNumber = startNumber + response.Data.Count;
+                    startNumber = currentNumber;
+
+                    // Small delay between Stats API requests.
+                    await Task.Delay(TimeSpan.FromSeconds(0.5));
+
+                } while (currentNumber < totalNumber);
+
+                if (teamFailed)
+                {
                     continue;
                 }
 
                 result.TeamsProcessed++;
 
-                var rosterPlayers = roster.Forwards
-                    .Concat(roster.Defensemen)
-                    .Concat(roster.Goalies)
-                    .ToList();
-
                 Console.WriteLine(
-                    $"[NHL DISCOVERY] Roster retrieved for {team.Abbreviation}. " +
-                    $"Found {rosterPlayers.Count} players.");
-
-                foreach (var rosterPlayer in rosterPlayers)
-                {
-                    result.PlayersProcessed++;
-
-                    if (existingPlayerIds.Contains(rosterPlayer.Id))
-                    {
-                        continue;
-                    }
-
-                    var player = new Player
-                    {
-                        NhlPlayerId = rosterPlayer.Id,
-                        FirstName = rosterPlayer.FirstName.Default,
-                        LastName = rosterPlayer.LastName.Default,
-                        Position = rosterPlayer.PositionCode ?? string.Empty,
-                        NhlTeamId = team.NhlTeamId,
-                        HeadshotUrl = rosterPlayer.Headshot
-                    };
-
-                    _dbContext.Players.Add(player);
-
-                    existingPlayerIds.Add(rosterPlayer.Id);
-
-                    result.PlayersAdded++;
-                }
+                    $"[NHL DISCOVERY] Players retrieved for {team.Abbreviation}. " +
+                    $"Found {totalNumber} players.");
 
                 Console.WriteLine(
                     $"[NHL DISCOVERY] Finished {team.Abbreviation}. " +
