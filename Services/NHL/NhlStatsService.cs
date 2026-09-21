@@ -45,6 +45,24 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 if (season == null)
                 {
+                    // Keep auto-create so historical player stats are never silently
+                    // dropped, but use the real League id instead of a hardcoded 1.
+                    // SalaryCap/SalaryFloor stay 0 here: real fantasy seasons
+                    // (2026-2027 and later) are created and corrected by LeagueSetupService.
+                    var league = await _dbContext.Leagues
+                        .OrderBy(l => l.Id)
+                        .FirstOrDefaultAsync();
+
+                    if (league == null)
+                    {
+                        Console.WriteLine(
+                            $"[NhlStatsService] No League row exists yet; " +
+                            $"skipping season {stats.Season}. " +
+                            "Run POST /api/league/setup first.");
+
+                        continue;
+                    }
+
                     var seasonStartYear = stats.Season / 10000;
                     var seasonEndYear = stats.Season % 10000;
 
@@ -56,7 +74,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                         SalaryCap = 0,
                         SalaryFloor = 0,
                         NhlSeasonCode = stats.Season,
-                        LeagueId = 1
+                        LeagueId = league.Id
                     };
 
                     _dbContext.Seasons.Add(season);
