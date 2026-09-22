@@ -22,7 +22,7 @@
 
         public int ProspectCount { get; set; }
 
-        public int KeeperCount { get; set; }
+        public int MinimumDropCount { get; set; }
         public ICollection<FantasyTeam> FantasyTeams { get; set; } = new List<FantasyTeam>();
     }
 }

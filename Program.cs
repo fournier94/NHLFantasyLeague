@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
+using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.NHL;
 using NhlFantasyLeague.api.Services.CapFreeze;
 
@@ -23,6 +24,10 @@ builder.Services.AddScoped<CapFreezeSyncService>();
 
 // Master orchestration service
 builder.Services.AddScoped<NhlPopulationService>();
+
+// League and roster services
+builder.Services.AddScoped<LeagueSetupService>();
+builder.Services.AddScoped<RosterAdminService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
