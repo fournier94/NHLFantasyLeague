@@ -78,6 +78,25 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
+        /// Releases every player currently assigned to a fantasy team for a season.
+        /// Full league reset: every fantasy team roster becomes empty.
+        /// </summary>
+        /// <param name="request">Optional season id; the current season is used when omitted.</param>
+        /// <returns>The result message with the number of released players.</returns>
+        [HttpPost("release-all")]
+        public async Task<IActionResult> ReleaseAllPlayers([FromBody] ReleaseAllPlayersRequest request)
+        {
+            var result = await _rosterAdminService.ReleaseAllPlayersAsync(request);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
+
+        /// <summary>
         /// Updates the status, the fantasy salary or the slot of a roster entry.
         /// </summary>
         /// <param name="request">Entry id plus the values to change.</param>

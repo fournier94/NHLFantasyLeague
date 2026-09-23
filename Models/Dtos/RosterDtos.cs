@@ -17,7 +17,7 @@
         /// <summary>Roster status: "Active", "Bench" or "Prospect". Defaults to "Active".</summary>
         public string? RosterStatus { get; set; }
 
-        /// <summary>Fantasy salary for this team, in dollars. Defaults to 0.</summary>
+        /// <summary>Ignored: the fantasy salary is always derived from the player's PlayerContracts. Kept for backward compatibility.</summary>
         public decimal? FantasySalary { get; set; }
 
         /// <summary>Lineup slot number. Defaults to 0.</summary>
@@ -50,8 +50,19 @@
     }
 
     /// <summary>
+    /// Request body for POST /api/Roster/release-all: releases every player
+    /// currently assigned to a fantasy team (full league reset).
+    /// </summary>
+    public class ReleaseAllPlayersRequest
+    {
+        /// <summary>Season id. Optional: the current season is used when omitted.</summary>
+        public int? SeasonId { get; set; }
+    }
+
+    /// <summary>
     /// Request body for POST /api/Roster/update: changes the status, the
-    /// fantasy salary or the slot of an existing roster entry.
+    /// fantasy team or the slot of an existing roster entry. The fantasy
+    /// salary is always derived from the player's PlayerContracts.
     /// </summary>
     public class UpdateRosterEntryRequest
     {
@@ -61,7 +72,10 @@
         /// <summary>New roster status: "Active", "Bench" or "Prospect". Optional.</summary>
         public string? RosterStatus { get; set; }
 
-        /// <summary>New fantasy salary, in dollars. Optional.</summary>
+        /// <summary>When provided, transfers the player to this fantasy team. Ignored when null.</summary>
+        public int? FantasyTeamId { get; set; }
+
+        /// <summary>Ignored: the fantasy salary is always derived from the player's PlayerContracts and is recomputed on every update. Kept for backward compatibility.</summary>
         public decimal? FantasySalary { get; set; }
 
         /// <summary>New lineup slot number. Optional.</summary>
@@ -230,5 +244,11 @@
 
         /// <summary>Name of the fantasy team currently holding the player, or null when free.</summary>
         public string? FantasyTeamName { get; set; }
+
+        /// <summary>Roster entry id for the current season, or null when the player is a free agent.</summary>
+        public int? RosterEntryId { get; set; }
+
+        /// <summary>Roster status for the current season ("Active", "Bench" or "Prospect"), or null when the player is a free agent.</summary>
+        public string? RosterStatus { get; set; }
     }
 }

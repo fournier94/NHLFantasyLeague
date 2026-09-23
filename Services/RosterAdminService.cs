@@ -90,13 +90,19 @@ namespace NhlFantasyLeague.api.Services
                 return Failure(message);
             }
 
+            // FantasySalary in the request is ignored - the salary always comes
+            // from the player's PlayerContracts.
+            var fantasySalary = await ResolveSalaryFromContractsAsync(
+                player.Id,
+                season.NhlSeasonCode);
+
             var entry = new RosterEntry
             {
                 PlayerId = player.Id,
                 FantasyTeamId = team.Id,
                 SeasonId = season.Id,
                 RosterStatus = rosterStatus,
-                FantasySalary = request.FantasySalary ?? 0m,
+                FantasySalary = fantasySalary,
                 RosterSlot = request.RosterSlot ?? 0
             };
 
@@ -213,8 +219,51 @@ namespace NhlFantasyLeague.api.Services
         }
 
         /// <summary>
-        /// Updates the status, the fantasy salary or the slot of an existing
-        /// roster entry. Only the provided values are changed.
+        /// Releases every player currently assigned to a fantasy team for a season,
+        /// by deleting all roster entries of that season (full league reset).
+        /// </summary>
+        /// <param name="request">Optional season id; the current season is used when omitted.</param>
+        /// <returns>Success flag and a message with the number of released players.</returns>
+        public async Task<RosterActionResultDto> ReleaseAllPlayersAsync(ReleaseAllPlayersRequest request)
+        {
+            var season = await ResolveSeasonAsync(request.SeasonId);
+
+            if (season == null)
+            {
+                return Failure("Season not found. Run POST /api/League/setup first.");
+            }
+
+            var entries = await _dbContext.RosterEntries
+                .Where(e => e.SeasonId == season.Id)
+                .ToListAsync();
+
+            // Zero entries means the reset is already done: keep the call idempotent
+            // by returning a success instead of an error.
+            if (entries.Count == 0)
+            {
+                return new RosterActionResultDto
+                {
+                    Success = true,
+                    Message = $"No players are currently assigned to a fantasy team for {season.Name}.",
+                    Entry = null
+                };
+            }
+
+            _dbContext.RosterEntries.RemoveRange(entries);
+            await _dbContext.SaveChangesAsync();
+
+            return new RosterActionResultDto
+            {
+                Success = true,
+                Message = $"Released {entries.Count} players from fantasy teams for {season.Name}.",
+                Entry = null
+            };
+        }
+
+        /// <summary>
+        /// Updates the status, the fantasy team or the slot of an existing
+        /// roster entry. Only the provided values are changed. The fantasy
+        /// salary is always derived from the player's contracts.
         /// </summary>
         /// <param name="request">Entry id plus the values to change.</param>
         /// <returns>Success flag, message and the updated roster entry.</returns>
@@ -222,17 +271,17 @@ namespace NhlFantasyLeague.api.Services
         {
             var hasStatus = !string.IsNullOrWhiteSpace(request.RosterStatus);
 
-            if (!hasStatus &&
-                request.FantasySalary == null &&
-                request.RosterSlot == null)
+            if (!hasStatus && request.FantasyTeamId == null && request.RosterSlot == null)
             {
                 return Failure(
-                    "Nothing to update: provide RosterStatus, FantasySalary or RosterSlot.");
+                    "Nothing to update: provide RosterStatus, FantasyTeamId or RosterSlot. " +
+                    "The fantasy salary is always derived from PlayerContracts.");
             }
 
             var entry = await _dbContext.RosterEntries
                 .Include(e => e.Player)
                 .Include(e => e.FantasyTeam)
+                .Include(e => e.Season)
                 .FirstOrDefaultAsync(e => e.Id == request.RosterEntryId);
 
             if (entry == null)
@@ -252,10 +301,34 @@ namespace NhlFantasyLeague.api.Services
                 entry.RosterStatus = rosterStatus;
             }
 
-            if (request.FantasySalary.HasValue)
+            // A provided FantasyTeamId transfers the player; the same team is a
+            // no-op so the "unchanged dropdown" case never fails.
+            var teamChanged = false;
+
+            if (request.FantasyTeamId.HasValue &&
+                request.FantasyTeamId.Value != entry.FantasyTeamId)
             {
-                entry.FantasySalary = request.FantasySalary.Value;
+                var targetTeam = await _dbContext.FantasyTeams
+                    .FirstOrDefaultAsync(t => t.Id == request.FantasyTeamId.Value);
+
+                if (targetTeam == null)
+                {
+                    return Failure($"Fantasy team {request.FantasyTeamId.Value} not found.");
+                }
+
+                // Attach the loaded target team so the result DTO and the
+                // success message show the new team, not the old one.
+                entry.FantasyTeam = targetTeam;
+                entry.FantasyTeamId = targetTeam.Id;
+                teamChanged = true;
             }
+
+            // FantasySalary in the request is ignored - the salary always comes
+            // from the player's PlayerContracts. Recomputing it on every update
+            // makes a previously manual value self-heal.
+            entry.FantasySalary = await ResolveSalaryFromContractsAsync(
+                entry.PlayerId,
+                entry.Season.NhlSeasonCode);
 
             if (request.RosterSlot.HasValue)
             {
@@ -267,9 +340,9 @@ namespace NhlFantasyLeague.api.Services
             return new RosterActionResultDto
             {
                 Success = true,
-                Message =
-                    $"'{PlayerName(entry.Player)}' updated on " +
-                    $"'{entry.FantasyTeam?.Name}'.",
+                Message = teamChanged
+                    ? $"'{PlayerName(entry.Player)}' transferred to '{entry.FantasyTeam?.Name}'."
+                    : $"'{PlayerName(entry.Player)}' updated on '{entry.FantasyTeam?.Name}'.",
                 Entry = ToRosterEntryDto(entry)
             };
         }
@@ -355,6 +428,29 @@ namespace NhlFantasyLeague.api.Services
                 }
             }
 
+            // The FantasySalary column is only a cache of PlayerContracts: recompute
+            // it for every entry so rows created when the salary was still entered
+            // by hand become consistent (write only when something actually changed).
+            var salaryChanged = false;
+
+            foreach (var entry in entries)
+            {
+                var derivedSalary = await ResolveSalaryFromContractsAsync(
+                    entry.PlayerId,
+                    season.NhlSeasonCode);
+
+                if (entry.FantasySalary != derivedSalary)
+                {
+                    entry.FantasySalary = derivedSalary;
+                    salaryChanged = true;
+                }
+            }
+
+            if (salaryChanged)
+            {
+                await _dbContext.SaveChangesAsync();
+            }
+
             return new TeamRosterDto
             {
                 FantasyTeamId = team.Id,
@@ -408,14 +504,14 @@ namespace NhlFantasyLeague.api.Services
                 .Take(take)
                 .ToListAsync();
 
-            // Find who currently holds each player (current season only).
+            // Find each player's current-season roster entry (team + entry fields).
             var playerIds = players.Select(p => p.Id).ToList();
 
             var currentSeason = await _dbContext.Seasons
                 .OrderByDescending(s => s.StartDate)
                 .FirstOrDefaultAsync();
 
-            var currentTeamByPlayerId = new Dictionary<int, FantasyTeam>();
+            var currentEntryByPlayerId = new Dictionary<int, RosterEntry>();
 
             if (currentSeason != null && playerIds.Count > 0)
             {
@@ -428,17 +524,14 @@ namespace NhlFantasyLeague.api.Services
 
                 foreach (var entry in entries)
                 {
-                    if (entry.FantasyTeam != null)
-                    {
-                        currentTeamByPlayerId[entry.PlayerId] = entry.FantasyTeam;
-                    }
+                    currentEntryByPlayerId[entry.PlayerId] = entry;
                 }
             }
 
             return players
                 .Select(p =>
                 {
-                    currentTeamByPlayerId.TryGetValue(p.Id, out var team);
+                    currentEntryByPlayerId.TryGetValue(p.Id, out var entry);
 
                     return new PlayerSearchResultDto
                     {
@@ -448,8 +541,10 @@ namespace NhlFantasyLeague.api.Services
                         LastName = p.LastName,
                         Position = p.Position,
                         NhlTeamAbbreviation = p.NhlTeam?.Abbreviation ?? string.Empty,
-                        FantasyTeamId = team?.Id,
-                        FantasyTeamName = team?.Name
+                        FantasyTeamId = entry?.FantasyTeamId,
+                        FantasyTeamName = entry?.FantasyTeam?.Name,
+                        RosterEntryId = entry?.Id,
+                        RosterStatus = entry?.RosterStatus.ToString() // enum → "Active"/"Bench"/"Prospect"
                     };
                 })
                 .ToList();
@@ -576,6 +671,43 @@ namespace NhlFantasyLeague.api.Services
                 Losses = stat.Losses,
                 OvertimeLosses = stat.OvertimeLosses
             };
+        }
+
+        /// <summary>
+        /// Computes the fantasy salary of a player from his contracts: 0 $ when
+        /// he has no contract, the contract's value when he has exactly one,
+        /// otherwise the value of the contract covering the season.
+        /// </summary>
+        /// <param name="playerId">Database id of the player.</param>
+        /// <param name="nhlSeasonCode">NHL season code, for example 20262027.</param>
+        /// <param name="ct">Cancellation token.</param>
+        /// <returns>The derived salary in dollars, or 0 $ when no contract applies.</returns>
+        private async Task<decimal> ResolveSalaryFromContractsAsync(
+            int playerId,
+            int nhlSeasonCode,
+            CancellationToken ct = default)
+        {
+            var contracts = await _dbContext.PlayerContracts
+                .Where(c => c.PlayerId == playerId)
+                .ToListAsync(ct);
+
+            if (contracts.Count == 0)
+            {
+                return 0m;
+            }
+
+            if (contracts.Count == 1)
+            {
+                return contracts[0].Salary;
+            }
+
+            // Several contracts: only the one covering the season counts; when
+            // none covers it (for example only future seasons), there is no salary.
+            var coveringContract = contracts.FirstOrDefault(c =>
+                c.StartSeason <= nhlSeasonCode &&
+                c.EndSeason >= nhlSeasonCode);
+
+            return coveringContract?.Salary ?? 0m;
         }
     }
 }
