@@ -14,8 +14,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  server: {
-    proxy: {
+    server: {
+        host: '0.0.0.0',
+        proxy: {
       // Every browser call to /api/... is forwarded to the ASP.NET backend.
       '/api': {
         target: 'https://localhost:7081', // https dev port from Properties\launchSettings.json

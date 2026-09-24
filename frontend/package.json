@@ -18,6 +18,7 @@
     "radix-ui": "^1.6.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-nhl-logos": "^1.4.1",
     "react-router-dom": "^7.18.4",
     "shadcn": "^4.21.0",
     "tailwindcss": "^4.3.3",

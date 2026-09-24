@@ -73,7 +73,7 @@ export default function MonEquipePage() {
       </div>
 
       <RosterSection title='Attaquants' count={forwards.length}>
-        <div className='grid grid-cols-3 gap-3'>
+        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
           {forwards.map((entry) => (
             <PlayerCard key={entry.id} entry={entry} />
           ))}
@@ -81,7 +81,7 @@ export default function MonEquipePage() {
       </RosterSection>
 
       <RosterSection title='Défenseurs' count={defensemen.length}>
-        <div className='mx-auto grid w-2/3 grid-cols-2 gap-3'>
+        <div className='mx-auto grid w-full grid-cols-1 gap-3 md:w-2/3 md:grid-cols-2'>
           {defensemen.map((entry) => (
             <PlayerCard key={entry.id} entry={entry} />
           ))}
@@ -91,13 +91,13 @@ export default function MonEquipePage() {
       <RosterSection title='Gardiens' count={goalies.length}>
         <div className='flex justify-center'>
           {goalies.map((entry) => (
-            <PlayerCard key={entry.id} entry={entry} className='w-1/3 min-w-[260px]' />
+            <PlayerCard key={entry.id} entry={entry} className='w-full md:w-1/3 md:min-w-[260px]' />
           ))}
         </div>
       </RosterSection>
 
       <RosterSection title='Banc' count={bench.length}>
-        <div className='grid grid-cols-3 gap-3'>
+        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
           {bench.map((entry) => (
             <PlayerCard key={entry.id} entry={entry} />
           ))}
@@ -105,7 +105,7 @@ export default function MonEquipePage() {
       </RosterSection>
 
       <RosterSection title='Prospects' count={prospects.length}>
-        <div className='grid grid-cols-3 gap-3'>
+        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
           {prospects.map((entry) => (
             <PlayerCard key={entry.id} entry={entry} />
           ))}
