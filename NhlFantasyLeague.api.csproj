@@ -16,11 +16,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Remove="frontend\src\components\nhl\NhlTeamLogo.tsx" />
-    <None Remove="frontend\src\lib\NhlLogos.ts" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" Version="1.13.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.8">
       <PrivateAssets>all</PrivateAssets>

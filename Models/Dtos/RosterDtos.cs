@@ -128,6 +128,15 @@
 
         /// <summary>Current season stat line (2026-27), or null when unavailable.</summary>
         public SeasonStatLineDto? CurrentSeason { get; set; }
+
+        /// <summary>Contract covering the displayed season, or null.</summary>
+        public PlayerContractLineDto? CurrentContract { get; set; }
+
+        /// <summary>
+        /// Second contract to display (e.g. a future deal), or null. Only the
+        /// first two contracts are surfaced on the card.
+        /// </summary>
+        public PlayerContractLineDto? SecondContract { get; set; }
     }
 
     /// <summary>

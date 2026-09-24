@@ -428,6 +428,22 @@ namespace NhlFantasyLeague.api.Services
                 }
             }
 
+            // Load every contract of every rostered player in one query, then
+            // group them in memory. This replaces the old per-entry salary
+            // lookup and also feeds the contract lines on the player cards.
+            var contractsByPlayerId = new Dictionary<int, List<PlayerContract>>();
+
+            if (playerIds.Count > 0)
+            {
+                var contracts = await _dbContext.PlayerContracts
+                    .Where(c => playerIds.Contains(c.PlayerId))
+                    .ToListAsync();
+
+                contractsByPlayerId = contracts
+                    .GroupBy(c => c.PlayerId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+            }
+
             // The FantasySalary column is only a cache of PlayerContracts: recompute
             // it for every entry so rows created when the salary was still entered
             // by hand become consistent (write only when something actually changed).
@@ -435,8 +451,11 @@ namespace NhlFantasyLeague.api.Services
 
             foreach (var entry in entries)
             {
-                var derivedSalary = await ResolveSalaryFromContractsAsync(
-                    entry.PlayerId,
+                var contracts = contractsByPlayerId.GetValueOrDefault(entry.PlayerId)
+                    ?? new List<PlayerContract>();
+
+                var derivedSalary = ResolveSalaryFromContracts(
+                    contracts,
                     season.NhlSeasonCode);
 
                 if (entry.FantasySalary != derivedSalary)
@@ -463,14 +482,25 @@ namespace NhlFantasyLeague.api.Services
                 ProspectCount = entries.Count(e => e.RosterStatus == RosterStatus.Prospect),
                 TotalSalary = entries.Sum(e => e.FantasySalary),
                 Entries = orderedEntries
-                    .Select(e => ToRosterEntryDto(
-                        e,
-                        ToSeasonStatLineDto(
-                            previousSeason,
-                            lastStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
-                        ToSeasonStatLineDto(
-                            currentSeason,
-                            currentStatsByPlayerId.GetValueOrDefault(e.PlayerId))))
+                    .Select(e =>
+                    {
+                        var contracts = contractsByPlayerId.GetValueOrDefault(e.PlayerId)
+                            ?? new List<PlayerContract>();
+
+                        var (currentContract, secondContract) =
+                            ResolveContractLines(contracts, season.NhlSeasonCode);
+
+                        return ToRosterEntryDto(
+                            e,
+                            ToSeasonStatLineDto(
+                                previousSeason,
+                                lastStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
+                            ToSeasonStatLineDto(
+                                currentSeason,
+                                currentStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
+                            currentContract,
+                            secondContract);
+                    })
                     .ToList()
             };
         }
@@ -610,15 +640,20 @@ namespace NhlFantasyLeague.api.Services
 
         /// <summary>
         /// Maps a roster entry (with its player loaded) to its DTO. The two
-        /// stat lines are optional: they are only provided by the team roster.
+        /// stat lines and the two contract lines are optional: they are only
+        /// provided by the team roster.
         /// </summary>
         /// <param name="entry">Roster entry to map.</param>
         /// <param name="lastSeason">Previous season stat line, or null.</param>
         /// <param name="currentSeason">Current season stat line, or null.</param>
+        /// <param name="currentContract">Contract covering the season, or null.</param>
+        /// <param name="secondContract">Second contract to display, or null.</param>
         private static RosterEntryDto ToRosterEntryDto(
             RosterEntry entry,
             SeasonStatLineDto? lastSeason = null,
-            SeasonStatLineDto? currentSeason = null)
+            SeasonStatLineDto? currentSeason = null,
+            PlayerContractLineDto? currentContract = null,
+            PlayerContractLineDto? secondContract = null)
         {
             return new RosterEntryDto
             {
@@ -635,7 +670,9 @@ namespace NhlFantasyLeague.api.Services
                 FantasySalary = entry.FantasySalary,
                 HeadshotUrl = entry.Player?.HeadshotUrl,
                 LastSeason = lastSeason,
-                CurrentSeason = currentSeason
+                CurrentSeason = currentSeason,
+                CurrentContract = currentContract,
+                SecondContract = secondContract
             };
         }
 
@@ -691,6 +728,20 @@ namespace NhlFantasyLeague.api.Services
                 .Where(c => c.PlayerId == playerId)
                 .ToListAsync(ct);
 
+            return ResolveSalaryFromContracts(contracts, nhlSeasonCode);
+        }
+
+        /// <summary>
+        /// Computes the salary from an already-loaded contract list: 0 $ with no
+        /// contract, the single contract's value with one, otherwise the value of
+        /// the contract covering the season (0 $ when none covers it).
+        /// </summary>
+        /// <param name="contracts">Contracts of one player.</param>
+        /// <param name="nhlSeasonCode">NHL season code, for example 20262027.</param>
+        private static decimal ResolveSalaryFromContracts(
+            IReadOnlyList<PlayerContract> contracts,
+            int nhlSeasonCode)
+        {
             if (contracts.Count == 0)
             {
                 return 0m;
@@ -708,6 +759,82 @@ namespace NhlFantasyLeague.api.Services
                 c.EndSeason >= nhlSeasonCode);
 
             return coveringContract?.Salary ?? 0m;
+        }
+
+        /// <summary>
+        /// Builds the contract lines shown on a player card for a given season:
+        /// the contract covering the season first, then the next contract after
+        /// it (a "second contract" such as a future extension), if any.
+        /// </summary>
+        /// <param name="contracts">All contracts of the player.</param>
+        /// <param name="nhlSeasonCode">Season the card is displayed for.</param>
+        /// <returns>At most two contract lines: current, then second.</returns>
+        private static (PlayerContractLineDto? Current, PlayerContractLineDto? Second)
+            ResolveContractLines(
+                IReadOnlyList<PlayerContract> contracts,
+                int nhlSeasonCode)
+        {
+            var ordered = contracts
+                .OrderBy(c => c.StartSeason)
+                .ToList();
+
+            if (ordered.Count == 0)
+            {
+                return (null, null);
+            }
+
+            // The contract covering the season, if any.
+            var current = ordered.FirstOrDefault(c =>
+                c.StartSeason <= nhlSeasonCode &&
+                c.EndSeason >= nhlSeasonCode);
+
+            // When no contract covers the season but there is exactly one contract,
+            // show it anyway (matches the old single-contract fallback behaviour).
+            if (current == null && ordered.Count == 1)
+            {
+                current = ordered[0];
+            }
+
+            // The second contract is the first one starting after the current one
+            // (or after the season when there is no current contract).
+            var currentEnd = current?.EndSeason ?? nhlSeasonCode;
+
+            var second = ordered
+                .Where(c => c.StartSeason > currentEnd)
+                .OrderBy(c => c.StartSeason)
+                .FirstOrDefault();
+
+            return (
+                current == null ? null : ToContractLineDto(current, nhlSeasonCode),
+                second == null ? null : ToContractLineDto(second, nhlSeasonCode));
+        }
+
+        /// <summary>
+        /// Maps a contract to its card line: salary plus the number of seasons
+        /// left from the displayed season.
+        /// </summary>
+        /// <param name="contract">Contract to map.</param>
+        /// <param name="nhlSeasonCode">Season the card is displayed for.</param>
+        private static PlayerContractLineDto ToContractLineDto(
+            PlayerContract contract,
+            int nhlSeasonCode)
+        {
+            // Season codes are 8 digits: 20262027 -> start year 2026.
+            var seasonYear = nhlSeasonCode / 10000;
+            var startYear = contract.StartSeason / 10000;
+            var endYear = contract.EndSeason / 10000;
+
+            // A future contract not yet started still reports its full length.
+            var firstYear = Math.Max(seasonYear, startYear);
+            var yearsRemaining = Math.Max(1, endYear - firstYear + 1);
+
+            return new PlayerContractLineDto
+            {
+                Salary = contract.Salary,
+                YearsRemaining = yearsRemaining,
+                StartSeason = contract.StartSeason,
+                EndSeason = contract.EndSeason
+            };
         }
     }
 }

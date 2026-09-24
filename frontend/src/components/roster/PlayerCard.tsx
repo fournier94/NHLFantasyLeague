@@ -1,6 +1,11 @@
 ﻿import { useState } from 'react';
-import type { RosterEntry, SeasonStatLine } from '@/api/client';
+import type {
+    PlayerContractLine,
+    RosterEntry,
+    SeasonStatLine,
+} from '@/api/client';
 import { cn } from '@/lib/utils';
+import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 
 // Number formatting for salaries: "7 850 000 $".
 const salaryFormatter = new Intl.NumberFormat('fr-CA', {
@@ -22,15 +27,22 @@ function statValues(line: SeasonStatLine | null, isGoalie: boolean): (string | n
         : [line.gamesPlayed, line.goals, line.assists, line.points];
 }
 
-/** Short "PJ 12 · B 5 · A 8 · PTS 13" summary of one line, for the mobile row. */
-function compactStats(line: SeasonStatLine | null, isGoalie: boolean): string {
-    if (!line) {
-        return '—';
+/**
+ * "7 850 000 $ · 3 ans" for one contract, or null when there is no contract.
+ * The singular "an" is used when only one season is left.
+ */
+function contractLabel(contract: PlayerContractLine | null): string | null {
+    if (!contract) {
+        return null;
     }
 
-    return isGoalie
-        ? `${line.gamesPlayed} PJ · ${line.wins} V · ${line.losses} D · ${line.overtimeLosses} DP`
-        : `${line.gamesPlayed} PJ · ${line.goals} B · ${line.assists} A · ${line.points} PTS`;
+    const salary = `${salaryFormatter.format(contract.salary)} $`;
+    const years =
+        contract.yearsRemaining > 1
+            ? `${contract.yearsRemaining} ans`
+            : '1 an';
+
+    return `${salary} · ${years}`;
 }
 
 interface PlayerCardProps {
@@ -41,7 +53,8 @@ interface PlayerCardProps {
 
 /**
  * NHL-style player card. Tablets and up show the full card (headshot,
- * previous + current season stats, salary); phones show a compact row.
+ * previous + current season stats, contracts); phones show a compact row
+ * with the same two stat lines and both contracts.
  */
 export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
     const [imageFailed, setImageFailed] = useState(false);
@@ -50,6 +63,14 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
     const lines = [entry.lastSeason, entry.currentSeason];
     const showImage = Boolean(entry.headshotUrl) && !imageFailed;
     const initials = `${entry.firstName.charAt(0)}${entry.lastName.charAt(0)}`;
+
+    // Salary text for the current contract, with a fallback on the cached
+    // FantasySalary when the API did not send a contract line.
+    const currentContractLabel =
+        contractLabel(entry.currentContract) ??
+        `${salaryFormatter.format(entry.fantasySalary)} $`;
+
+    const secondContractLabel = contractLabel(entry.secondContract);
 
     return (
         <article
@@ -60,13 +81,20 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
         >
             {/* Full card - tablets and up. */}
             <div className='hidden md:block'>
-                <h3 className='truncate pl-54 pr-12 text-center text-xl font-semibold text-foreground'>
-                    {entry.firstName} {entry.lastName}
-                </h3>
+                <div className='flex items-center justify-center gap-2 pl-54 pr-12'>
+                    <h3 className='truncate text-center text-xl font-semibold text-foreground'>
+                        {entry.firstName} {entry.lastName}
+                    </h3>
 
-                <p className='truncate pl-54 pr-12 text-center text-xs uppercase tracking-wide text-muted-foreground'>
-                    {entry.position} · {entry.nhlTeamAbbreviation}
-                </p>
+                    <span className='shrink-0 text-xs uppercase tracking-wide text-muted-foreground'>
+                        {entry.position}
+                    </span>
+
+                    <NhlTeamLogo
+                        abbreviation={entry.nhlTeamAbbreviation}
+                        size={24}
+                    />
+                </div>
 
                 <div className='mt-2'>
                     {showImage ? (
@@ -113,32 +141,99 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             </tbody>
                         </table>
 
-                        <div className='mt-2 text-center text-xs text-muted-foreground'>
-                            {salaryFormatter.format(entry.fantasySalary)} $
+                        {/* Contracts: current line, plus a second line when present. */}
+                        <div className='mt-2 flex w-full flex-col items-center gap-0.5 text-xs text-muted-foreground'>
+                            <span>{currentContractLabel}</span>
+
+                            {secondContractLabel && (
+                                <span className='text-[0.7rem] opacity-80'>
+                                    {secondContractLabel}
+                                </span>
+                            )}
                         </div>
                     </div>
                 </div>
             </div>
 
             {/* Compact row - phones only. */}
-            <div className='flex min-h-12 items-center gap-3 md:hidden'>
-                <div className='flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-sm font-semibold text-muted-foreground'>
-                    {initials}
+            <div className='relative flex min-h-20 gap-3 md:hidden'>
+                {/* Player headshot. */}
+                <div className='flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white'>
+                    {showImage ? (
+                        <img
+                            src={entry.headshotUrl ?? undefined}
+                            alt={`${entry.firstName} ${entry.lastName}`}
+                            className='h-full w-full object-cover'
+                            loading='lazy'
+                            onError={() => setImageFailed(true)}
+                        />
+                    ) : (
+                        <span className='text-sm font-semibold text-muted-foreground'>
+                            {initials}
+                        </span>
+                    )}
                 </div>
 
-                <div className='min-w-0 flex-1'>
-                    <p className='truncate text-sm font-semibold text-foreground'>
-                        {entry.firstName} {entry.lastName}
-                    </p>
-                    <p className='truncate text-xs text-muted-foreground'>
-                        {entry.position} · {entry.nhlTeamAbbreviation} ·{' '}
-                        {compactStats(entry.currentSeason, isGoalie)}
-                    </p>
-                </div>
+                {/* Right-side content area. */}
+                <div className='relative min-w-0 flex-1'>
+                    {/* Name + position + logo. */}
+                    <div className='absolute left-0 right-0 top-[-5px] flex items-center justify-center gap-1.5'>
+                        <p className='truncate text-sm font-semibold text-foreground'>
+                            {entry.firstName} {entry.lastName}
+                        </p>
 
-                <span className='shrink-0 text-xs text-muted-foreground'>
-                    {salaryFormatter.format(entry.fantasySalary)} $
-                </span>
+                        <span className='shrink-0 text-xs uppercase tracking-wide text-muted-foreground'>
+                            {entry.position}
+                        </span>
+
+                        <NhlTeamLogo
+                            abbreviation={entry.nhlTeamAbbreviation}
+                            size={18}
+                        />
+                    </div>
+
+                    {/* Previous + current season stats, then contracts. */}
+                    <div className='pt-9'>
+                        <table className='w-full text-right text-xs tabular-nums'>
+                            <thead>
+                                <tr className='text-muted-foreground'>
+                                    <th className='text-left font-normal' />
+                                    {columns.map((column) => (
+                                        <th key={column} className='pl-2 font-normal'>
+                                            {column}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+
+                            <tbody className='text-foreground'>
+                                {lines.map((line, index) => (
+                                    <tr key={index === 0 ? 'last' : 'current'}>
+                                        <td className='text-left text-muted-foreground'>
+                                            {line?.label ?? '—'}
+                                        </td>
+
+                                        {statValues(line, isGoalie).map((value, valueIndex) => (
+                                            <td key={valueIndex} className='pl-2'>
+                                                {value}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+
+                        <div className='mt-1 flex w-full flex-col items-center gap-0.5 text-xs text-muted-foreground'>
+                            <span>{currentContractLabel}</span>
+
+                            {secondContractLabel && (
+                                <span className='text-[0.7rem] opacity-80'>
+                                    {secondContractLabel}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </div>
             </div>
         </article>
     );
