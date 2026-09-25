@@ -49,7 +49,7 @@ export function TopBar() {
                 <img
                     src='/images/league/logo_07_beaver.png'
                     alt='Ligue Keeper'
-                    className='h-10 w-auto'
+                    className='league-logo h-10 w-auto'
                 />
             </Link>
 
@@ -157,9 +157,9 @@ export function TopBar() {
             <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
                 <SheetTrigger
                     aria-label='Ouvrir le menu de navigation'
-                    className='ml-auto cursor-pointer rounded-lg border border-border bg-card p-2 text-foreground transition-colors hover:bg-secondary md:hidden'
+                    className='ml-auto cursor-pointer rounded-lg bg-transparent p-2 text-foreground transition-colors hover:bg-secondary md:hidden'
                 >
-                    <Menu className='h-5 w-5' />
+                    <Menu className='mobile-menu-icon h-5 w-5' />
                 </SheetTrigger>
 
                 <SheetContent side='left' className='w-64'>

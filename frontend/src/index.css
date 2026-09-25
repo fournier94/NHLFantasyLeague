@@ -192,3 +192,50 @@
 .glow-purple {
     box-shadow: 0 0 12px rgba(162, 89, 255, 0.25);
 }
+/* Mobile hamburger icon neon glow */
+.mobile-menu-icon {
+    color: #F2F5FA;
+    filter: drop-shadow(0 0 2px #F2F5FA) drop-shadow(0 0 5px #00A8FF) drop-shadow(0 0 10px #00A8FF) drop-shadow(0 0 18px rgba(0, 168, 255, 0.7));
+    animation: menu-icon-neon-pulse 2.5s ease-in-out infinite alternate;
+}
+
+@keyframes menu-icon-neon-pulse {
+    from {
+        filter: drop-shadow(0 0 2px #F2F5FA) drop-shadow(0 0 5px #00A8FF) drop-shadow(0 0 10px #00A8FF) drop-shadow(0 0 16px rgba(0, 168, 255, 0.5));
+    }
+
+    to {
+        filter: drop-shadow(0 0 2px #F2F5FA) drop-shadow(0 0 7px #00A8FF) drop-shadow(0 0 14px #00A8FF) drop-shadow(0 0 24px rgba(0, 168, 255, 0.8));
+    }
+}
+/* League logo neon glow */
+.league-logo {
+    filter: drop-shadow(0 0 1px #F2F5FA) drop-shadow(0 0 2px #00A8FF) drop-shadow(0 0 4px #00A8FF) drop-shadow(0 0 6px rgba(0, 168, 255, 0.5));
+    animation: logo-neon-pulse 2.5s ease-in-out infinite alternate;
+}
+
+@keyframes logo-neon-pulse {
+    from {
+        filter: drop-shadow(0 0 1px #F2F5FA) drop-shadow(0 0 2px #00A8FF) drop-shadow(0 0 4px #00A8FF) drop-shadow(0 0 5px rgba(0, 168, 255, 0.4));
+    }
+
+    to {
+        filter: drop-shadow(0 0 1px #F2F5FA) drop-shadow(0 0 3px #00A8FF) drop-shadow(0 0 5px #00A8FF) drop-shadow(0 0 7px rgba(0, 168, 255, 0.5));
+    }
+}
+/* Roster section titles neon glow */
+.roster-section-title {
+    color: #F2F5FA;
+    text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.8), 0 0 45px rgba(0, 168, 255, 0.5);
+    animation: roster-title-neon-pulse 2.5s ease-in-out infinite alternate;
+}
+
+@keyframes roster-title-neon-pulse {
+    from {
+        text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.7), 0 0 40px rgba(0, 168, 255, 0.4);
+    }
+
+    to {
+        text-shadow: 0 0 3px #F2F5FA, 0 0 9px #00A8FF, 0 0 18px #00A8FF, 0 0 32px rgba(0, 168, 255, 0.9), 0 0 55px rgba(0, 168, 255, 0.6);
+    }
+}

@@ -5,7 +5,7 @@ import { RosterSection } from '@/components/roster/RosterSection';
 
 // TODO(auth): replace with the signed-in user's fantasy team once
 // authentication exists. Team 1 is Mathieu.
-const TEMPORARY_TEAM_ID = 1;
+const TEMPORARY_TEAM_ID = 5;
 
 // Salary display in the header, e.g. "118 500 000 $".
 const salaryFormatter = new Intl.NumberFormat('fr-CA', { maximumFractionDigits: 0 });

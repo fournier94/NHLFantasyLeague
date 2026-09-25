@@ -16,40 +16,6 @@ const TWO_SEASONS_AGO_CODE = 20242025;
 const PREVIOUS_SEASON_CODE = 20252026;
 const CURRENT_SEASON_CODE = 20262027;
 
-// Aura flashiness:
-// 1 = least flashy / base version
-// 10 = flashiest version
-const AURA_FLASHINESS = 7;
-
-function auraLevel(): number {
-    return Math.min(10, Math.max(1, AURA_FLASHINESS));
-}
-
-function auraProgress(): number {
-    return (auraLevel() - 1) / 9;
-}
-
-function interpolate(
-    minimum: number,
-    maximum: number,
-): number {
-    return minimum + (maximum - minimum) * auraProgress();
-}
-
-function alphaHex(
-    minimum: number,
-    maximum: number,
-): string {
-    const alpha = Math.round(
-        interpolate(minimum, maximum),
-    );
-
-    return alpha
-        .toString(16)
-        .padStart(2, '0')
-        .toUpperCase();
-}
-
 function seasonLabelFromCode(code: number): string {
     const startYear = Math.floor(code / 10000);
     const endYear = code % 100;
@@ -110,6 +76,11 @@ interface PlayerCardProps {
     className?: string;
 }
 
+const whiteTextGlow = `
+    0 0 3px rgba(255, 255, 255, 0.35),
+    0 0 6px rgba(255, 255, 255, 0.15)
+`;
+
 export function PlayerCard({
     entry,
     className = '',
@@ -146,12 +117,6 @@ export function PlayerCard({
         entry.nhlTeamAbbreviation,
     );
 
-    // White text aura scales between the two provided versions.
-    const whiteTextGlow = `
-        0 0 ${interpolate(1, 3)}px rgba(255, 255, 255, ${interpolate(0.18, 0.35)}),
-        0 0 ${interpolate(2, 6)}px rgba(255, 255, 255, ${interpolate(0.06, 0.15)})
-    `;
-
     return (
         <article
             className={cn(
@@ -159,7 +124,7 @@ export function PlayerCard({
                 className,
             )}
         >
-            {/* Team-color auras emanating inward from the card edges. */}
+            {/* Subtle team-color auras emanating inward from the card edges. */}
             <div
                 aria-hidden='true'
                 className='pointer-events-none absolute inset-0'
@@ -167,27 +132,27 @@ export function PlayerCard({
                     background: `
                         radial-gradient(
                             circle at 100% 0%,
-                            ${playerTeamColor}${alphaHex(0x14, 0x38)} 0%,
-                            ${playerTeamColor}${alphaHex(0x08, 0x20)} 10%,
-                            transparent ${interpolate(22, 30)}%
+                            ${playerTeamColor}38 0%,
+                            ${playerTeamColor}20 10%,
+                            transparent 30%
                         ),
                         radial-gradient(
                             circle at 100% 100%,
-                            ${playerTeamColor}${alphaHex(0x14, 0x38)} 0%,
-                            ${playerTeamColor}${alphaHex(0x08, 0x20)} 10%,
-                            transparent ${interpolate(22, 30)}%
+                            ${playerTeamColor}38 0%,
+                            ${playerTeamColor}20 10%,
+                            transparent 30%
                         ),
                         radial-gradient(
                             ellipse at 50% 0%,
-                            ${playerTeamColor}${alphaHex(0x0C, 0x28)} 0%,
-                            ${playerTeamColor}${alphaHex(0x06, 0x14)} 12%,
-                            transparent ${interpolate(20, 28)}%
+                            ${playerTeamColor}28 0%,
+                            ${playerTeamColor}14 12%,
+                            transparent 28%
                         ),
                         radial-gradient(
                             ellipse at 50% 100%,
-                            ${playerTeamColor}${alphaHex(0x0C, 0x28)} 0%,
-                            ${playerTeamColor}${alphaHex(0x06, 0x14)} 12%,
-                            transparent ${interpolate(20, 28)}%
+                            ${playerTeamColor}28 0%,
+                            ${playerTeamColor}14 12%,
+                            transparent 28%
                         )
                     `,
                 }}
@@ -195,14 +160,14 @@ export function PlayerCard({
 
             <div className='relative z-10 hidden md:block'>
                 <div className='flex items-center justify-center gap-2 pl-54 pr-12'>
-                    {/* Team-color aura around the player name. */}
+                    {/* Medium team-color aura around the player name. */}
                     <h3
                         className='truncate text-center text-xl font-semibold text-white'
                         style={{
                             textShadow: `
-                                0 0 ${interpolate(2, 4)}px ${playerTeamColor}${alphaHex(0x66, 0xCC)},
-                                0 0 ${interpolate(4, 9)}px ${playerTeamColor}${alphaHex(0x33, 0x99)},
-                                0 0 ${interpolate(7, 16)}px ${playerTeamColor}${alphaHex(0x1A, 0x55)}
+                                0 0 4px ${playerTeamColor}CC,
+                                0 0 9px ${playerTeamColor}99,
+                                0 0 16px ${playerTeamColor}55
                             `,
                         }}
                     >
@@ -218,14 +183,14 @@ export function PlayerCard({
                         {entry.position}
                     </span>
 
-                    {/* Team-color aura around the NHL logo. */}
+                    {/* Strong team-color aura around the NHL logo. */}
                     <div
                         className='shrink-0'
                         style={{
                             filter: `
-                                drop-shadow(0 0 ${interpolate(2, 4)}px ${playerTeamColor}${alphaHex(0x88, 0xFF)})
-                                drop-shadow(0 0 ${interpolate(4, 9)}px ${playerTeamColor}${alphaHex(0x44, 0xEE)})
-                                drop-shadow(0 0 ${interpolate(6, 16)}px ${playerTeamColor}${alphaHex(0x22, 0xBB)})
+                                drop-shadow(0 0 4px ${playerTeamColor})
+                                drop-shadow(0 0 9px ${playerTeamColor}EE)
+                                drop-shadow(0 0 16px ${playerTeamColor}BB)
                             `,
                         }}
                     >
@@ -237,18 +202,15 @@ export function PlayerCard({
                 </div>
 
                 <div className='mt-2'>
-                    {/* Team-color aura around the player picture. */}
+                    {/* Strong team-color aura around the player picture. */}
                     <div
                         className='absolute left-3 top-1/2 h-38 w-38 -translate-y-1/2 rounded-md'
                         style={{
                             boxShadow: `
-                                0 0 ${interpolate(4, 10)}px ${playerTeamColor}${alphaHex(0x88, 0xFF)},
-                                0 0 ${interpolate(8, 22)}px ${playerTeamColor}${alphaHex(0x44, 0xDD)},
-                                0 0 ${interpolate(14, 40)}px ${playerTeamColor}${alphaHex(0x22, 0xAA)},
-                                ${auraLevel() > 1
-                                    ? `0 0 ${interpolate(14, 65)}px ${playerTeamColor}${alphaHex(0x00, 0x66)}`
-                                    : ''
-                                }
+                                0 0 10px ${playerTeamColor},
+                                0 0 22px ${playerTeamColor}DD,
+                                0 0 40px ${playerTeamColor}AA,
+                                0 0 65px ${playerTeamColor}66
                             `,
                         }}
                     >
@@ -378,18 +340,15 @@ export function PlayerCard({
             </div>
 
             <div className='relative z-10 flex h-full items-center gap-3 md:hidden'>
-                {/* Team-color aura around the mobile player picture. */}
+                {/* Strong team-color aura around the mobile player picture. */}
                 <div
                     className='flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white'
                     style={{
                         boxShadow: `
-                            0 0 ${interpolate(3, 8)}px ${playerTeamColor}${alphaHex(0x88, 0xFF)},
-                            0 0 ${interpolate(7, 18)}px ${playerTeamColor}${alphaHex(0x44, 0xDD)},
-                            0 0 ${interpolate(12, 32)}px ${playerTeamColor}${alphaHex(0x22, 0xAA)},
-                            ${auraLevel() > 1
-                                ? `0 0 ${interpolate(12, 50)}px ${playerTeamColor}${alphaHex(0x00, 0x66)}`
-                                : ''
-                            }
+                            0 0 8px ${playerTeamColor},
+                            0 0 18px ${playerTeamColor}DD,
+                            0 0 32px ${playerTeamColor}AA,
+                            0 0 50px ${playerTeamColor}66
                         `,
                     }}
                 >
@@ -415,14 +374,14 @@ export function PlayerCard({
 
                 <div className='relative min-w-0 flex-1'>
                     <div className='absolute left-0 right-0 top-[-4px] flex items-center justify-center gap-1.5'>
-                        {/* Team-color aura around the mobile player name. */}
+                        {/* Medium team-color aura around the mobile player name. */}
                         <p
                             className='truncate text-sm font-semibold text-white'
                             style={{
                                 textShadow: `
-                                    0 0 ${interpolate(1, 3)}px ${playerTeamColor}${alphaHex(0x66, 0xCC)},
-                                    0 0 ${interpolate(3, 7)}px ${playerTeamColor}${alphaHex(0x33, 0x99)},
-                                    0 0 ${interpolate(5, 12)}px ${playerTeamColor}${alphaHex(0x1A, 0x55)}
+                                    0 0 3px ${playerTeamColor}CC,
+                                    0 0 7px ${playerTeamColor}99,
+                                    0 0 12px ${playerTeamColor}55
                                 `,
                             }}
                         >
@@ -438,14 +397,14 @@ export function PlayerCard({
                             {entry.position}
                         </span>
 
-                        {/* Team-color aura around the mobile NHL logo. */}
+                        {/* Strong team-color aura around the mobile NHL logo. */}
                         <div
                             className='shrink-0'
                             style={{
                                 filter: `
-                                    drop-shadow(0 0 ${interpolate(1, 3)}px ${playerTeamColor}${alphaHex(0x88, 0xFF)})
-                                    drop-shadow(0 0 ${interpolate(3, 7)}px ${playerTeamColor}${alphaHex(0x44, 0xEE)})
-                                    drop-shadow(0 0 ${interpolate(5, 12)}px ${playerTeamColor}${alphaHex(0x22, 0xBB)})
+                                    drop-shadow(0 0 3px ${playerTeamColor})
+                                    drop-shadow(0 0 7px ${playerTeamColor}EE)
+                                    drop-shadow(0 0 12px ${playerTeamColor}BB)
                                 `,
                             }}
                         >
