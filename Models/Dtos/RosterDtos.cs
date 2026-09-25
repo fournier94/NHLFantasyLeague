@@ -183,6 +183,25 @@
     }
 
     /// <summary>
+    /// Committed cap hit for one future season, used by the "Masse salariale
+    /// projetée" table on the team page.
+    /// </summary>
+    public class SeasonCapDto
+    {
+        /// <summary>NHL season code, for example 20272028.</summary>
+        public int NhlSeasonCode { get; set; }
+
+        /// <summary>Short display label, for example "27-28".</summary>
+        public string Label { get; set; } = string.Empty;
+
+        /// <summary>Sum of the Active + Bench players' salaries for this season, in dollars.</summary>
+        public decimal CapSalary { get; set; }
+
+        /// <summary>Number of Active + Bench players with a contract covering this season.</summary>
+        public int SignedPlayers { get; set; }
+    }
+
+    /// <summary>
     /// Full roster of one fantasy team for one season, with totals.
     /// </summary>
     public class TeamRosterDto
@@ -211,8 +230,22 @@
         /// <summary>Number of players with status "Prospect".</summary>
         public int ProspectCount { get; set; }
 
-        /// <summary>Sum of the fantasy salaries of the roster, in dollars.</summary>
+        /// <summary>Sum of the fantasy salaries of every entry on the roster, in dollars.</summary>
         public decimal TotalSalary { get; set; }
+
+        /// <summary>
+        /// Cap hit: sum of the fantasy salaries of the Active and Bench
+        /// entries, in dollars. Prospects are excluded.
+        /// </summary>
+        public decimal CapSalary { get; set; }
+
+        /// <summary>
+        /// Committed cap hit for the current season and the next four,
+        /// based on the contracts already in the system. Prospects are
+        /// excluded. A player whose contract does not cover a season
+        /// contributes 0 to that season's salary and signed-player count.
+        /// </summary>
+        public List<SeasonCapDto> FutureCapBySeason { get; set; } = new List<SeasonCapDto>();
 
         /// <summary>The roster entries, ordered by status, then slot, then last name.</summary>
         public List<RosterEntryDto> Entries { get; set; } = new List<RosterEntryDto>();

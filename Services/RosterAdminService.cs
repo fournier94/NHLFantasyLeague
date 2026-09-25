@@ -24,6 +24,9 @@ namespace NhlFantasyLeague.api.Services
         /// <summary>NHL season code of the current season (2026-27), used by the player cards.</summary>
         private const int CurrentSeasonNhlCode = 20262027;
 
+        /// <summary>How many seasons the future cap projection covers, starting with the current one.</summary>
+        private const int FutureCapSeasonCount = 5;
+
         /// <summary>
         /// Creates the service.
         /// </summary>
@@ -306,7 +309,8 @@ namespace NhlFantasyLeague.api.Services
 
         /// <summary>
         /// Returns the full roster of one fantasy team for one season, with
-        /// the total salary and the number of players per status.
+        /// the total salary, the cap salary (Active + Bench), the five-year
+        /// cap projection, and the number of players per status.
         ///
         /// The three stat lines shown on each player card come from
         /// PlayerCareerStat (the raw, per-league history), not from
@@ -373,10 +377,6 @@ namespace NhlFantasyLeague.api.Services
                     .ToListAsync();
             }
 
-            // Step 1: sum Sequence rows (mid-season trades) into one line
-            // per (player, season, league). Goalie fields are summed too,
-            // so a goalie who was traded mid-season gets combined wins,
-            // losses and overtime losses.
             var leagueLines = careerRows
                 .GroupBy(s => new
                 {
@@ -399,8 +399,6 @@ namespace NhlFantasyLeague.api.Services
                 })
                 .ToList();
 
-            // Step 2: pick one line per (player, season): NHL first, then
-            // most games played. This is what the card shows.
             var chosenLines = leagueLines
                 .GroupBy(l => new { l.PlayerId, l.Season })
                 .Select(g => g
@@ -465,6 +463,47 @@ namespace NhlFantasyLeague.api.Services
                 await _dbContext.SaveChangesAsync();
             }
 
+            // Future cap projection: for the current season and the next
+            // four, sum the salaries of the Active + Bench players whose
+            // contract covers that season. Prospects are always excluded.
+            // A player whose contract does not cover a season contributes 0
+            // to that season's salary and is not counted as signed for it.
+            var capPlayers = entries
+                .Where(e => e.RosterStatus != RosterStatus.Prospect)
+                .ToList();
+
+            var futureCapBySeason = new List<SeasonCapDto>();
+
+            for (int i = 0; i < FutureCapSeasonCount; i++)
+            {
+                var seasonCode = AddSeasons(CurrentSeasonNhlCode, i);
+
+                decimal seasonSalary = 0m;
+                int signedPlayers = 0;
+
+                foreach (var entry in capPlayers)
+                {
+                    var contracts = contractsByPlayerId.GetValueOrDefault(entry.PlayerId)
+                        ?? new List<PlayerContract>();
+
+                    var salary = ResolveSalaryForSeason(contracts, seasonCode);
+
+                    if (salary > 0m)
+                    {
+                        seasonSalary += salary;
+                        signedPlayers++;
+                    }
+                }
+
+                futureCapBySeason.Add(new SeasonCapDto
+                {
+                    NhlSeasonCode = seasonCode,
+                    Label = ShortSeasonLabel(seasonCode),
+                    CapSalary = seasonSalary,
+                    SignedPlayers = signedPlayers
+                });
+            }
+
             return new TeamRosterDto
             {
                 FantasyTeamId = team.Id,
@@ -476,6 +515,11 @@ namespace NhlFantasyLeague.api.Services
                 BenchCount = entries.Count(e => e.RosterStatus == RosterStatus.Bench),
                 ProspectCount = entries.Count(e => e.RosterStatus == RosterStatus.Prospect),
                 TotalSalary = entries.Sum(e => e.FantasySalary),
+                // Cap hit: Active + Bench. Prospects are excluded.
+                CapSalary = entries
+                    .Where(e => e.RosterStatus != RosterStatus.Prospect)
+                    .Sum(e => e.FantasySalary),
+                FutureCapBySeason = futureCapBySeason,
                 Entries = orderedEntries
                     .Select(e =>
                     {
@@ -640,12 +684,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// Builds a player-card stat line from a season and one aggregated
-        /// card line. Goalie fields (Wins, Losses, OvertimeLosses) are
-        /// carried through for goalies; they stay 0 for skaters, whose
-        /// lines only use GamesPlayed / Goals / Assists / Points.
-        /// </summary>
         private static SeasonStatLineDto? ToSeasonStatLineDto(
             Season? season,
             CardStatLine? line)
@@ -686,6 +724,12 @@ namespace NhlFantasyLeague.api.Services
             return ResolveSalaryFromContracts(contracts, nhlSeasonCode);
         }
 
+        /// <summary>
+        /// Current-season salary of a player: 0 $ with no contract, the
+        /// single contract's value with exactly one (even when it does not
+        /// cover the season yet, so a future-signed deal still shows a
+        /// number), otherwise the value of the contract covering the season.
+        /// </summary>
         private static decimal ResolveSalaryFromContracts(
             IReadOnlyList<PlayerContract> contracts,
             int nhlSeasonCode)
@@ -705,6 +749,42 @@ namespace NhlFantasyLeague.api.Services
                 c.EndSeason >= nhlSeasonCode);
 
             return coveringContract?.Salary ?? 0m;
+        }
+
+        /// <summary>
+        /// Salary of whichever contract covers the given season, or 0 when
+        /// none does. Used for future-season projections: unlike
+        /// ResolveSalaryFromContracts, this never applies a contract to a
+        /// season it does not cover, so a player whose deal expires drops
+        /// out of the following years automatically.
+        /// </summary>
+        private static decimal ResolveSalaryForSeason(
+            IReadOnlyList<PlayerContract> contracts,
+            int nhlSeasonCode)
+        {
+            var covering = contracts.FirstOrDefault(c =>
+                c.StartSeason <= nhlSeasonCode &&
+                c.EndSeason >= nhlSeasonCode);
+
+            return covering?.Salary ?? 0m;
+        }
+
+        /// <summary>
+        /// Advances a season code by N seasons: 20262027 advanced by 1
+        /// gives 20272028.
+        /// </summary>
+        private static int AddSeasons(int seasonCode, int count)
+        {
+            var startYear = (seasonCode / 10000) + count;
+            return (startYear * 10000) + (startYear + 1);
+        }
+
+        /// <summary>"20262027" -> "26-27".</summary>
+        private static string ShortSeasonLabel(int seasonCode)
+        {
+            var startYear = seasonCode / 10000;
+            var endYear = seasonCode % 100;
+            return $"{startYear % 100:D2}-{endYear:D2}";
         }
 
         private static (PlayerContractLineDto? Current, PlayerContractLineDto? Second)
@@ -762,12 +842,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// One card line after sequences have been summed: one row per
-        /// (player, season, league), already aggregated. Carries both the
-        /// skater fields and the goalie fields; the card only displays the
-        /// ones matching the player's position.
-        /// </summary>
         private sealed class CardStatLine
         {
             public int PlayerId { get; set; }

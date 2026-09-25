@@ -57,6 +57,17 @@ export interface PlayerContractLine {
     endSeason: number;
 }
 
+/** Committed cap hit for one future season. */
+export interface SeasonCap {
+    nhlSeasonCode: number;
+    /** Short label, e.g. "27-28". */
+    label: string;
+    /** Sum of the Active + Bench players' salaries for this season, in dollars. */
+    capSalary: number;
+    /** Number of Active + Bench players with a contract covering this season. */
+    signedPlayers: number;
+}
+
 /** One player on a fantasy team's roster (GET /api/Roster/team/{id}). */
 export interface RosterEntry {
     id: number;
@@ -91,6 +102,16 @@ export interface TeamRoster {
     benchCount: number;
     prospectCount: number;
     totalSalary: number;
+    /**
+     * Cap hit: sum of the fantasy salaries of the Active and Bench entries.
+     * Prospects are excluded.
+     */
+    capSalary: number;
+    /**
+     * Committed cap hit for the current season and the next four, based on
+     * the contracts already in the system. Prospects are excluded.
+     */
+    futureCapBySeason: SeasonCap[];
     entries: RosterEntry[];
 }
 
