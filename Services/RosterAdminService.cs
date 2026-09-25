@@ -359,8 +359,6 @@ namespace NhlFantasyLeague.api.Services
 
             var playerIds = entries.Select(e => e.PlayerId).ToList();
 
-            // One bulk query on the raw history table for the three seasons
-            // the card displays, regular season only.
             var careerRows = new List<PlayerCareerStat>();
 
             if (playerIds.Count > 0)
@@ -376,7 +374,9 @@ namespace NhlFantasyLeague.api.Services
             }
 
             // Step 1: sum Sequence rows (mid-season trades) into one line
-            // per (player, season, league).
+            // per (player, season, league). Goalie fields are summed too,
+            // so a goalie who was traded mid-season gets combined wins,
+            // losses and overtime losses.
             var leagueLines = careerRows
                 .GroupBy(s => new
                 {
@@ -392,7 +392,10 @@ namespace NhlFantasyLeague.api.Services
                     GamesPlayed = g.Sum(s => s.GamesPlayed),
                     Goals = g.Sum(s => s.Goals),
                     Assists = g.Sum(s => s.Assists),
-                    Points = g.Sum(s => s.Points)
+                    Points = g.Sum(s => s.Points),
+                    Wins = g.Sum(s => s.Wins),
+                    Losses = g.Sum(s => s.Losses),
+                    OvertimeLosses = g.Sum(s => s.OvertimeLosses)
                 })
                 .ToList();
 
@@ -607,11 +610,6 @@ namespace NhlFantasyLeague.api.Services
             return $"{player.FirstName} {player.LastName}".Trim();
         }
 
-        /// <summary>
-        /// Maps a roster entry to its DTO. The three stat lines and the two
-        /// contract lines are optional: they are only provided by the team
-        /// roster.
-        /// </summary>
         private static RosterEntryDto ToRosterEntryDto(
             RosterEntry entry,
             SeasonStatLineDto? twoSeasonsAgo = null,
@@ -644,8 +642,9 @@ namespace NhlFantasyLeague.api.Services
 
         /// <summary>
         /// Builds a player-card stat line from a season and one aggregated
-        /// card line. Returns null when the season or the line is missing,
-        /// so the frontend can show a fallback.
+        /// card line. Goalie fields (Wins, Losses, OvertimeLosses) are
+        /// carried through for goalies; they stay 0 for skaters, whose
+        /// lines only use GamesPlayed / Goals / Assists / Points.
         /// </summary>
         private static SeasonStatLineDto? ToSeasonStatLineDto(
             Season? season,
@@ -669,9 +668,9 @@ namespace NhlFantasyLeague.api.Services
                 Goals = line.Goals,
                 Assists = line.Assists,
                 Points = line.Points,
-                Wins = 0,
-                Losses = 0,
-                OvertimeLosses = 0
+                Wins = line.Wins,
+                Losses = line.Losses,
+                OvertimeLosses = line.OvertimeLosses
             };
         }
 
@@ -765,7 +764,9 @@ namespace NhlFantasyLeague.api.Services
 
         /// <summary>
         /// One card line after sequences have been summed: one row per
-        /// (player, season, league), already aggregated.
+        /// (player, season, league), already aggregated. Carries both the
+        /// skater fields and the goalie fields; the card only displays the
+        /// ones matching the player's position.
         /// </summary>
         private sealed class CardStatLine
         {
@@ -776,6 +777,9 @@ namespace NhlFantasyLeague.api.Services
             public int Goals { get; set; }
             public int Assists { get; set; }
             public int Points { get; set; }
+            public int Wins { get; set; }
+            public int Losses { get; set; }
+            public int OvertimeLosses { get; set; }
         }
     }
 }

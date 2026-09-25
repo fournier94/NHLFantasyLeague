@@ -4,7 +4,7 @@ import { PlayerCard } from '@/components/roster/PlayerCard';
 import { RosterSection } from '@/components/roster/RosterSection';
 
 // TODO(auth): replace with the signed-in user's fantasy team once
-// authentication exists. Team 1 is Mathieu.
+// authentication exists. Team 5 is farn.
 const TEMPORARY_TEAM_ID = 5;
 
 // Salary display in the header, e.g. "118 500 000 $".
