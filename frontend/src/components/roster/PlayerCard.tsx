@@ -54,7 +54,7 @@ interface PlayerCardProps {
 /**
  * NHL-style player card. Tablets and up show the full card (headshot,
  * previous + current season stats, contracts); phones show a compact row
- * with the same two stat lines and both contracts.
+ * with the same two stat lines and the current contract.
  */
 export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
     const [imageFailed, setImageFailed] = useState(false);
@@ -70,12 +70,10 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
         contractLabel(entry.currentContract) ??
         `${salaryFormatter.format(entry.fantasySalary)} $`;
 
-    const secondContractLabel = contractLabel(entry.secondContract);
-
     return (
         <article
             className={cn(
-                'relative rounded-lg border border-border bg-card p-3 md:min-h-46',
+                'relative h-34 overflow-hidden rounded-lg border border-border bg-card p-3 md:h-auto md:min-h-46',
                 className,
             )}
         >
@@ -112,7 +110,7 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                     )}
 
                     <div className='pl-54'>
-                        <table className='w-full text-right text-xs tabular-nums'>
+                        <table className='relative top-[35px] w-full text-right text-xs tabular-nums'>
                             <thead>
                                 <tr className='text-muted-foreground'>
                                     <th className='text-left font-normal' />
@@ -141,24 +139,18 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             </tbody>
                         </table>
 
-                        {/* Contracts: current line, plus a second line when present. */}
-                        <div className='mt-2 flex w-full flex-col items-center gap-0.5 text-xs text-muted-foreground'>
+                        {/* Current contract only. */}
+                        <div className='mt-2 flex w-full items-center justify-center gap-3 text-xs text-muted-foreground'>
                             <span>{currentContractLabel}</span>
-
-                            {secondContractLabel && (
-                                <span className='text-[0.7rem] opacity-80'>
-                                    {secondContractLabel}
-                                </span>
-                            )}
                         </div>
                     </div>
                 </div>
             </div>
 
             {/* Compact row - phones only. */}
-            <div className='relative flex min-h-20 gap-3 md:hidden'>
+            <div className='relative flex h-full items-center gap-3 md:hidden'>
                 {/* Player headshot. */}
-                <div className='flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white'>
+                <div className='flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white'>
                     {showImage ? (
                         <img
                             src={entry.headshotUrl ?? undefined}
@@ -177,7 +169,7 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                 {/* Right-side content area. */}
                 <div className='relative min-w-0 flex-1'>
                     {/* Name + position + logo. */}
-                    <div className='absolute left-0 right-0 top-[-5px] flex items-center justify-center gap-1.5'>
+                    <div className='absolute left-0 right-0 top-[-9px] flex items-center justify-center gap-1.5'>
                         <p className='truncate text-sm font-semibold text-foreground'>
                             {entry.firstName} {entry.lastName}
                         </p>
@@ -192,9 +184,9 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                         />
                     </div>
 
-                    {/* Previous + current season stats, then contracts. */}
+                    {/* Previous + current season stats, then current contract. */}
                     <div className='pt-9'>
-                        <table className='w-full text-right text-xs tabular-nums'>
+                        <table className='relative top-[-5px] w-full text-right text-xs tabular-nums'>
                             <thead>
                                 <tr className='text-muted-foreground'>
                                     <th className='text-left font-normal' />
@@ -223,14 +215,8 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             </tbody>
                         </table>
 
-                        <div className='mt-1 flex w-full flex-col items-center gap-0.5 text-xs text-muted-foreground'>
+                        <div className='mt-1 translate-y-[5px] flex w-full items-center justify-center gap-3 text-xs text-muted-foreground'>
                             <span>{currentContractLabel}</span>
-
-                            {secondContractLabel && (
-                                <span className='text-[0.7rem] opacity-80'>
-                                    {secondContractLabel}
-                                </span>
-                            )}
                         </div>
                     </div>
                 </div>
