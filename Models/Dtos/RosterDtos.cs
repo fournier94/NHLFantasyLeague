@@ -123,6 +123,9 @@
         /// <summary>Player headshot photo url, or null when unavailable.</summary>
         public string? HeadshotUrl { get; set; }
 
+        /// <summary>Two seasons ago stat line (2024-25), or null when unavailable.</summary>
+        public SeasonStatLineDto? TwoSeasonsAgo { get; set; }
+
         /// <summary>Previous season stat line (2025-26), or null when unavailable.</summary>
         public SeasonStatLineDto? LastSeason { get; set; }
 

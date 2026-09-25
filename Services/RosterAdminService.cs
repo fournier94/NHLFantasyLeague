@@ -15,6 +15,9 @@ namespace NhlFantasyLeague.api.Services
     {
         private readonly AppDbContext _dbContext;
 
+        /// <summary>NHL season code of two seasons ago (2024-25), used by the player cards.</summary>
+        private const int TwoSeasonsAgoNhlCode = 20242025;
+
         /// <summary>NHL season code of the previous season (2025-26), used by the player cards.</summary>
         private const int PreviousSeasonNhlCode = 20252026;
 
@@ -30,11 +33,6 @@ namespace NhlFantasyLeague.api.Services
             _dbContext = dbContext;
         }
 
-        /// <summary>
-        /// Puts a player on a fantasy team for a season.
-        /// </summary>
-        /// <param name="request">Team, player, season and optional status, salary and slot.</param>
-        /// <returns>Success flag, message and the created roster entry.</returns>
         public async Task<RosterActionResultDto> AssignPlayerAsync(AssignPlayerRequest request)
         {
             var season = await ResolveSeasonAsync(request.SeasonId);
@@ -70,9 +68,6 @@ namespace NhlFantasyLeague.api.Services
                     "Use Active, Bench or Prospect.");
             }
 
-            // A player can only be on one fantasy team per season. The unique
-            // index (SeasonId, FantasyTeamId, PlayerId) only blocks a duplicate
-            // on the SAME team, so the season-wide rule is checked here.
             var existingEntry = await _dbContext.RosterEntries
                 .Include(e => e.FantasyTeam)
                 .FirstOrDefaultAsync(e =>
@@ -90,8 +85,6 @@ namespace NhlFantasyLeague.api.Services
                 return Failure(message);
             }
 
-            // FantasySalary in the request is ignored - the salary always comes
-            // from the player's PlayerContracts.
             var fantasySalary = await ResolveSalaryFromContractsAsync(
                 player.Id,
                 season.NhlSeasonCode);
@@ -106,7 +99,6 @@ namespace NhlFantasyLeague.api.Services
                 RosterSlot = request.RosterSlot ?? 0
             };
 
-            // Attach the already-loaded player so the result can show his name.
             entry.Player = player;
 
             _dbContext.RosterEntries.Add(entry);
@@ -123,12 +115,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// Moves a player from his current fantasy team to another team in
-        /// the same season by updating his roster entry.
-        /// </summary>
-        /// <param name="request">Player, destination team and optional season.</param>
-        /// <returns>Success flag, message and the updated roster entry.</returns>
         public async Task<RosterActionResultDto> MovePlayerAsync(MovePlayerRequest request)
         {
             var season = await ResolveSeasonAsync(request.SeasonId);
@@ -166,7 +152,6 @@ namespace NhlFantasyLeague.api.Services
                     $"'{PlayerName(entry.Player)}' is already on '{newTeam.Name}'.");
             }
 
-            // Capture the old team name before the change (used in the message).
             var oldTeamName = entry.FantasyTeam?.Name ?? $"team {entry.FantasyTeamId}";
 
             entry.FantasyTeamId = newTeam.Id;
@@ -183,12 +168,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// Releases a player by deleting his roster entry: he becomes a free
-        /// agent and can be assigned to any team again later.
-        /// </summary>
-        /// <param name="request">Id of the roster entry to delete.</param>
-        /// <returns>Success flag and message; the entry is null when released.</returns>
         public async Task<RosterActionResultDto> ReleasePlayerAsync(ReleasePlayerRequest request)
         {
             var entry = await _dbContext.RosterEntries
@@ -218,12 +197,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// Releases every player currently assigned to a fantasy team for a season,
-        /// by deleting all roster entries of that season (full league reset).
-        /// </summary>
-        /// <param name="request">Optional season id; the current season is used when omitted.</param>
-        /// <returns>Success flag and a message with the number of released players.</returns>
         public async Task<RosterActionResultDto> ReleaseAllPlayersAsync(ReleaseAllPlayersRequest request)
         {
             var season = await ResolveSeasonAsync(request.SeasonId);
@@ -237,8 +210,6 @@ namespace NhlFantasyLeague.api.Services
                 .Where(e => e.SeasonId == season.Id)
                 .ToListAsync();
 
-            // Zero entries means the reset is already done: keep the call idempotent
-            // by returning a success instead of an error.
             if (entries.Count == 0)
             {
                 return new RosterActionResultDto
@@ -260,13 +231,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// Updates the status, the fantasy team or the slot of an existing
-        /// roster entry. Only the provided values are changed. The fantasy
-        /// salary is always derived from the player's contracts.
-        /// </summary>
-        /// <param name="request">Entry id plus the values to change.</param>
-        /// <returns>Success flag, message and the updated roster entry.</returns>
         public async Task<RosterActionResultDto> UpdateEntryAsync(UpdateRosterEntryRequest request)
         {
             var hasStatus = !string.IsNullOrWhiteSpace(request.RosterStatus);
@@ -301,8 +265,6 @@ namespace NhlFantasyLeague.api.Services
                 entry.RosterStatus = rosterStatus;
             }
 
-            // A provided FantasyTeamId transfers the player; the same team is a
-            // no-op so the "unchanged dropdown" case never fails.
             var teamChanged = false;
 
             if (request.FantasyTeamId.HasValue &&
@@ -316,16 +278,11 @@ namespace NhlFantasyLeague.api.Services
                     return Failure($"Fantasy team {request.FantasyTeamId.Value} not found.");
                 }
 
-                // Attach the loaded target team so the result DTO and the
-                // success message show the new team, not the old one.
                 entry.FantasyTeam = targetTeam;
                 entry.FantasyTeamId = targetTeam.Id;
                 teamChanged = true;
             }
 
-            // FantasySalary in the request is ignored - the salary always comes
-            // from the player's PlayerContracts. Recomputing it on every update
-            // makes a previously manual value self-heal.
             entry.FantasySalary = await ResolveSalaryFromContractsAsync(
                 entry.PlayerId,
                 entry.Season.NhlSeasonCode);
@@ -350,10 +307,11 @@ namespace NhlFantasyLeague.api.Services
         /// <summary>
         /// Returns the full roster of one fantasy team for one season, with
         /// the total salary and the number of players per status.
+        ///
+        /// The three stat lines shown on each player card come from
+        /// PlayerCareerStat (the raw, per-league history), not from
+        /// PlayerSeasonStat (which is the fantasy table).
         /// </summary>
-        /// <param name="fantasyTeamId">Fantasy team id.</param>
-        /// <param name="seasonId">Season id, or null to use the current season.</param>
-        /// <returns>The team roster, or null when the team or season does not exist.</returns>
         public async Task<TeamRosterDto?> GetTeamRosterAsync(int fantasyTeamId, int? seasonId)
         {
             var team = await _dbContext.FantasyTeams
@@ -385,63 +343,89 @@ namespace NhlFantasyLeague.api.Services
                 .ThenBy(e => e.Player.LastName)
                 .ToList();
 
-            // Player cards show the previous and the current NHL season. Both
-            // seasons and all their stats rows are loaded with one extra query
-            // each, then looked up in memory (no per-player query).
             var cardSeasons = await _dbContext.Seasons
                 .Where(s =>
+                    s.NhlSeasonCode == TwoSeasonsAgoNhlCode ||
                     s.NhlSeasonCode == PreviousSeasonNhlCode ||
                     s.NhlSeasonCode == CurrentSeasonNhlCode)
                 .ToListAsync();
 
+            var twoSeasonsAgoSeason = cardSeasons
+                .FirstOrDefault(s => s.NhlSeasonCode == TwoSeasonsAgoNhlCode);
             var previousSeason = cardSeasons
                 .FirstOrDefault(s => s.NhlSeasonCode == PreviousSeasonNhlCode);
             var currentSeason = cardSeasons
                 .FirstOrDefault(s => s.NhlSeasonCode == CurrentSeasonNhlCode);
 
-            var cardSeasonIds = cardSeasons.Select(s => s.Id).ToList();
             var playerIds = entries.Select(e => e.PlayerId).ToList();
 
-            var lastStatsByPlayerId = new Dictionary<int, PlayerSeasonStat>();
-            var currentStatsByPlayerId = new Dictionary<int, PlayerSeasonStat>();
+            // One bulk query on the raw history table for the three seasons
+            // the card displays, regular season only.
+            var careerRows = new List<PlayerCareerStat>();
 
-            if (cardSeasonIds.Count > 0 && playerIds.Count > 0)
+            if (playerIds.Count > 0)
             {
-                // Only regular season rows (GameTypeId == 2) feed the card.
-                // Several leagues can exist per season (NHL + AHL, etc.); we
-                // pick the NHL row when present, otherwise the one with the most
-                // games played. The card therefore shows the most relevant line.
-                var stats = await _dbContext.PlayerSeasonStats
+                careerRows = await _dbContext.PlayerCareerStats
                     .Where(s =>
-                        cardSeasonIds.Contains(s.SeasonId) &&
                         playerIds.Contains(s.PlayerId) &&
+                        (s.Season == TwoSeasonsAgoNhlCode ||
+                         s.Season == PreviousSeasonNhlCode ||
+                         s.Season == CurrentSeasonNhlCode) &&
                         s.GameTypeId == 2)
                     .ToListAsync();
+            }
 
-                var byPlayerAndSeason = stats
-                    .GroupBy(s => new { s.PlayerId, s.SeasonId });
-
-                foreach (var group in byPlayerAndSeason)
+            // Step 1: sum Sequence rows (mid-season trades) into one line
+            // per (player, season, league).
+            var leagueLines = careerRows
+                .GroupBy(s => new
                 {
-                    var chosen = group
-                        .OrderByDescending(s => s.LeagueAbbreviation == "NHL")
-                        .ThenByDescending(s => s.GamesPlayed)
-                        .First();
+                    s.PlayerId,
+                    s.Season,
+                    s.LeagueAbbreviation
+                })
+                .Select(g => new CardStatLine
+                {
+                    PlayerId = g.Key.PlayerId,
+                    Season = g.Key.Season,
+                    LeagueAbbreviation = g.Key.LeagueAbbreviation,
+                    GamesPlayed = g.Sum(s => s.GamesPlayed),
+                    Goals = g.Sum(s => s.Goals),
+                    Assists = g.Sum(s => s.Assists),
+                    Points = g.Sum(s => s.Points)
+                })
+                .ToList();
 
-                    if (previousSeason != null && group.Key.SeasonId == previousSeason.Id)
-                    {
-                        lastStatsByPlayerId[group.Key.PlayerId] = chosen;
-                    }
-                    else if (currentSeason != null && group.Key.SeasonId == currentSeason.Id)
-                    {
-                        currentStatsByPlayerId[group.Key.PlayerId] = chosen;
-                    }
+            // Step 2: pick one line per (player, season): NHL first, then
+            // most games played. This is what the card shows.
+            var chosenLines = leagueLines
+                .GroupBy(l => new { l.PlayerId, l.Season })
+                .Select(g => g
+                    .OrderByDescending(l => l.LeagueAbbreviation == "NHL")
+                    .ThenByDescending(l => l.GamesPlayed)
+                    .First())
+                .ToList();
+
+            var twoSeasonsAgoStatsByPlayerId = new Dictionary<int, CardStatLine>();
+            var lastStatsByPlayerId = new Dictionary<int, CardStatLine>();
+            var currentStatsByPlayerId = new Dictionary<int, CardStatLine>();
+
+            foreach (var line in chosenLines)
+            {
+                if (line.Season == TwoSeasonsAgoNhlCode)
+                {
+                    twoSeasonsAgoStatsByPlayerId[line.PlayerId] = line;
+                }
+                else if (line.Season == PreviousSeasonNhlCode)
+                {
+                    lastStatsByPlayerId[line.PlayerId] = line;
+                }
+                else if (line.Season == CurrentSeasonNhlCode)
+                {
+                    currentStatsByPlayerId[line.PlayerId] = line;
                 }
             }
 
-            // Load every contract of every rostered player in one query, then
-            // group them in memory. This replaces the old per-entry salary
-            // lookup and also feeds the contract lines on the player cards.
             var contractsByPlayerId = new Dictionary<int, List<PlayerContract>>();
 
             if (playerIds.Count > 0)
@@ -455,9 +439,6 @@ namespace NhlFantasyLeague.api.Services
                     .ToDictionary(g => g.Key, g => g.ToList());
             }
 
-            // The FantasySalary column is only a cache of PlayerContracts: recompute
-            // it for every entry so rows created when the salary was still entered
-            // by hand become consistent (write only when something actually changed).
             var salaryChanged = false;
 
             foreach (var entry in entries)
@@ -504,6 +485,9 @@ namespace NhlFantasyLeague.api.Services
                         return ToRosterEntryDto(
                             e,
                             ToSeasonStatLineDto(
+                                twoSeasonsAgoSeason,
+                                twoSeasonsAgoStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
+                            ToSeasonStatLineDto(
                                 previousSeason,
                                 lastStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
                             ToSeasonStatLineDto(
@@ -516,13 +500,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// Searches players by first or last name (case-insensitive) and shows
-        /// the fantasy team that currently holds each player.
-        /// </summary>
-        /// <param name="search">Text to look for in the first or last name.</param>
-        /// <param name="limit">Maximum number of results (1 to 50, default 20).</param>
-        /// <returns>The matching players with their current fantasy team, if any.</returns>
         public async Task<List<PlayerSearchResultDto>> SearchPlayersAsync(
             string? search,
             int limit = 20)
@@ -545,7 +522,6 @@ namespace NhlFantasyLeague.api.Services
                 .Take(take)
                 .ToListAsync();
 
-            // Find each player's current-season roster entry (team + entry fields).
             var playerIds = players.Select(p => p.Id).ToList();
 
             var currentSeason = await _dbContext.Seasons
@@ -585,17 +561,12 @@ namespace NhlFantasyLeague.api.Services
                         FantasyTeamId = entry?.FantasyTeamId,
                         FantasyTeamName = entry?.FantasyTeam?.Name,
                         RosterEntryId = entry?.Id,
-                        RosterStatus = entry?.RosterStatus.ToString() // enum → "Active"/"Bench"/"Prospect"
+                        RosterStatus = entry?.RosterStatus.ToString()
                     };
                 })
                 .ToList();
         }
 
-        /// <summary>
-        /// Resolves the season to work with: the requested one, or the current
-        /// season (the one that starts the latest) when none is requested.
-        /// </summary>
-        /// <param name="seasonId">Requested season id, or null for the current season.</param>
         private async Task<Season?> ResolveSeasonAsync(int? seasonId)
         {
             if (seasonId.HasValue)
@@ -609,11 +580,6 @@ namespace NhlFantasyLeague.api.Services
                 .FirstOrDefaultAsync();
         }
 
-        /// <summary>
-        /// Parses a roster status text. Null or empty means "Active".
-        /// </summary>
-        /// <param name="value">Text to parse: "Active", "Bench" or "Prospect".</param>
-        /// <param name="status">The parsed status when the method returns true.</param>
         private static bool TryParseRosterStatus(string? value, out RosterStatus status)
         {
             if (string.IsNullOrWhiteSpace(value))
@@ -626,10 +592,6 @@ namespace NhlFantasyLeague.api.Services
                 && Enum.IsDefined(status);
         }
 
-        /// <summary>
-        /// Builds the failure result used by every operation.
-        /// </summary>
-        /// <param name="message">Message explaining why the operation failed.</param>
         private static RosterActionResultDto Failure(string message)
         {
             return new RosterActionResultDto
@@ -640,27 +602,19 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        /// <summary>
-        /// Builds the display name of a player.
-        /// </summary>
-        /// <param name="player">Player to name.</param>
         private static string PlayerName(Player player)
         {
             return $"{player.FirstName} {player.LastName}".Trim();
         }
 
         /// <summary>
-        /// Maps a roster entry (with its player loaded) to its DTO. The two
-        /// stat lines and the two contract lines are optional: they are only
-        /// provided by the team roster.
+        /// Maps a roster entry to its DTO. The three stat lines and the two
+        /// contract lines are optional: they are only provided by the team
+        /// roster.
         /// </summary>
-        /// <param name="entry">Roster entry to map.</param>
-        /// <param name="lastSeason">Previous season stat line, or null.</param>
-        /// <param name="currentSeason">Current season stat line, or null.</param>
-        /// <param name="currentContract">Contract covering the season, or null.</param>
-        /// <param name="secondContract">Second contract to display, or null.</param>
         private static RosterEntryDto ToRosterEntryDto(
             RosterEntry entry,
+            SeasonStatLineDto? twoSeasonsAgo = null,
             SeasonStatLineDto? lastSeason = null,
             SeasonStatLineDto? currentSeason = null,
             PlayerContractLineDto? currentContract = null,
@@ -680,6 +634,7 @@ namespace NhlFantasyLeague.api.Services
                 RosterSlot = entry.RosterSlot,
                 FantasySalary = entry.FantasySalary,
                 HeadshotUrl = entry.Player?.HeadshotUrl,
+                TwoSeasonsAgo = twoSeasonsAgo,
                 LastSeason = lastSeason,
                 CurrentSeason = currentSeason,
                 CurrentContract = currentContract,
@@ -688,52 +643,38 @@ namespace NhlFantasyLeague.api.Services
         }
 
         /// <summary>
-        /// Builds a player-card stat line from a season and one stats row.
-        /// Returns null when the season or the stats row is missing, so the
-        /// frontend can show a fallback.
+        /// Builds a player-card stat line from a season and one aggregated
+        /// card line. Returns null when the season or the line is missing,
+        /// so the frontend can show a fallback.
         /// </summary>
-        /// <param name="season">Season of the stats row, or null when not found.</param>
-        /// <param name="stat">Stats row, or null when not found.</param>
         private static SeasonStatLineDto? ToSeasonStatLineDto(
-    Season? season,
-    PlayerSeasonStat? stat)
+            Season? season,
+            CardStatLine? line)
         {
-            if (season == null || stat == null)
+            if (season == null || line == null)
             {
                 return null;
             }
 
             return new SeasonStatLineDto
             {
-                // Database season names are "2025-26" / "2026-2027"; the
-                // code-based fallback is only used when the name is empty.
                 Label = string.IsNullOrWhiteSpace(season.Name)
                     ? $"{season.NhlSeasonCode / 10000}-{season.NhlSeasonCode % 100:D2}"
                     : season.Name,
                 NhlSeasonCode = season.NhlSeasonCode,
-                LeagueAbbreviation = stat.LeagueAbbreviation,
-                TeamName = stat.TeamName,
-                GameTypeId = stat.GameTypeId,
-                GamesPlayed = stat.GamesPlayed,
-                Goals = stat.Goals,
-                Assists = stat.Assists,
-                Points = stat.Points,
-                Wins = stat.Wins,
-                Losses = stat.Losses,
-                OvertimeLosses = stat.OvertimeLosses
+                LeagueAbbreviation = line.LeagueAbbreviation,
+                TeamName = null,
+                GameTypeId = 2,
+                GamesPlayed = line.GamesPlayed,
+                Goals = line.Goals,
+                Assists = line.Assists,
+                Points = line.Points,
+                Wins = 0,
+                Losses = 0,
+                OvertimeLosses = 0
             };
         }
 
-
-        /// <summary>
-        /// Computes the fantasy salary of a player from his contracts: 0 $ when
-        /// he has no contract, the contract's value when he has exactly one,
-        /// otherwise the value of the contract covering the season.
-        /// </summary>
-        /// <param name="playerId">Database id of the player.</param>
-        /// <param name="nhlSeasonCode">NHL season code, for example 20262027.</param>
-        /// <param name="ct">Cancellation token.</param>
-        /// <returns>The derived salary in dollars, or 0 $ when no contract applies.</returns>
         private async Task<decimal> ResolveSalaryFromContractsAsync(
             int playerId,
             int nhlSeasonCode,
@@ -746,13 +687,6 @@ namespace NhlFantasyLeague.api.Services
             return ResolveSalaryFromContracts(contracts, nhlSeasonCode);
         }
 
-        /// <summary>
-        /// Computes the salary from an already-loaded contract list: 0 $ with no
-        /// contract, the single contract's value with one, otherwise the value of
-        /// the contract covering the season (0 $ when none covers it).
-        /// </summary>
-        /// <param name="contracts">Contracts of one player.</param>
-        /// <param name="nhlSeasonCode">NHL season code, for example 20262027.</param>
         private static decimal ResolveSalaryFromContracts(
             IReadOnlyList<PlayerContract> contracts,
             int nhlSeasonCode)
@@ -767,8 +701,6 @@ namespace NhlFantasyLeague.api.Services
                 return contracts[0].Salary;
             }
 
-            // Several contracts: only the one covering the season counts; when
-            // none covers it (for example only future seasons), there is no salary.
             var coveringContract = contracts.FirstOrDefault(c =>
                 c.StartSeason <= nhlSeasonCode &&
                 c.EndSeason >= nhlSeasonCode);
@@ -776,14 +708,6 @@ namespace NhlFantasyLeague.api.Services
             return coveringContract?.Salary ?? 0m;
         }
 
-        /// <summary>
-        /// Builds the contract lines shown on a player card for a given season:
-        /// the contract covering the season first, then the next contract after
-        /// it (a "second contract" such as a future extension), if any.
-        /// </summary>
-        /// <param name="contracts">All contracts of the player.</param>
-        /// <param name="nhlSeasonCode">Season the card is displayed for.</param>
-        /// <returns>At most two contract lines: current, then second.</returns>
         private static (PlayerContractLineDto? Current, PlayerContractLineDto? Second)
             ResolveContractLines(
                 IReadOnlyList<PlayerContract> contracts,
@@ -798,20 +722,15 @@ namespace NhlFantasyLeague.api.Services
                 return (null, null);
             }
 
-            // The contract covering the season, if any.
             var current = ordered.FirstOrDefault(c =>
                 c.StartSeason <= nhlSeasonCode &&
                 c.EndSeason >= nhlSeasonCode);
 
-            // When no contract covers the season but there is exactly one contract,
-            // show it anyway (matches the old single-contract fallback behaviour).
             if (current == null && ordered.Count == 1)
             {
                 current = ordered[0];
             }
 
-            // The second contract is the first one starting after the current one
-            // (or after the season when there is no current contract).
             var currentEnd = current?.EndSeason ?? nhlSeasonCode;
 
             var second = ordered
@@ -824,22 +743,14 @@ namespace NhlFantasyLeague.api.Services
                 second == null ? null : ToContractLineDto(second, nhlSeasonCode));
         }
 
-        /// <summary>
-        /// Maps a contract to its card line: salary plus the number of seasons
-        /// left from the displayed season.
-        /// </summary>
-        /// <param name="contract">Contract to map.</param>
-        /// <param name="nhlSeasonCode">Season the card is displayed for.</param>
         private static PlayerContractLineDto ToContractLineDto(
             PlayerContract contract,
             int nhlSeasonCode)
         {
-            // Season codes are 8 digits: 20262027 -> start year 2026.
             var seasonYear = nhlSeasonCode / 10000;
             var startYear = contract.StartSeason / 10000;
             var endYear = contract.EndSeason / 10000;
 
-            // A future contract not yet started still reports its full length.
             var firstYear = Math.Max(seasonYear, startYear);
             var yearsRemaining = Math.Max(1, endYear - firstYear + 1);
 
@@ -850,6 +761,21 @@ namespace NhlFantasyLeague.api.Services
                 StartSeason = contract.StartSeason,
                 EndSeason = contract.EndSeason
             };
+        }
+
+        /// <summary>
+        /// One card line after sequences have been summed: one row per
+        /// (player, season, league), already aggregated.
+        /// </summary>
+        private sealed class CardStatLine
+        {
+            public int PlayerId { get; set; }
+            public int Season { get; set; }
+            public string LeagueAbbreviation { get; set; } = string.Empty;
+            public int GamesPlayed { get; set; }
+            public int Goals { get; set; }
+            public int Assists { get; set; }
+            public int Points { get; set; }
         }
     }
 }

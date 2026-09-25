@@ -14,10 +14,10 @@ namespace NhlFantasyLeague.api.Services.NHL
         private readonly NhlTeamService _nhlTeamService;
 
         public NhlPlayerService(
-    HttpClient httpClient,
-    AppDbContext dbContext, 
-    NhlStatsService nhlStatsService,
-    NhlTeamService nhlTeamService)
+            HttpClient httpClient,
+            AppDbContext dbContext,
+            NhlStatsService nhlStatsService,
+            NhlTeamService nhlTeamService)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
@@ -133,88 +133,15 @@ namespace NhlFantasyLeague.api.Services.NHL
                 await _dbContext.SaveChangesAsync();
             }
 
-            var stats =
-                response.FeaturedStats?
-                    .RegularSeason?
-                    .SubSeason;
-
-            if (stats != null &&
-                response.FeaturedStats != null)
-            {
-                var season =
-                    await _dbContext.Seasons
-                        .FirstOrDefaultAsync(
-                            s =>
-                                s.NhlSeasonCode ==
-                                response.FeaturedStats.Season);
-
-                if (season != null)
-                {
-                    var existingStats =
-                        await _dbContext.PlayerSeasonStats
-                            .FirstOrDefaultAsync(
-                                s =>
-                                    s.PlayerId == player.Id &&
-                                    s.SeasonId == season.Id);
-
-                    if (existingStats == null)
-                    {
-                        var playerStats =
-                            new PlayerSeasonStat
-                            {
-                                PlayerId = player.Id,
-                                SeasonId = season.Id,
-                                GamesPlayed =
-                                    stats.GamesPlayed,
-                                Goals =
-                                    stats.Goals,
-                                Assists =
-                                    stats.Assists,
-                                Points =
-                                    stats.Points,
-                                Wins =
-                                    stats.Wins,
-                                OvertimeLosses =
-                                    stats.OvertimeLosses,
-                                Shutouts =
-                                    stats.Shutouts,
-                                HatTricks = 0
-                            };
-
-                        _dbContext.PlayerSeasonStats
-                            .Add(playerStats);
-                    }
-                    else
-                    {
-                        existingStats.GamesPlayed =
-                            stats.GamesPlayed;
-
-                        existingStats.Goals =
-                            stats.Goals;
-
-                        existingStats.Assists =
-                            stats.Assists;
-
-                        existingStats.Points =
-                            stats.Points;
-
-                        existingStats.Wins =
-                            stats.Wins;
-
-                        existingStats.OvertimeLosses =
-                            stats.OvertimeLosses;
-
-                        existingStats.Shutouts =
-                            stats.Shutouts;
-                    }
-
-                    await _dbContext.SaveChangesAsync();
-                }
-            }
-
-            await _nhlStatsService.SavePlayerSeasonStatsAsync(
+            await _nhlStatsService.SyncCareerStatsFromLandingAsync(
                 player,
-                response.SeasonTotals);
+                response);
+
+            await _dbContext.SaveChangesAsync();
+
+            await _nhlStatsService.UpsertFantasySeasonStatAsync(
+                player,
+                response);
 
             return player;
         }
@@ -518,6 +445,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                         $"{player.FirstName} {player.LastName} " +
                         $"(NHL ID: {player.NhlPlayerId})");
 
+                    // Raw career history (PlayerCareerStat): every season,
+                    // every league, every game type, one row per Sequence.
                     await _nhlStatsService.SyncCareerStatsFromLandingAsync(
                         player,
                         nhlPlayer);
@@ -527,6 +456,12 @@ namespace NhlFantasyLeague.api.Services.NHL
                         $"{player.FirstName} {player.LastName}");
 
                     await _dbContext.SaveChangesAsync();
+
+                    // Fantasy season row (PlayerSeasonStat): one row for the
+                    // current season, NHL regular season only.
+                    await _nhlStatsService.UpsertFantasySeasonStatAsync(
+                        player,
+                        nhlPlayer);
 
                     result.PlayersUpdated++;
 
@@ -579,9 +514,9 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var existingPlayerIds = (await _dbContext.Players
-    .Select(p => p.NhlPlayerId)
-    .ToListAsync())
-    .ToHashSet();
+                .Select(p => p.NhlPlayerId)
+                .ToListAsync())
+                .ToHashSet();
 
             var missingPlayers = new List<NhlMissingPlayerResult>();
 

@@ -16,6 +16,25 @@ const salaryFormatter = new Intl.NumberFormat('fr-CA', {
 const skaterColumns = ['PJ', 'B', 'A', 'PTS'];
 const goalieColumns = ['PJ', 'V', 'D', 'DP'];
 
+/**
+ * Season codes for the three rows on the card. Must stay in sync with
+ * the constants in RosterAdminService.
+ */
+const TWO_SEASONS_AGO_CODE = 20242025;
+const PREVIOUS_SEASON_CODE = 20252026;
+const CURRENT_SEASON_CODE = 20262027;
+
+/**
+ * Builds the display label from a season code, e.g. 20252026 -> "2025-26".
+ * Used as a fallback when the API did not send a stat line for the season.
+ */
+function seasonLabelFromCode(code: number): string {
+    const startYear = Math.floor(code / 10000);
+    const endYear = code % 100;
+
+    return `${startYear}-${endYear.toString().padStart(2, '0')}`;
+}
+
 /** Returns the four stat values of one season line, adapted to the position. */
 function statValues(line: SeasonStatLine | null, isGoalie: boolean): (string | number)[] {
     if (!line) {
@@ -37,6 +56,15 @@ function shortName(firstName: string, lastName: string): string {
     return initial
         ? `${initial.toUpperCase()}. ${lastName}`
         : lastName;
+}
+
+/**
+ * Shortens a season label:
+ *   "2025-26" -> "25-26"
+ *   "2024-25" -> "24-25"
+ */
+function shortSeasonLabel(label: string): string {
+    return label.replace(/^20/, '');
 }
 
 /**
@@ -83,11 +111,21 @@ interface PlayerCardProps {
 
 /**
  * NHL-style player card. Tablets and up show the full card (headshot,
- * previous + current season stats, contracts); phones show a compact row
- * with the same two stat lines and both contracts.
+ * three seasons of stats, contracts); phones show a compact row with
+ * the same three stat lines and both contracts.
  *
- * Stats table: six columns, each `w-1/6` so they get even space:
- *   season label | league | PJ | B | A | PTS   (or V/D/DP for goalies)
+ * Stats table:
+ *  - Desktop: six columns, each `w-1/6`, evenly distributed.
+ *  - Mobile: the season-label column sizes to content and never wraps;
+ *    the league and the four stat columns each take `w-1/6` of the
+ *    remaining table width, so the table stretches edge-to-edge between
+ *    the headshot and the right side of the card.
+ *
+ * Row order: current season, previous season, two seasons ago.
+ *
+ * When a player has no stat line for a season, the row still appears
+ * with the season label and dashes for the values, so the card always
+ * shows three years.
  *
  * The league column has a header cell so the widths line up, but that
  * header is empty: the league abbreviation only shows in the body rows.
@@ -101,7 +139,20 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
     const [imageFailed, setImageFailed] = useState(false);
     const isGoalie = entry.position === 'G';
     const columns = isGoalie ? goalieColumns : skaterColumns;
-    const lines = [entry.lastSeason, entry.currentSeason];
+
+    // Current season first, then previous season, then two seasons ago.
+    // Each entry carries the season code so we can build the label even
+    // when the stat line is missing from the API.
+    //
+    // Note: the API response currently only carries currentSeason and
+    // lastSeason. The third row falls back to a label-only row until a
+    // seasonBeforeLast field is added to RosterEntryDto.
+    const rows: { code: number; line: SeasonStatLine | null }[] = [
+        { code: CURRENT_SEASON_CODE, line: entry.currentSeason },
+        { code: PREVIOUS_SEASON_CODE, line: entry.lastSeason },
+        { code: TWO_SEASONS_AGO_CODE, line: entry.twoSeasonsAgo },
+    ];
+
     const showImage = Boolean(entry.headshotUrl) && !imageFailed;
     const initials = `${entry.firstName.charAt(0)}${entry.lastName.charAt(0)}`;
     const displayName = shortName(entry.firstName, entry.lastName);
@@ -175,26 +226,32 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             </thead>
 
                             <tbody className='text-foreground'>
-                                {lines.map((line, index) => (
-                                    <tr key={index === 0 ? 'last' : 'current'}>
-                                        <td className='px-1 text-left text-muted-foreground'>
-                                            {line?.label ?? '—'}
-                                        </td>
+                                {rows.map((row, index) => {
+                                    const rawLabel =
+                                        row.line?.label ??
+                                        seasonLabelFromCode(row.code);
 
-                                        <td className='px-1 text-left text-muted-foreground'>
-                                            {line?.leagueAbbreviation ?? '—'}
-                                        </td>
-
-                                        {statValues(line, isGoalie).map((value, valueIndex) => (
-                                            <td
-                                                key={valueIndex}
-                                                className='px-1 text-center'
-                                            >
-                                                {value}
+                                    return (
+                                        <tr key={index}>
+                                            <td className='px-1 text-left text-muted-foreground'>
+                                                {shortSeasonLabel(rawLabel)}
                                             </td>
-                                        ))}
-                                    </tr>
-                                ))}
+
+                                            <td className='px-1 text-left text-muted-foreground'>
+                                                {row.line?.leagueAbbreviation ?? '—'}
+                                            </td>
+
+                                            {statValues(row.line, isGoalie).map((value, valueIndex) => (
+                                                <td
+                                                    key={valueIndex}
+                                                    className='px-1 text-center'
+                                                >
+                                                    {value}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
 
@@ -248,7 +305,7 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                     )}
                 </div>
 
-                {/* Right-side content area. */}
+                {/* Right-side content area, stretched to fill the card. */}
                 <div className='relative min-w-0 flex-1'>
                     {/* Name + position + logo. */}
                     <div className='absolute left-0 right-0 top-[-4px] flex items-center justify-center gap-1.5'>
@@ -266,20 +323,22 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                         />
                     </div>
 
-                    {/* Previous + current season stats, then contracts. */}
+                    {/* Current + previous season stats, then contracts. */}
                     <div className='pt-9'>
                         <table className='relative top-[-6px] w-full text-xs tabular-nums'>
                             <thead>
                                 <tr className='text-muted-foreground'>
-                                    <th className='w-1/6 px-1 text-left font-normal' />
-                                    {/* Empty header cell for the league
-                                        column: keeps the column width
-                                        aligned without a label. */}
-                                    <th className='w-1/6 px-1 text-left font-normal' />
+                                    {/* Mobile: the label column sizes to
+                                        content and never wraps, so the
+                                        year always fits. The league and
+                                        the four stat columns share the
+                                        remaining width evenly. */}
+                                    <th className='px-0.5 text-left font-normal whitespace-nowrap' />
+                                    <th className='w-1/6 px-0.5 text-left font-normal' />
                                     {columns.map((column) => (
                                         <th
                                             key={column}
-                                            className='w-1/6 px-1 text-center font-normal'
+                                            className='w-1/6 px-0.5 text-center font-normal'
                                         >
                                             {column}
                                         </th>
@@ -288,26 +347,32 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             </thead>
 
                             <tbody className='text-foreground'>
-                                {lines.map((line, index) => (
-                                    <tr key={index === 0 ? 'last' : 'current'}>
-                                        <td className='px-1 text-left text-muted-foreground'>
-                                            {line?.label ?? '—'}
-                                        </td>
+                                {rows.map((row, index) => {
+                                    const rawLabel =
+                                        row.line?.label ??
+                                        seasonLabelFromCode(row.code);
 
-                                        <td className='px-1 text-left text-muted-foreground'>
-                                            {line?.leagueAbbreviation ?? '—'}
-                                        </td>
-
-                                        {statValues(line, isGoalie).map((value, valueIndex) => (
-                                            <td
-                                                key={valueIndex}
-                                                className='px-1 text-center'
-                                            >
-                                                {value}
+                                    return (
+                                        <tr key={index}>
+                                            <td className='px-0.5 text-left text-muted-foreground whitespace-nowrap'>
+                                                {shortSeasonLabel(rawLabel)}
                                             </td>
-                                        ))}
-                                    </tr>
-                                ))}
+
+                                            <td className='px-0.5 text-left text-muted-foreground'>
+                                                {row.line?.leagueAbbreviation ?? '—'}
+                                            </td>
+
+                                            {statValues(row.line, isGoalie).map((value, valueIndex) => (
+                                                <td
+                                                    key={valueIndex}
+                                                    className='px-0.5 text-center'
+                                                >
+                                                    {value}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
 

@@ -1,27 +1,25 @@
-﻿namespace NhlFantasyLeague.api.Models
+﻿namespace NhlFantasyLeague.api.Models.Dtos
 {
     /// <summary>
-    /// One fantasy season of statistics for a player: NHL regular season
-    /// totals for one season, plus the fantasy points and hat-tricks
-    /// derived from his game logs. One row per (PlayerId, SeasonId).
-    ///
-    /// This table is the source of truth for fantasy scoring. The raw,
-    /// per-league, per-game-type history used for display lives in
-    /// PlayerCareerStat instead.
+    /// One row of a player's career history, used by the player detail page.
+    /// Mirrors PlayerCareerStat directly: every season, every league, every
+    /// game type, one row per Sequence (a mid-season trade has several).
     /// </summary>
-    public class PlayerSeasonStat
+    public class CareerStatDto
     {
-        public int Id { get; set; }
+        public int Season { get; set; }
 
-        public int PlayerId { get; set; }
+        public int GameTypeId { get; set; }
 
-        public Player Player { get; set; } = null!;
+        public int Sequence { get; set; }
 
-        public int SeasonId { get; set; }
+        public string LeagueAbbreviation { get; set; } = string.Empty;
 
-        public Season Season { get; set; } = null!;
+        public string? TeamName { get; set; }
 
         public int GamesPlayed { get; set; }
+
+        public int GamesStarted { get; set; }
 
         public int Goals { get; set; }
 
@@ -37,11 +35,21 @@
 
         public int PowerPlayPoints { get; set; }
 
+        public int ShorthandedGoals { get; set; }
+
+        public int ShorthandedPoints { get; set; }
+
         public int GameWinningGoals { get; set; }
+
+        public int OvertimeGoals { get; set; }
 
         public int Shots { get; set; }
 
         public decimal ShootingPercentage { get; set; }
+
+        public string? AverageTimeOnIce { get; set; }
+
+        public decimal? FaceoffWinningPercentage { get; set; }
 
         public int Wins { get; set; }
 
@@ -50,10 +58,6 @@
         public int OvertimeLosses { get; set; }
 
         public int Shutouts { get; set; }
-
-        public int HatTricks { get; set; }
-
-        public int FantasyPoints { get; set; }
 
         public int Saves { get; set; }
 

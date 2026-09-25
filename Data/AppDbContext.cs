@@ -154,32 +154,11 @@ namespace NhlFantasyLeague.api.Data
                 .HasIndex(x => x.DraftPickId)
                 .IsUnique();
 
-            // One row per player, per season, per league and per game type.
-            // This allows several leagues in the same season (NHL + AHL, etc.)
-            // and separates regular season (2) from playoffs (3).
+            // One fantasy row per player and per season. The raw per-league
+            // history lives in PlayerCareerStat instead.
             modelBuilder.Entity<PlayerSeasonStat>()
-                .HasIndex(x => new
-                {
-                    x.PlayerId,
-                    x.SeasonId,
-                    x.LeagueAbbreviation,
-                    x.GameTypeId
-                })
+                .HasIndex(x => new { x.SeasonId, x.PlayerId })
                 .IsUnique();
-
-            modelBuilder.Entity<PlayerSeasonStat>()
-                .Property(x => x.LeagueAbbreviation)
-                .HasMaxLength(10)
-                .HasDefaultValue("NHL")
-                .IsRequired();
-
-            modelBuilder.Entity<PlayerSeasonStat>()
-                .Property(x => x.TeamName)
-                .HasMaxLength(100);
-
-            modelBuilder.Entity<PlayerSeasonStat>()
-                .Property(x => x.GameTypeId)
-                .HasDefaultValue(2);
 
             modelBuilder.Entity<WeeklyFantasyScore>()
                 .HasIndex(x => new { x.SeasonId, x.PlayerId, x.WeekNumber })

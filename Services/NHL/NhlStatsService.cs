@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Models;
+using NhlFantasyLeague.api.Models.Dtos;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Services;
 using System.Net.Http;
@@ -20,23 +21,41 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         /// <summary>
-        /// Saves every regular-season and playoff row from the NHL API
-        /// season totals into PlayerSeasonStat, across all leagues. Rows are
-        /// unique per (PlayerId, SeasonId, LeagueAbbreviation, GameTypeId) and
-        /// a mid-season trade (several Sequence values) is summed into one row.
+        /// Writes one fantasy row per (PlayerId, SeasonId) for the current
+        /// season only, using the NHL regular season totals from the
+        /// landing page. Used by the batch population.
+        ///
+        /// PlayerSeasonStat is the fantasy table: it does not carry league
+        /// or game type, and it holds FantasyPoints and HatTricks derived
+        /// from the player's game logs. The raw per-league history lives in
+        /// PlayerCareerStat instead.
         /// </summary>
-        public async Task<int> SavePlayerSeasonStatsAsync(
+        public async Task<int> UpsertFantasySeasonStatAsync(
             Player player,
-            List<NhlSeasonTotal> seasonTotals)
+            NhlPlayerResponse nhlPlayer)
         {
-            // Regular season (2) and playoffs (3); everything else (preseason,
-            // all-star, etc.) is ignored.
-            var relevant = seasonTotals
-                .Where(s => s.GameTypeId == 2 || s.GameTypeId == 3)
-                .ToList();
+            var featured = nhlPlayer.FeaturedStats;
 
-            if (relevant.Count == 0)
+            if (featured == null || featured.Season == 0)
             {
+                return 0;
+            }
+
+            var stats = featured.RegularSeason?.SubSeason;
+
+            if (stats == null)
+            {
+                return 0;
+            }
+
+            var season = await _dbContext.Seasons
+                .FirstOrDefaultAsync(s => s.NhlSeasonCode == featured.Season);
+
+            if (season == null)
+            {
+                // Seasons are created by the career-stats sync (which runs
+                // before this) or by LeagueSetupService. Skip when missing
+                // rather than create a bare season row here.
                 return 0;
             }
 
@@ -46,159 +65,99 @@ namespace NhlFantasyLeague.api.Services.NHL
                     "G",
                     StringComparison.OrdinalIgnoreCase);
 
-            var savedCount = 0;
+            int points = isGoalie
+                ? stats.Goals + stats.Assists
+                : stats.Points;
 
-            // Sum Sequence rows (mid-season trades) per (season, league, game type).
-            var grouped = relevant
-                .GroupBy(s => new
-                {
-                    s.Season,
-                    League = string.IsNullOrWhiteSpace(s.LeagueAbbrev)
-                        ? "NHL"
-                        : s.LeagueAbbrev,
-                    s.GameTypeId
-                });
+            var existing = await _dbContext.PlayerSeasonStats
+                .FirstOrDefaultAsync(s =>
+                    s.PlayerId == player.Id &&
+                    s.SeasonId == season.Id);
 
-            foreach (var group in grouped)
+            if (existing == null)
             {
-                var season = await _dbContext.Seasons
-                    .FirstOrDefaultAsync(s =>
-                        s.NhlSeasonCode == group.Key.Season);
-
-                if (season == null)
+                existing = new PlayerSeasonStat
                 {
-                    // Keep auto-create so historical player stats are never silently
-                    // dropped, but use the real League id instead of a hardcoded 1.
-                    // SalaryCap/SalaryFloor stay 0 here: real fantasy seasons
-                    // (2026-2027 and later) are created and corrected by LeagueSetupService.
-                    var league = await _dbContext.Leagues
-                        .OrderBy(l => l.Id)
-                        .FirstOrDefaultAsync();
+                    PlayerId = player.Id,
+                    SeasonId = season.Id
+                };
 
-                    if (league == null)
-                    {
-                        Console.WriteLine(
-                            $"[NhlStatsService] No League row exists yet; " +
-                            $"skipping season {group.Key.Season}.");
-                        continue;
-                    }
-
-                    var seasonStartYear = group.Key.Season / 10000;
-                    var seasonEndYear = group.Key.Season % 10000;
-
-                    season = new Season
-                    {
-                        Name = $"{seasonStartYear}-{(seasonEndYear % 100).ToString("D2")}",
-                        StartDate = new DateOnly(seasonStartYear, 10, 1),
-                        EndDate = new DateOnly(seasonEndYear, 6, 30),
-                        SalaryCap = 0,
-                        SalaryFloor = 0,
-                        NhlSeasonCode = group.Key.Season,
-                        LeagueId = league.Id
-                    };
-
-                    _dbContext.Seasons.Add(season);
-                    await _dbContext.SaveChangesAsync();
-                }
-
-                // Sum the values across the group's sequences.
-                var gamesPlayed = group.Sum(s => s.GamesPlayed);
-                var goals = group.Sum(s => s.Goals);
-                var assists = group.Sum(s => s.Assists);
-
-                // NHL seasonTotals provides a Points value for skaters.
-                // For goalies, the NHL response does not provide a Points field,
-                // so we calculate points from their goals and assists.
-                int points = isGoalie
-                    ? goals + assists
-                    : group.Sum(s => s.Points);
-
-                var shotsAgainst = group.Sum(s => s.ShotsAgainst);
-                var goalsAgainst = group.Sum(s => s.GoalsAgainst);
-
-                // Team name: pick the first non-empty one in the group. For a
-                // mid-season trade this shows the first team; the full split is
-                // still visible in PlayerCareerStat.
-                var teamName = group
-                    .Select(s => s.TeamName?.Default)
-                    .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
-
-                var existingStats = await _dbContext.PlayerSeasonStats
-                    .FirstOrDefaultAsync(s =>
-                        s.PlayerId == player.Id &&
-                        s.SeasonId == season.Id &&
-                        s.LeagueAbbreviation == group.Key.League &&
-                        s.GameTypeId == group.Key.GameTypeId);
-
-                if (existingStats == null)
-                {
-                    var playerStats = new PlayerSeasonStat
-                    {
-                        PlayerId = player.Id,
-                        SeasonId = season.Id,
-                        LeagueAbbreviation = group.Key.League,
-                        TeamName = teamName,
-                        GameTypeId = group.Key.GameTypeId,
-                        GamesPlayed = gamesPlayed,
-                        Goals = goals,
-                        Assists = assists,
-                        Points = points,
-                        PlusMinus = group.Sum(s => s.PlusMinus),
-                        PenaltyMinutes = group.Sum(s => s.PenaltyMinutes),
-                        PowerPlayGoals = group.Sum(s => s.PowerPlayGoals),
-                        PowerPlayPoints = group.Sum(s => s.PowerPlayPoints),
-                        GameWinningGoals = group.Sum(s => s.GameWinningGoals),
-                        Shots = group.Sum(s => s.Shots),
-                        ShootingPercentage = group.Sum(s => s.ShootingPercentage),
-                        GoalsAgainst = goalsAgainst,
-                        Wins = group.Sum(s => s.Wins),
-                        Losses = group.Sum(s => s.Losses),
-                        OvertimeLosses = group.Sum(s => s.OvertimeLosses),
-                        Shutouts = group.Sum(s => s.Shutouts),
-                        HatTricks = 0,
-                        Saves = shotsAgainst - goalsAgainst,
-                        ShotsAgainst = shotsAgainst,
-                        SavePercentage = group.Sum(s => s.SavePercentage),
-                        GoalsAgainstAverage = group.Sum(s => s.GoalsAgainstAverage)
-                    };
-
-                    _dbContext.PlayerSeasonStats.Add(playerStats);
-                    savedCount++;
-                }
-                else
-                {
-                    existingStats.TeamName = teamName;
-                    existingStats.GamesPlayed = gamesPlayed;
-                    existingStats.Goals = goals;
-                    existingStats.Assists = assists;
-                    existingStats.Points = points;
-                    existingStats.PlusMinus = group.Sum(s => s.PlusMinus);
-                    existingStats.PenaltyMinutes = group.Sum(s => s.PenaltyMinutes);
-                    existingStats.PowerPlayGoals = group.Sum(s => s.PowerPlayGoals);
-                    existingStats.PowerPlayPoints = group.Sum(s => s.PowerPlayPoints);
-                    existingStats.GameWinningGoals = group.Sum(s => s.GameWinningGoals);
-                    existingStats.Shots = group.Sum(s => s.Shots);
-                    existingStats.ShootingPercentage = group.Sum(s => s.ShootingPercentage);
-                    existingStats.GoalsAgainst = goalsAgainst;
-                    existingStats.Wins = group.Sum(s => s.Wins);
-                    existingStats.Losses = group.Sum(s => s.Losses);
-                    existingStats.OvertimeLosses = group.Sum(s => s.OvertimeLosses);
-                    existingStats.Shutouts = group.Sum(s => s.Shutouts);
-                    existingStats.Saves = shotsAgainst - goalsAgainst;
-                    existingStats.ShotsAgainst = shotsAgainst;
-                    existingStats.SavePercentage = group.Sum(s => s.SavePercentage);
-                    existingStats.GoalsAgainstAverage = group.Sum(s => s.GoalsAgainstAverage);
-                }
+                _dbContext.PlayerSeasonStats.Add(existing);
             }
+
+            existing.GamesPlayed = stats.GamesPlayed;
+            existing.Goals = stats.Goals;
+            existing.Assists = stats.Assists;
+            existing.Points = points;
+            existing.Wins = stats.Wins;
+            existing.OvertimeLosses = stats.OvertimeLosses;
+            existing.Shutouts = stats.Shutouts;
 
             await _dbContext.SaveChangesAsync();
 
-            return savedCount;
+            return 1;
+        }
+
+        /// <summary>
+        /// Returns every row of a player's career history, ordered by
+        /// season (most recent first), then game type, then sequence.
+        /// This is the source for the player detail page.
+        /// </summary>
+        public async Task<List<CareerStatDto>?> GetPlayerCareerStatsAsync(int nhlPlayerId)
+        {
+            var player = await _dbContext.Players
+                .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
+
+            if (player == null)
+            {
+                return null;
+            }
+
+            return await _dbContext.PlayerCareerStats
+                .Where(s => s.PlayerId == player.Id)
+                .OrderByDescending(s => s.Season)
+                .ThenBy(s => s.GameTypeId)
+                .ThenBy(s => s.Sequence)
+                .Select(s => new CareerStatDto
+                {
+                    Season = s.Season,
+                    GameTypeId = s.GameTypeId,
+                    Sequence = s.Sequence,
+                    LeagueAbbreviation = s.LeagueAbbreviation,
+                    TeamName = s.TeamName,
+                    GamesPlayed = s.GamesPlayed,
+                    GamesStarted = s.GamesStarted,
+                    Goals = s.Goals,
+                    Assists = s.Assists,
+                    Points = s.Points,
+                    PlusMinus = s.PlusMinus,
+                    PenaltyMinutes = s.PenaltyMinutes,
+                    PowerPlayGoals = s.PowerPlayGoals,
+                    PowerPlayPoints = s.PowerPlayPoints,
+                    ShorthandedGoals = s.ShorthandedGoals,
+                    ShorthandedPoints = s.ShorthandedPoints,
+                    GameWinningGoals = s.GameWinningGoals,
+                    OvertimeGoals = s.OvertimeGoals,
+                    Shots = s.Shots,
+                    ShootingPercentage = s.ShootingPercentage,
+                    AverageTimeOnIce = s.AverageTimeOnIce,
+                    FaceoffWinningPercentage = s.FaceoffWinningPercentage,
+                    Wins = s.Wins,
+                    Losses = s.Losses,
+                    OvertimeLosses = s.OvertimeLosses,
+                    Shutouts = s.Shutouts,
+                    Saves = s.Saves,
+                    ShotsAgainst = s.ShotsAgainst,
+                    SavePercentage = s.SavePercentage,
+                    GoalsAgainst = s.GoalsAgainst,
+                    GoalsAgainstAverage = s.GoalsAgainstAverage
+                })
+                .ToListAsync();
         }
 
         public async Task<PlayerSeasonStat?> GetPlayerSeasonStatsAsync(
-int nhlPlayerId,
-int seasonCode)
+            int nhlPlayerId,
+            int seasonCode)
         {
             var player = await _dbContext.Players
                 .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
@@ -222,9 +181,14 @@ int seasonCode)
                     s.SeasonId == season.Id);
         }
 
+        /// <summary>
+        /// Recomputes FantasyPoints and HatTricks for one player and one
+        /// season from his game logs. PlayerSeasonStat holds one row per
+        /// (PlayerId, SeasonId), so the lookup is unambiguous.
+        /// </summary>
         public async Task UpdatePlayerSeasonStatsAsync(
-int nhlPlayerId,
-int seasonCode)
+            int nhlPlayerId,
+            int seasonCode)
         {
             var player = await _dbContext.Players
                 .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
@@ -306,7 +270,7 @@ int seasonCode)
             }
 
             var nhlPlayer = await _httpClient.GetFromJsonAsync<NhlPlayerResponse>(
-    $"https://api-web.nhle.com/v1/player/{nhlPlayerId}/landing");
+                $"https://api-web.nhle.com/v1/player/{nhlPlayerId}/landing");
 
             if (nhlPlayer == null)
             {
@@ -415,8 +379,8 @@ int seasonCode)
         }
 
         public async Task SyncCareerStatsFromLandingAsync(
-Player player,
-NhlPlayerResponse nhlPlayer)
+            Player player,
+            NhlPlayerResponse nhlPlayer)
         {
             var existingStats = await _dbContext.PlayerCareerStats
                 .Where(s => s.PlayerId == player.Id)

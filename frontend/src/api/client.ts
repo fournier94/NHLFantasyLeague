@@ -71,6 +71,7 @@ export interface RosterEntry {
     rosterSlot: number;
     fantasySalary: number;
     headshotUrl: string | null;
+    twoSeasonsAgo: SeasonStatLine | null;
     lastSeason: SeasonStatLine | null;
     currentSeason: SeasonStatLine | null;
     /** Contract covering the displayed season, or null. */
