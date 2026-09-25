@@ -7,11 +7,6 @@ import type {
 import { cn } from '@/lib/utils';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 
-// Number formatting for full salaries: "7 850 000 $".
-const salaryFormatter = new Intl.NumberFormat('fr-CA', {
-    maximumFractionDigits: 0,
-});
-
 // Goalies show PJ/V/D/DP; skaters show PJ/B/A/PTS.
 const skaterColumns = ['PJ', 'B', 'A', 'PTS'];
 const goalieColumns = ['PJ', 'V', 'D', 'DP'];
@@ -143,10 +138,6 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
     // Current season first, then previous season, then two seasons ago.
     // Each entry carries the season code so we can build the label even
     // when the stat line is missing from the API.
-    //
-    // Note: the API response currently only carries currentSeason and
-    // lastSeason. The third row falls back to a label-only row until a
-    // seasonBeforeLast field is added to RosterEntryDto.
     const rows: { code: number; line: SeasonStatLine | null }[] = [
         { code: CURRENT_SEASON_CODE, line: entry.currentSeason },
         { code: PREVIOUS_SEASON_CODE, line: entry.lastSeason },

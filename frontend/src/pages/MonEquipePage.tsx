@@ -63,7 +63,7 @@ export default function MonEquipePage() {
   return (
     <section className='space-y-6'>
       <div>
-        <h2 className='text-2xl font-semibold text-foreground'>
+        <h2 className='hidden text-2xl font-semibold text-foreground md:block'>
           Mon équipe · {roster.fantasyTeamName}
         </h2>
         <p className='mt-1 text-muted-foreground'>
@@ -91,7 +91,11 @@ export default function MonEquipePage() {
       <RosterSection title='Gardiens' count={goalies.length}>
         <div className='flex justify-center'>
           {goalies.map((entry) => (
-            <PlayerCard key={entry.id} entry={entry} className='w-full md:w-1/3 md:min-w-[260px]' />
+            <PlayerCard
+              key={entry.id}
+              entry={entry}
+              className='w-full md:w-1/3 md:min-w-[260px]'
+            />
           ))}
         </div>
       </RosterSection>

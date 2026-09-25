@@ -20,7 +20,7 @@ import {
 
 // Navigation entries: French labels, one per main route.
 const NAV_ITEMS = [
-    { to: '/mon-equipe', label: 'Mon équipe', icon: Users },
+    { to: '/mon-equipe', label: 'Mon equipe', icon: Users },
     { to: '/classement', label: 'Classement', icon: Trophy },
     { to: '/stats', label: 'Stats', icon: Trophy },
     { to: '/transactions', label: 'Transactions', icon: null },
@@ -36,11 +36,14 @@ const NAV_ITEMS = [
 export function TopBar() {
     const location = useLocation();
 
+    // Current page label for the mobile top bar.
+    const currentPage = NAV_ITEMS.find((item) => item.to === location.pathname)?.label;
+
     // Controlled so a link click can close the drawer after navigating.
     const [mobileOpen, setMobileOpen] = useState(false);
 
     return (
-        <nav className='flex flex-1 flex-wrap items-center gap-x-6 gap-y-2'>
+        <nav className='relative flex flex-1 flex-wrap items-center gap-x-6 gap-y-2'>
             {/* League logo - clicking it returns to the dashboard. */}
             <Link to='/' className='flex items-center'>
                 <img
@@ -49,6 +52,13 @@ export function TopBar() {
                     className='h-10 w-auto'
                 />
             </Link>
+
+            {/* Mobile current page title. */}
+            {currentPage && (
+                <span className='mobile-page-title absolute left-1/2 -translate-x-1/2 text-3xl text-foreground md:hidden'>
+                    {currentPage}
+                </span>
+            )}
 
             {/* Desktop navigation - hidden on phones. */}
             <div className='hidden flex-1 items-center justify-around md:flex'>
@@ -59,10 +69,10 @@ export function TopBar() {
                         <Link
                             key={item.to}
                             to={item.to}
-                            className={`relative flex items-center gap-1.5 text-sm transition-colors ${isActive
+                            className={`relative flex items - center gap - 1.5 text - sm transition - colors ${isActive
                                     ? 'font-medium text-primary'
                                     : 'text-muted-foreground hover:text-foreground'
-                                }`}
+                                } `}
                         >
                             {item.icon && <item.icon className='h-4 w-4' />}
                             <span>{item.label}</span>
@@ -84,10 +94,10 @@ export function TopBar() {
                     <Link
                         to='/admin'
                         aria-label='Administration'
-                        className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/admin'
+                        className={`flex items - center gap - 1.5 text - sm transition - colors ${location.pathname === '/admin'
                                 ? 'font-medium text-primary'
                                 : 'text-muted-foreground hover:text-foreground'
-                            }`}
+                            } `}
                     >
                         <ShieldCheck className='h-4 w-4' />
                         <span>Admin</span>
@@ -97,10 +107,10 @@ export function TopBar() {
                     <Link
                         to='/messages'
                         aria-label='Messages'
-                        className={`relative transition-colors ${location.pathname === '/messages'
+                        className={`relative transition - colors ${location.pathname === '/messages'
                                 ? 'text-primary'
                                 : 'text-muted-foreground hover:text-foreground'
-                            }`}
+                            } `}
                     >
                         <MessageSquare className='h-5 w-5' />
                     </Link>
@@ -109,10 +119,10 @@ export function TopBar() {
                     <Link
                         to='/notifications'
                         aria-label='Notifications'
-                        className={`relative transition-colors ${location.pathname === '/notifications'
+                        className={`relative transition - colors ${location.pathname === '/notifications'
                                 ? 'text-primary'
                                 : 'text-muted-foreground hover:text-foreground'
-                            }`}
+                            } `}
                     >
                         <Bell className='h-5 w-5' />
                     </Link>
@@ -121,10 +131,10 @@ export function TopBar() {
                     <Link
                         to='/profil'
                         aria-label='Profil'
-                        className={`transition-colors ${location.pathname === '/profil'
+                        className={`transition - colors ${location.pathname === '/profil'
                                 ? 'text-primary'
                                 : 'text-muted-foreground hover:text-foreground'
-                            }`}
+                            } `}
                     >
                         <User className='h-5 w-5' />
                     </Link>
@@ -132,10 +142,10 @@ export function TopBar() {
                     {/* Login / Register while logged out. */}
                     <Link
                         to='/connexion'
-                        className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/connexion'
+                        className={`flex items - center gap - 1.5 text - sm transition - colors ${location.pathname === '/connexion'
                                 ? 'font-medium text-primary'
                                 : 'text-muted-foreground hover:text-foreground'
-                            }`}
+                            } `}
                     >
                         <LogIn className='h-4 w-4' />
                         <span>Connexion</span>
@@ -166,10 +176,10 @@ export function TopBar() {
                                     key={item.to}
                                     to={item.to}
                                     onClick={() => setMobileOpen(false)}
-                                    className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${isActive
+                                    className={`flex items - center gap - 2 rounded - lg px - 3 py - 2 text - sm transition - colors ${isActive
                                             ? 'bg-secondary font-medium text-primary'
                                             : 'text-foreground hover:bg-secondary'
-                                        }`}
+                                        } `}
                                 >
                                     {item.icon && <item.icon className='h-4 w-4' />}
                                     <span>{item.label}</span>

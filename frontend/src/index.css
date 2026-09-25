@@ -3,6 +3,13 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
+@font-face {
+    font-family: 'Coors Script';
+    src: url('./assets/fonts/Coors Script Regular.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -121,30 +128,67 @@
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
+    * {
+        @apply border-border outline-ring/50;
     }
-  body {
-    @apply bg-background text-foreground;
+
+    body {
+        @apply bg-background text-foreground;
     }
-  html {
-    @apply font-sans;
+
+    html {
+        @apply font-sans;
     }
 }
 
 :root,
 .dark {
-  --surface: #141A30;       /* middle layer of the 3-layer canvas: background -> surface -> card */
-  --accent-green: #39FF88;  /* positive stats / success */
-  --accent-purple: #A259FF; /* labels / category chips */
+    --surface: #141A30;
+    --accent-green: #39FF88;
+    --accent-purple: #A259FF;
+}
+
+/* Mobile page title font */
+/* Mobile page title font + neon glow */
+.mobile-page-title {
+    font-family: 'Coors Script', cursive;
+    color: #F2F5FA;
+    text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.8), 0 0 45px rgba(0, 168, 255, 0.5);
+    animation: neon-pulse 2.5s ease-in-out infinite alternate;
+}
+
+@keyframes neon-pulse {
+    from {
+        text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.7), 0 0 40px rgba(0, 168, 255, 0.4);
+    }
+
+    to {
+        text-shadow: 0 0 3px #F2F5FA, 0 0 9px #00A8FF, 0 0 18px #00A8FF, 0 0 32px rgba(0, 168, 255, 0.9), 0 0 55px rgba(0, 168, 255, 0.6);
+    }
 }
 
 /* Small helpers for the tokens Tailwind does not know about. */
-.bg-surface         { background-color: var(--surface); }
-.text-accent-purple { color: var(--accent-purple); }
-.text-accent-green  { color: var(--accent-green); }
+.bg-surface {
+    background-color: var(--surface);
+}
+
+.text-accent-purple {
+    color: var(--accent-purple);
+}
+
+.text-accent-green {
+    color: var(--accent-green);
+}
 
 /* Glow is reserved for emphasis only (active nav item, positive stat) - never on everything. */
-.glow-blue   { box-shadow: 0 0 12px rgba(0, 168, 255, 0.25); }
-.glow-green  { box-shadow: 0 0 12px rgba(57, 255, 136, 0.25); }
-.glow-purple { box-shadow: 0 0 12px rgba(162, 89, 255, 0.25); }
+.glow-blue {
+    box-shadow: 0 0 12px rgba(0, 168, 255, 0.25);
+}
+
+.glow-green {
+    box-shadow: 0 0 12px rgba(57, 255, 136, 0.25);
+}
+
+.glow-purple {
+    box-shadow: 0 0 12px rgba(162, 89, 255, 0.25);
+}
