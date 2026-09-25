@@ -19,15 +19,26 @@ namespace NhlFantasyLeague.api.Services.NHL
             _dbContext = dbContext;
         }
 
+        /// <summary>
+        /// Saves every regular-season and playoff row from the NHL API
+        /// season totals into PlayerSeasonStat, across all leagues. Rows are
+        /// unique per (PlayerId, SeasonId, LeagueAbbreviation, GameTypeId) and
+        /// a mid-season trade (several Sequence values) is summed into one row.
+        /// </summary>
         public async Task<int> SavePlayerSeasonStatsAsync(
-    Player player,
-    List<NhlSeasonTotal> seasonTotals)
+            Player player,
+            List<NhlSeasonTotal> seasonTotals)
         {
-            var nhlSeasons = seasonTotals
-                .Where(s =>
-                    s.LeagueAbbrev == "NHL" &&
-                    s.GameTypeId == 2)
+            // Regular season (2) and playoffs (3); everything else (preseason,
+            // all-star, etc.) is ignored.
+            var relevant = seasonTotals
+                .Where(s => s.GameTypeId == 2 || s.GameTypeId == 3)
                 .ToList();
+
+            if (relevant.Count == 0)
+            {
+                return 0;
+            }
 
             bool isGoalie =
                 string.Equals(
@@ -37,11 +48,22 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             var savedCount = 0;
 
-            foreach (var stats in nhlSeasons)
+            // Sum Sequence rows (mid-season trades) per (season, league, game type).
+            var grouped = relevant
+                .GroupBy(s => new
+                {
+                    s.Season,
+                    League = string.IsNullOrWhiteSpace(s.LeagueAbbrev)
+                        ? "NHL"
+                        : s.LeagueAbbrev,
+                    s.GameTypeId
+                });
+
+            foreach (var group in grouped)
             {
                 var season = await _dbContext.Seasons
                     .FirstOrDefaultAsync(s =>
-                        s.NhlSeasonCode == stats.Season);
+                        s.NhlSeasonCode == group.Key.Season);
 
                 if (season == null)
                 {
@@ -57,14 +79,12 @@ namespace NhlFantasyLeague.api.Services.NHL
                     {
                         Console.WriteLine(
                             $"[NhlStatsService] No League row exists yet; " +
-                            $"skipping season {stats.Season}. " +
-                            "Run POST /api/league/setup first.");
-
+                            $"skipping season {group.Key.Season}.");
                         continue;
                     }
 
-                    var seasonStartYear = stats.Season / 10000;
-                    var seasonEndYear = stats.Season % 10000;
+                    var seasonStartYear = group.Key.Season / 10000;
+                    var seasonEndYear = group.Key.Season % 10000;
 
                     season = new Season
                     {
@@ -73,26 +93,42 @@ namespace NhlFantasyLeague.api.Services.NHL
                         EndDate = new DateOnly(seasonEndYear, 6, 30),
                         SalaryCap = 0,
                         SalaryFloor = 0,
-                        NhlSeasonCode = stats.Season,
+                        NhlSeasonCode = group.Key.Season,
                         LeagueId = league.Id
                     };
 
                     _dbContext.Seasons.Add(season);
-
                     await _dbContext.SaveChangesAsync();
                 }
+
+                // Sum the values across the group's sequences.
+                var gamesPlayed = group.Sum(s => s.GamesPlayed);
+                var goals = group.Sum(s => s.Goals);
+                var assists = group.Sum(s => s.Assists);
 
                 // NHL seasonTotals provides a Points value for skaters.
                 // For goalies, the NHL response does not provide a Points field,
                 // so we calculate points from their goals and assists.
                 int points = isGoalie
-                    ? stats.Goals + stats.Assists
-                    : stats.Points;
+                    ? goals + assists
+                    : group.Sum(s => s.Points);
+
+                var shotsAgainst = group.Sum(s => s.ShotsAgainst);
+                var goalsAgainst = group.Sum(s => s.GoalsAgainst);
+
+                // Team name: pick the first non-empty one in the group. For a
+                // mid-season trade this shows the first team; the full split is
+                // still visible in PlayerCareerStat.
+                var teamName = group
+                    .Select(s => s.TeamName?.Default)
+                    .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
 
                 var existingStats = await _dbContext.PlayerSeasonStats
                     .FirstOrDefaultAsync(s =>
                         s.PlayerId == player.Id &&
-                        s.SeasonId == season.Id);
+                        s.SeasonId == season.Id &&
+                        s.LeagueAbbreviation == group.Key.League &&
+                        s.GameTypeId == group.Key.GameTypeId);
 
                 if (existingStats == null)
                 {
@@ -100,27 +136,30 @@ namespace NhlFantasyLeague.api.Services.NHL
                     {
                         PlayerId = player.Id,
                         SeasonId = season.Id,
-                        GamesPlayed = stats.GamesPlayed,
-                        Goals = stats.Goals,
-                        Assists = stats.Assists,
+                        LeagueAbbreviation = group.Key.League,
+                        TeamName = teamName,
+                        GameTypeId = group.Key.GameTypeId,
+                        GamesPlayed = gamesPlayed,
+                        Goals = goals,
+                        Assists = assists,
                         Points = points,
-                        PlusMinus = stats.PlusMinus,
-                        PenaltyMinutes = stats.PenaltyMinutes,
-                        PowerPlayGoals = stats.PowerPlayGoals,
-                        PowerPlayPoints = stats.PowerPlayPoints,
-                        GameWinningGoals = stats.GameWinningGoals,
-                        Shots = stats.Shots,
-                        ShootingPercentage = stats.ShootingPercentage,
-                        GoalsAgainst = stats.GoalsAgainst,
-                        Wins = stats.Wins,
-                        Losses = stats.Losses,
-                        OvertimeLosses = stats.OvertimeLosses,
-                        Shutouts = stats.Shutouts,
+                        PlusMinus = group.Sum(s => s.PlusMinus),
+                        PenaltyMinutes = group.Sum(s => s.PenaltyMinutes),
+                        PowerPlayGoals = group.Sum(s => s.PowerPlayGoals),
+                        PowerPlayPoints = group.Sum(s => s.PowerPlayPoints),
+                        GameWinningGoals = group.Sum(s => s.GameWinningGoals),
+                        Shots = group.Sum(s => s.Shots),
+                        ShootingPercentage = group.Sum(s => s.ShootingPercentage),
+                        GoalsAgainst = goalsAgainst,
+                        Wins = group.Sum(s => s.Wins),
+                        Losses = group.Sum(s => s.Losses),
+                        OvertimeLosses = group.Sum(s => s.OvertimeLosses),
+                        Shutouts = group.Sum(s => s.Shutouts),
                         HatTricks = 0,
-                        Saves = stats.ShotsAgainst - stats.GoalsAgainst,
-                        ShotsAgainst = stats.ShotsAgainst,
-                        SavePercentage = stats.SavePercentage,
-                        GoalsAgainstAverage = stats.GoalsAgainstAverage
+                        Saves = shotsAgainst - goalsAgainst,
+                        ShotsAgainst = shotsAgainst,
+                        SavePercentage = group.Sum(s => s.SavePercentage),
+                        GoalsAgainstAverage = group.Sum(s => s.GoalsAgainstAverage)
                     };
 
                     _dbContext.PlayerSeasonStats.Add(playerStats);
@@ -128,26 +167,27 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
                 else
                 {
-                    existingStats.GamesPlayed = stats.GamesPlayed;
-                    existingStats.Goals = stats.Goals;
-                    existingStats.Assists = stats.Assists;
+                    existingStats.TeamName = teamName;
+                    existingStats.GamesPlayed = gamesPlayed;
+                    existingStats.Goals = goals;
+                    existingStats.Assists = assists;
                     existingStats.Points = points;
-                    existingStats.PlusMinus = stats.PlusMinus;
-                    existingStats.PenaltyMinutes = stats.PenaltyMinutes;
-                    existingStats.PowerPlayGoals = stats.PowerPlayGoals;
-                    existingStats.PowerPlayPoints = stats.PowerPlayPoints;
-                    existingStats.GameWinningGoals = stats.GameWinningGoals;
-                    existingStats.Shots = stats.Shots;
-                    existingStats.ShootingPercentage = stats.ShootingPercentage;
-                    existingStats.GoalsAgainst = stats.GoalsAgainst;
-                    existingStats.Wins = stats.Wins;
-                    existingStats.Losses = stats.Losses;
-                    existingStats.OvertimeLosses = stats.OvertimeLosses;
-                    existingStats.Shutouts = stats.Shutouts;
-                    existingStats.Saves = stats.ShotsAgainst - stats.GoalsAgainst;
-                    existingStats.ShotsAgainst = stats.ShotsAgainst;
-                    existingStats.SavePercentage = stats.SavePercentage;
-                    existingStats.GoalsAgainstAverage = stats.GoalsAgainstAverage;
+                    existingStats.PlusMinus = group.Sum(s => s.PlusMinus);
+                    existingStats.PenaltyMinutes = group.Sum(s => s.PenaltyMinutes);
+                    existingStats.PowerPlayGoals = group.Sum(s => s.PowerPlayGoals);
+                    existingStats.PowerPlayPoints = group.Sum(s => s.PowerPlayPoints);
+                    existingStats.GameWinningGoals = group.Sum(s => s.GameWinningGoals);
+                    existingStats.Shots = group.Sum(s => s.Shots);
+                    existingStats.ShootingPercentage = group.Sum(s => s.ShootingPercentage);
+                    existingStats.GoalsAgainst = goalsAgainst;
+                    existingStats.Wins = group.Sum(s => s.Wins);
+                    existingStats.Losses = group.Sum(s => s.Losses);
+                    existingStats.OvertimeLosses = group.Sum(s => s.OvertimeLosses);
+                    existingStats.Shutouts = group.Sum(s => s.Shutouts);
+                    existingStats.Saves = shotsAgainst - goalsAgainst;
+                    existingStats.ShotsAgainst = shotsAgainst;
+                    existingStats.SavePercentage = group.Sum(s => s.SavePercentage);
+                    existingStats.GoalsAgainstAverage = group.Sum(s => s.GoalsAgainstAverage);
                 }
             }
 

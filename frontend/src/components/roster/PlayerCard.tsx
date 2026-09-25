@@ -7,7 +7,7 @@ import type {
 import { cn } from '@/lib/utils';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 
-// Number formatting for salaries: "7 850 000 $".
+// Number formatting for full salaries: "7 850 000 $".
 const salaryFormatter = new Intl.NumberFormat('fr-CA', {
     maximumFractionDigits: 0,
 });
@@ -28,15 +28,45 @@ function statValues(line: SeasonStatLine | null, isGoalie: boolean): (string | n
 }
 
 /**
- * "7 850 000 $ · 3 ans" for one contract, or null when there is no contract.
- * The singular "an" is used when only one season is left.
+ * Shortens a first name to its initial: "Cale Makar" -> "C. Makar".
+ * Falls back to just the last name when the first name is empty.
+ */
+function shortName(firstName: string, lastName: string): string {
+    const initial = firstName.trim().charAt(0);
+
+    return initial
+        ? `${initial.toUpperCase()}. ${lastName}`
+        : lastName;
+}
+
+/**
+ * Compact millions label for one contract:
+ *   4 000 000 -> "4M"
+ *   4 150 000 -> "4.15M"
+ *   950 000   -> "0.95M"
+ *   20 000 000 -> "20M"
+ * Trailing zeros and a trailing decimal point are removed.
+ * No "$" suffix.
+ */
+function compactSalary(salary: number): string {
+    const millions = salary / 1_000_000;
+
+    // Round to 2 decimals, then drop trailing zeros / trailing dot.
+    const rounded = millions.toFixed(2).replace(/\.?0+$/, '');
+
+    return `${rounded}M`;
+}
+
+/**
+ * One contract line: salary in millions, plus the number of seasons left.
+ * "7.85M · 3 ans" / "0.95M · 1 an".
  */
 function contractLabel(contract: PlayerContractLine | null): string | null {
     if (!contract) {
         return null;
     }
 
-    const salary = `${salaryFormatter.format(contract.salary)} $`;
+    const salary = compactSalary(contract.salary);
     const years =
         contract.yearsRemaining > 1
             ? `${contract.yearsRemaining} ans`
@@ -54,7 +84,18 @@ interface PlayerCardProps {
 /**
  * NHL-style player card. Tablets and up show the full card (headshot,
  * previous + current season stats, contracts); phones show a compact row
- * with the same two stat lines and the current contract.
+ * with the same two stat lines and both contracts.
+ *
+ * Stats table: six columns, each `w-1/6` so they get even space:
+ *   season label | league | PJ | B | A | PTS   (or V/D/DP for goalies)
+ *
+ * The league column has a header cell so the widths line up, but that
+ * header is empty: the league abbreviation only shows in the body rows.
+ *
+ * Contract layout:
+ *  - One contract: centered.
+ *  - Two contracts: first flush left with the stats column, second flush
+ *    right, arrow in between pointing at the second contract.
  */
 export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
     const [imageFailed, setImageFailed] = useState(false);
@@ -63,12 +104,16 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
     const lines = [entry.lastSeason, entry.currentSeason];
     const showImage = Boolean(entry.headshotUrl) && !imageFailed;
     const initials = `${entry.firstName.charAt(0)}${entry.lastName.charAt(0)}`;
+    const displayName = shortName(entry.firstName, entry.lastName);
 
-    // Salary text for the current contract, with a fallback on the cached
+    // Current contract: compact label, with a fallback on the cached
     // FantasySalary when the API did not send a contract line.
     const currentContractLabel =
         contractLabel(entry.currentContract) ??
-        `${salaryFormatter.format(entry.fantasySalary)} $`;
+        compactSalary(entry.fantasySalary);
+
+    const secondContractLabel = contractLabel(entry.secondContract);
+    const hasTwoContracts = Boolean(secondContractLabel);
 
     return (
         <article
@@ -81,7 +126,7 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
             <div className='hidden md:block'>
                 <div className='flex items-center justify-center gap-2 pl-54 pr-12'>
                     <h3 className='truncate text-center text-xl font-semibold text-foreground'>
-                        {entry.firstName} {entry.lastName}
+                        {displayName}
                     </h3>
 
                     <span className='shrink-0 text-xs uppercase tracking-wide text-muted-foreground'>
@@ -98,7 +143,7 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                     {showImage ? (
                         <img
                             src={entry.headshotUrl ?? undefined}
-                            alt={`${entry.firstName} ${entry.lastName}`}
+                            alt={displayName}
                             className='absolute left-3 top-1/2 h-38 w-38 -translate-y-1/2 rounded-md bg-white object-cover'
                             loading='lazy'
                             onError={() => setImageFailed(true)}
@@ -110,12 +155,19 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                     )}
 
                     <div className='pl-54'>
-                        <table className='relative top-[35px] w-full text-right text-xs tabular-nums'>
+                        <table className='relative top-[35px] w-full text-xs tabular-nums'>
                             <thead>
                                 <tr className='text-muted-foreground'>
-                                    <th className='text-left font-normal' />
+                                    <th className='w-1/6 px-1 text-left font-normal' />
+                                    {/* Empty header cell for the league
+                                        column: keeps the column width
+                                        aligned without a label. */}
+                                    <th className='w-1/6 px-1 text-left font-normal' />
                                     {columns.map((column) => (
-                                        <th key={column} className='pl-2 font-normal'>
+                                        <th
+                                            key={column}
+                                            className='w-1/6 px-1 text-center font-normal'
+                                        >
                                             {column}
                                         </th>
                                     ))}
@@ -125,12 +177,19 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             <tbody className='text-foreground'>
                                 {lines.map((line, index) => (
                                     <tr key={index === 0 ? 'last' : 'current'}>
-                                        <td className='text-left text-muted-foreground'>
+                                        <td className='px-1 text-left text-muted-foreground'>
                                             {line?.label ?? '—'}
                                         </td>
 
+                                        <td className='px-1 text-left text-muted-foreground'>
+                                            {line?.leagueAbbreviation ?? '—'}
+                                        </td>
+
                                         {statValues(line, isGoalie).map((value, valueIndex) => (
-                                            <td key={valueIndex} className='pl-2'>
+                                            <td
+                                                key={valueIndex}
+                                                className='px-1 text-center'
+                                            >
                                                 {value}
                                             </td>
                                         ))}
@@ -139,10 +198,33 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             </tbody>
                         </table>
 
-                        {/* Current contract only. */}
-                        <div className='mt-2 flex w-full items-center justify-center gap-3 text-xs text-muted-foreground'>
-                            <span>{currentContractLabel}</span>
-                        </div>
+                        {/*
+                          Contracts:
+                          - One contract: centered.
+                          - Two contracts: first flush left with the stats
+                            column, second flush right, arrow in between
+                            pointing at the second contract.
+                        */}
+                        {hasTwoContracts ? (
+                            <div className='relative top-[35px] mt-2 flex w-full items-center justify-between text-xs text-muted-foreground'>
+                                <span>{currentContractLabel}</span>
+
+                                <span
+                                    aria-hidden='true'
+                                    className='text-[0.7rem] opacity-80'
+                                >
+                                    →
+                                </span>
+
+                                <span className='text-[0.7rem] opacity-80'>
+                                    {secondContractLabel}
+                                </span>
+                            </div>
+                        ) : (
+                            <div className='relative top-[35px] mt-2 flex w-full items-center justify-center text-xs text-muted-foreground'>
+                                <span>{currentContractLabel}</span>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -154,7 +236,7 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                     {showImage ? (
                         <img
                             src={entry.headshotUrl ?? undefined}
-                            alt={`${entry.firstName} ${entry.lastName}`}
+                            alt={displayName}
                             className='h-full w-full object-cover'
                             loading='lazy'
                             onError={() => setImageFailed(true)}
@@ -169,9 +251,9 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                 {/* Right-side content area. */}
                 <div className='relative min-w-0 flex-1'>
                     {/* Name + position + logo. */}
-                    <div className='absolute left-0 right-0 top-[-9px] flex items-center justify-center gap-1.5'>
+                    <div className='absolute left-0 right-0 top-[-4px] flex items-center justify-center gap-1.5'>
                         <p className='truncate text-sm font-semibold text-foreground'>
-                            {entry.firstName} {entry.lastName}
+                            {displayName}
                         </p>
 
                         <span className='shrink-0 text-xs uppercase tracking-wide text-muted-foreground'>
@@ -184,14 +266,21 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                         />
                     </div>
 
-                    {/* Previous + current season stats, then current contract. */}
+                    {/* Previous + current season stats, then contracts. */}
                     <div className='pt-9'>
-                        <table className='relative top-[-5px] w-full text-right text-xs tabular-nums'>
+                        <table className='relative top-[-6px] w-full text-xs tabular-nums'>
                             <thead>
                                 <tr className='text-muted-foreground'>
-                                    <th className='text-left font-normal' />
+                                    <th className='w-1/6 px-1 text-left font-normal' />
+                                    {/* Empty header cell for the league
+                                        column: keeps the column width
+                                        aligned without a label. */}
+                                    <th className='w-1/6 px-1 text-left font-normal' />
                                     {columns.map((column) => (
-                                        <th key={column} className='pl-2 font-normal'>
+                                        <th
+                                            key={column}
+                                            className='w-1/6 px-1 text-center font-normal'
+                                        >
                                             {column}
                                         </th>
                                     ))}
@@ -201,12 +290,19 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             <tbody className='text-foreground'>
                                 {lines.map((line, index) => (
                                     <tr key={index === 0 ? 'last' : 'current'}>
-                                        <td className='text-left text-muted-foreground'>
+                                        <td className='px-1 text-left text-muted-foreground'>
                                             {line?.label ?? '—'}
                                         </td>
 
+                                        <td className='px-1 text-left text-muted-foreground'>
+                                            {line?.leagueAbbreviation ?? '—'}
+                                        </td>
+
                                         {statValues(line, isGoalie).map((value, valueIndex) => (
-                                            <td key={valueIndex} className='pl-2'>
+                                            <td
+                                                key={valueIndex}
+                                                className='px-1 text-center'
+                                            >
                                                 {value}
                                             </td>
                                         ))}
@@ -215,9 +311,27 @@ export function PlayerCard({ entry, className = '' }: PlayerCardProps) {
                             </tbody>
                         </table>
 
-                        <div className='mt-1 translate-y-[5px] flex w-full items-center justify-center gap-3 text-xs text-muted-foreground'>
-                            <span>{currentContractLabel}</span>
-                        </div>
+                        {/* Contracts: same layout rules as desktop. */}
+                        {hasTwoContracts ? (
+                            <div className='mt-1 translate-y-[3px] flex w-full items-center justify-between text-xs text-muted-foreground'>
+                                <span>{currentContractLabel}</span>
+
+                                <span
+                                    aria-hidden='true'
+                                    className='text-[0.7rem] opacity-80'
+                                >
+                                    →
+                                </span>
+
+                                <span className='text-[0.7rem] opacity-80'>
+                                    {secondContractLabel}
+                                </span>
+                            </div>
+                        ) : (
+                            <div className='mt-1 translate-y-[3px] flex w-full items-center justify-center text-xs text-muted-foreground'>
+                                <span>{currentContractLabel}</span>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

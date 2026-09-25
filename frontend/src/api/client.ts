@@ -30,6 +30,12 @@ export const getLeagueTeams = () => apiGet<FantasyTeam[]>('/League/teams');
 export interface SeasonStatLine {
     label: string;
     nhlSeasonCode: number;
+    /** League the stats were recorded in ("NHL", "AHL", "SHL", ...). */
+    leagueAbbreviation: string;
+    /** Team name, or null when unknown. */
+    teamName: string | null;
+    /** 2 = regular season, 3 = playoffs. */
+    gameTypeId: number;
     gamesPlayed: number;
     goals: number;
     assists: number;

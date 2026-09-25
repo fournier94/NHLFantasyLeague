@@ -5,6 +5,7 @@ import {
     LogIn,
     Menu,
     MessageSquare,
+    ShieldCheck,
     Trophy,
     User,
     Users,
@@ -79,6 +80,19 @@ export function TopBar() {
 
                 {/* Desktop user actions. */}
                 <div className='flex items-center gap-4'>
+                    {/* Admin */}
+                    <Link
+                        to='/admin'
+                        aria-label='Administration'
+                        className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/admin'
+                                ? 'font-medium text-primary'
+                                : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                    >
+                        <ShieldCheck className='h-4 w-4' />
+                        <span>Admin</span>
+                    </Link>
+
                     {/* Messages */}
                     <Link
                         to='/messages'

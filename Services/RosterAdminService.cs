@@ -379,8 +379,6 @@ namespace NhlFantasyLeague.api.Services
                     e.SeasonId == season.Id)
                 .ToListAsync();
 
-            // Ordering happens in memory: a team roster is small and this
-            // keeps the ordering by enum values, not by the stored text.
             var orderedEntries = entries
                 .OrderBy(e => e.RosterStatus)
                 .ThenBy(e => e.RosterSlot)
@@ -409,21 +407,34 @@ namespace NhlFantasyLeague.api.Services
 
             if (cardSeasonIds.Count > 0 && playerIds.Count > 0)
             {
+                // Only regular season rows (GameTypeId == 2) feed the card.
+                // Several leagues can exist per season (NHL + AHL, etc.); we
+                // pick the NHL row when present, otherwise the one with the most
+                // games played. The card therefore shows the most relevant line.
                 var stats = await _dbContext.PlayerSeasonStats
                     .Where(s =>
                         cardSeasonIds.Contains(s.SeasonId) &&
-                        playerIds.Contains(s.PlayerId))
+                        playerIds.Contains(s.PlayerId) &&
+                        s.GameTypeId == 2)
                     .ToListAsync();
 
-                foreach (var stat in stats)
+                var byPlayerAndSeason = stats
+                    .GroupBy(s => new { s.PlayerId, s.SeasonId });
+
+                foreach (var group in byPlayerAndSeason)
                 {
-                    if (previousSeason != null && stat.SeasonId == previousSeason.Id)
+                    var chosen = group
+                        .OrderByDescending(s => s.LeagueAbbreviation == "NHL")
+                        .ThenByDescending(s => s.GamesPlayed)
+                        .First();
+
+                    if (previousSeason != null && group.Key.SeasonId == previousSeason.Id)
                     {
-                        lastStatsByPlayerId[stat.PlayerId] = stat;
+                        lastStatsByPlayerId[group.Key.PlayerId] = chosen;
                     }
-                    else if (currentSeason != null && stat.SeasonId == currentSeason.Id)
+                    else if (currentSeason != null && group.Key.SeasonId == currentSeason.Id)
                     {
-                        currentStatsByPlayerId[stat.PlayerId] = stat;
+                        currentStatsByPlayerId[group.Key.PlayerId] = chosen;
                     }
                 }
             }
@@ -684,8 +695,8 @@ namespace NhlFantasyLeague.api.Services
         /// <param name="season">Season of the stats row, or null when not found.</param>
         /// <param name="stat">Stats row, or null when not found.</param>
         private static SeasonStatLineDto? ToSeasonStatLineDto(
-            Season? season,
-            PlayerSeasonStat? stat)
+    Season? season,
+    PlayerSeasonStat? stat)
         {
             if (season == null || stat == null)
             {
@@ -700,6 +711,9 @@ namespace NhlFantasyLeague.api.Services
                     ? $"{season.NhlSeasonCode / 10000}-{season.NhlSeasonCode % 100:D2}"
                     : season.Name,
                 NhlSeasonCode = season.NhlSeasonCode,
+                LeagueAbbreviation = stat.LeagueAbbreviation,
+                TeamName = stat.TeamName,
+                GameTypeId = stat.GameTypeId,
                 GamesPlayed = stat.GamesPlayed,
                 Goals = stat.Goals,
                 Assists = stat.Assists,
@@ -709,6 +723,7 @@ namespace NhlFantasyLeague.api.Services
                 OvertimeLosses = stat.OvertimeLosses
             };
         }
+
 
         /// <summary>
         /// Computes the fantasy salary of a player from his contracts: 0 $ when

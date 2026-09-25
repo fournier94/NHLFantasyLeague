@@ -70,7 +70,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("CapFreezeName", "PlayerId");
 
-                    b.ToTable("CapFreezePlayerReviews");
+                    b.ToTable("CapFreezePlayerReviews", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Draft", b =>
@@ -94,7 +94,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("SeasonId");
 
-                    b.ToTable("Drafts");
+                    b.ToTable("Drafts", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.DraftPick", b =>
@@ -129,7 +129,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("DraftId", "Round", "PickNumber")
                         .IsUnique();
 
-                    b.ToTable("DraftPicks");
+                    b.ToTable("DraftPicks", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.DraftSelection", b =>
@@ -161,7 +161,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("PlayerId");
 
-                    b.ToTable("DraftSelections");
+                    b.ToTable("DraftSelections", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.FantasyMatchup", b =>
@@ -213,7 +213,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("SeasonId", "WeekNumber", "HomeFantasyTeamId")
                         .IsUnique();
 
-                    b.ToTable("FantasyMatchups");
+                    b.ToTable("FantasyMatchups", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.FantasyTeam", b =>
@@ -236,7 +236,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("LeagueId", "Name")
                         .IsUnique();
 
-                    b.ToTable("FantasyTeams");
+                    b.ToTable("FantasyTeams", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.FantasyTeamSeason", b =>
@@ -263,7 +263,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("FantasyTeamId", "SeasonId")
                         .IsUnique();
 
-                    b.ToTable("FantasyTeamSeasons");
+                    b.ToTable("FantasyTeamSeasons", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.KeeperSelection", b =>
@@ -295,7 +295,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("SeasonId", "FantasyTeamId", "PlayerId")
                         .IsUnique();
 
-                    b.ToTable("KeeperSelections");
+                    b.ToTable("KeeperSelections", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.League", b =>
@@ -339,7 +339,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Leagues");
+                    b.ToTable("Leagues", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.NhlTeam", b =>
@@ -369,7 +369,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("NhlTeamId")
                         .IsUnique();
 
-                    b.ToTable("NhlTeams");
+                    b.ToTable("NhlTeams", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Player", b =>
@@ -448,7 +448,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("NhlTeamId");
 
-                    b.ToTable("Players");
+                    b.ToTable("Players", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerCareerStat", b =>
@@ -561,7 +561,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("PlayerId", "Season", "GameTypeId", "Sequence")
                         .IsUnique();
 
-                    b.ToTable("PlayerCareerStats");
+                    b.ToTable("PlayerCareerStats", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerContract", b =>
@@ -590,7 +590,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("PlayerId", "StartSeason")
                         .IsUnique();
 
-                    b.ToTable("PlayerContracts");
+                    b.ToTable("PlayerContracts", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerGameLog", b =>
@@ -663,7 +663,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("PlayerId", "NhlGameId")
                         .IsUnique();
 
-                    b.ToTable("PlayerGameLogs");
+                    b.ToTable("PlayerGameLogs", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.PlayerSeasonStat", b =>
@@ -753,7 +753,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("SeasonId", "PlayerId")
                         .IsUnique();
 
-                    b.ToTable("PlayerSeasonStats");
+                    b.ToTable("PlayerSeasonStats", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.RosterEntry", b =>
@@ -792,7 +792,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("SeasonId", "FantasyTeamId", "PlayerId")
                         .IsUnique();
 
-                    b.ToTable("RosterEntries");
+                    b.ToTable("RosterEntries", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Season", b =>
@@ -833,7 +833,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("LeagueId", "Name")
                         .IsUnique();
 
-                    b.ToTable("Seasons");
+                    b.ToTable("Seasons", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.SeasonStanding", b =>
@@ -869,7 +869,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("SeasonId", "FantasyTeamId")
                         .IsUnique();
 
-                    b.ToTable("SeasonStandings");
+                    b.ToTable("SeasonStandings", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Trade", b =>
@@ -906,7 +906,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("ToFantasyTeamId");
 
-                    b.ToTable("Trades");
+                    b.ToTable("Trades", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeItem", b =>
@@ -945,7 +945,7 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.HasIndex("TradeId");
 
-                    b.ToTable("TradeItems");
+                    b.ToTable("TradeItems", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.WeeklyFantasyScore", b =>
@@ -996,7 +996,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("SeasonId", "PlayerId", "WeekNumber")
                         .IsUnique();
 
-                    b.ToTable("WeeklyFantasyScores");
+                    b.ToTable("WeeklyFantasyScores", (string)null);
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.CapFreeze.CapFreezePlayerReview", b =>

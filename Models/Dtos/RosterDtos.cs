@@ -144,33 +144,38 @@
     /// goalie fields are both present; the frontend displays the ones matching
     /// the player's position.
     /// </summary>
+    /// <summary>
+    /// One season line shown on a player card. LeagueAbbreviation tells
+    /// which league the stats are from (NHL, AHL, SHL, ...).
+    /// </summary>
     public class SeasonStatLineDto
     {
-        /// <summary>Season name for display, for example "2025-26".</summary>
+        /// <summary>Human-readable season name, e.g. "2025-26".</summary>
         public string Label { get; set; } = string.Empty;
 
-        /// <summary>NHL season code, for example 20252026.</summary>
         public int NhlSeasonCode { get; set; }
 
-        /// <summary>Games played (skaters and goalies).</summary>
+        /// <summary>League the stats were recorded in ("NHL", "AHL", ...).</summary>
+        public string LeagueAbbreviation { get; set; } = string.Empty;
+
+        /// <summary>Team name, or null when unknown.</summary>
+        public string? TeamName { get; set; }
+
+        /// <summary>2 = regular season, 3 = playoffs.</summary>
+        public int GameTypeId { get; set; }
+
         public int GamesPlayed { get; set; }
 
-        /// <summary>Goals scored (skaters).</summary>
         public int Goals { get; set; }
 
-        /// <summary>Assists (skaters).</summary>
         public int Assists { get; set; }
 
-        /// <summary>Points (skaters).</summary>
         public int Points { get; set; }
 
-        /// <summary>Wins (goalies).</summary>
         public int Wins { get; set; }
 
-        /// <summary>Losses (goalies).</summary>
         public int Losses { get; set; }
 
-        /// <summary>Overtime losses (goalies). The modern NHL has no ties.</summary>
         public int OvertimeLosses { get; set; }
     }
 
