@@ -64,6 +64,8 @@ export interface SeasonCap {
     label: string;
     /** Sum of the Active + Bench players' salaries for this season, in dollars. */
     capSalary: number;
+    /** Salary cap that applies to this season, in dollars. */
+    salaryCap: number;
     /** Number of Active + Bench players with a contract covering this season. */
     signedPlayers: number;
 }
@@ -97,6 +99,10 @@ export interface TeamRoster {
     fantasyTeamName: string;
     seasonId: number;
     seasonName: string;
+    /** Maximum number of players per fantasy team (active + bench + prospects). */
+    leagueMaximumRosterSize: number;
+    /** Number of prospects per fantasy team. */
+    leagueProspectCount: number;
     totalPlayers: number;
     activeCount: number;
     benchCount: number;

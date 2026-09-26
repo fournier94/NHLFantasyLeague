@@ -7,12 +7,45 @@ import { RosterSection } from '@/components/roster/RosterSection';
 // authentication exists. Team 5 is farn.
 const TEMPORARY_TEAM_ID = 5;
 
-// Salary display in the header, e.g. "118 500 000 $".
-const salaryFormatter = new Intl.NumberFormat('fr-CA', { maximumFractionDigits: 0 });
-
 /** Returns true when the entry belongs to the active lineup. */
 function isActive(entry: RosterEntry): boolean {
     return entry.rosterStatus === 'Active';
+}
+
+/**
+ * Percentage of the cap used, clamped to [0, 100]. Used to size the
+ * filled bar and to pick the track color.
+ */
+function capPercentage(capSalary: number, salaryCap: number): number {
+    if (salaryCap <= 0) return 0;
+    const pct = (capSalary / salaryCap) * 100;
+    return Math.max(0, Math.min(100, pct));
+}
+
+/**
+ * Track color, based on the percentage of cap used:
+ *   > 90%    -> neon red
+ *   75-90%   -> neon yellow
+ *   < 75%    -> neon green
+ */
+function trackColorClass(pct: number): string {
+    if (pct > 90) return 'bg-rose-500';
+    if (pct >= 75) return 'bg-yellow-300';
+    return 'bg-lime-400';
+}
+
+/**
+ * Compact millions label for a dollar amount:
+ *   4 000 000  -> "4M"
+ *   4 150 000  -> "4.15M"
+ *   950 000    -> "0.95M"
+ *   24 900 000 -> "24.9M"
+ * Trailing zeros and a trailing decimal point are removed.
+ */
+function compactMillions(value: number): string {
+    const millions = value / 1_000_000;
+    const rounded = millions.toFixed(2).replace(/\.?0+$/, '');
+    return `${rounded}M`;
 }
 
 export default function MonEquipePage() {
@@ -60,49 +93,64 @@ export default function MonEquipePage() {
     const bench = roster.entries.filter((entry) => entry.rosterStatus === 'Bench');
     const prospects = roster.entries.filter((entry) => entry.rosterStatus === 'Prospect');
 
+    // Max signed players = total roster size minus the prospect slots.
+    const maxSignedPlayers =
+        roster.leagueMaximumRosterSize - roster.leagueProspectCount;
+
     return (
-        <section className='space-y-6'>
+        <section className='space-y-4'>
             <div>
                 <h2 className='hidden text-2xl font-semibold text-foreground md:block'>
                     Mon équipe · {roster.fantasyTeamName}
                 </h2>
-                <p className='mt-1 text-muted-foreground'>
-                    {roster.seasonName} · {roster.totalPlayers} joueurs ·{' '}
-                    {salaryFormatter.format(roster.capSalary)} $
-                </p>
             </div>
 
             {/* Cap projection: current season + next four, based on the
-          contracts already in the system. */}
+          contracts already in the system. Sits directly on the page
+          background, no wrapper card. */}
             {roster.futureCapBySeason.length > 0 && (
-                <div className='rounded-lg border border-border bg-card p-3'>
-                    <h3 className='text-sm font-semibold text-foreground'>
-                        Masse salariale projetée
-                    </h3>
-                    <p className='mt-0.5 text-xs text-muted-foreground'>
-                        Basée sur les contrats actuels · joueurs actifs et réservistes
-                    </p>
+                <div className='-mt-4 space-y-2'>
+                    {roster.futureCapBySeason.map((row) => {
+                        const pct = capPercentage(row.capSalary, row.salaryCap);
+                        const available = Math.max(0, row.salaryCap - row.capSalary);
 
-                    <table className='mt-2 w-full text-xs tabular-nums'>
-                        <thead>
-                            <tr className='text-muted-foreground'>
-                                <th className='text-left font-normal'>Saison</th>
-                                <th className='text-right font-normal'>Joueurs signés</th>
-                                <th className='text-right font-normal'>Masse salariale</th>
-                            </tr>
-                        </thead>
-                        <tbody className='text-foreground'>
-                            {roster.futureCapBySeason.map((row) => (
-                                <tr key={row.nhlSeasonCode}>
-                                    <td className='text-left'>{row.label}</td>
-                                    <td className='text-right'>{row.signedPlayers}</td>
-                                    <td className='text-right'>
-                                        {salaryFormatter.format(row.capSalary)} $
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                        return (
+                            <div key={row.nhlSeasonCode}>
+                                {/* Year on the left, bar on the right. */}
+                                <div className='flex items-center gap-3'>
+                                    <span className='w-12 shrink-0 text-xs font-medium text-foreground'>
+                                        {row.label}
+                                    </span>
+
+                                    <div
+                                        className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} shadow-[0_0_8px_rgba(0,168,255,1),0_0_20px_rgba(0,168,255,0.85),0_0_36px_rgba(0,168,255,0.55)]`}
+                                    >
+                                        <div
+                                            className='h-full rounded bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,1),0_0_18px_rgba(34,211,238,0.8)] transition-[width]'
+                                            style={{ width: `${pct}%` }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Labels under the bar: signed on the left,
+                    available cap on the right. The left padding matches
+                    the year column so the labels line up under the bar. */}
+                                <div className='mt-1 flex items-center justify-between pl-15 text-xs text-white'>
+                                    <span>
+                                        {maxSignedPlayers > 0
+                                            ? `${row.signedPlayers}/${maxSignedPlayers} sous contrats`
+                                            : `${row.signedPlayers} sous contrats`}
+                                    </span>
+
+                                    <span>
+                                        {available > 0
+                                            ? `${compactMillions(available)} $ disponible`
+                                            : '0 $ disponible'}
+                                    </span>
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
 

@@ -319,6 +319,7 @@ namespace NhlFantasyLeague.api.Services
         public async Task<TeamRosterDto?> GetTeamRosterAsync(int fantasyTeamId, int? seasonId)
         {
             var team = await _dbContext.FantasyTeams
+                .Include(t => t.League)
                 .FirstOrDefaultAsync(t => t.Id == fantasyTeamId);
 
             if (team == null)
@@ -377,6 +378,10 @@ namespace NhlFantasyLeague.api.Services
                     .ToListAsync();
             }
 
+            // Step 1: sum Sequence rows (mid-season trades) into one line
+            // per (player, season, league). Goalie fields are summed too,
+            // so a goalie who was traded mid-season gets combined wins,
+            // losses and overtime losses.
             var leagueLines = careerRows
                 .GroupBy(s => new
                 {
@@ -399,6 +404,8 @@ namespace NhlFantasyLeague.api.Services
                 })
                 .ToList();
 
+            // Step 2: pick one line per (player, season): NHL first, then
+            // most games played. This is what the card shows.
             var chosenLines = leagueLines
                 .GroupBy(l => new { l.PlayerId, l.Season })
                 .Select(g => g
@@ -472,11 +479,22 @@ namespace NhlFantasyLeague.api.Services
                 .Where(e => e.RosterStatus != RosterStatus.Prospect)
                 .ToList();
 
+            var projectedSeasonCodes = Enumerable
+                .Range(0, FutureCapSeasonCount)
+                .Select(i => AddSeasons(CurrentSeasonNhlCode, i))
+                .ToList();
+
+            var capBySeasonCode = await _dbContext.Seasons
+                .Where(s => projectedSeasonCodes.Contains(s.NhlSeasonCode))
+                .ToDictionaryAsync(s => s.NhlSeasonCode, s => s.SalaryCap);
+
+            var fallbackCap = season.SalaryCap;
+
             var futureCapBySeason = new List<SeasonCapDto>();
 
             for (int i = 0; i < FutureCapSeasonCount; i++)
             {
-                var seasonCode = AddSeasons(CurrentSeasonNhlCode, i);
+                var seasonCode = projectedSeasonCodes[i];
 
                 decimal seasonSalary = 0m;
                 int signedPlayers = 0;
@@ -495,11 +513,16 @@ namespace NhlFantasyLeague.api.Services
                     }
                 }
 
+                var cap = capBySeasonCode.TryGetValue(seasonCode, out var storedCap) && storedCap > 0m
+                    ? storedCap
+                    : fallbackCap;
+
                 futureCapBySeason.Add(new SeasonCapDto
                 {
                     NhlSeasonCode = seasonCode,
                     Label = ShortSeasonLabel(seasonCode),
                     CapSalary = seasonSalary,
+                    SalaryCap = cap,
                     SignedPlayers = signedPlayers
                 });
             }
@@ -510,6 +533,8 @@ namespace NhlFantasyLeague.api.Services
                 FantasyTeamName = team.Name,
                 SeasonId = season.Id,
                 SeasonName = season.Name,
+                LeagueMaximumRosterSize = team.League?.MaximumRosterSize ?? 0,
+                LeagueProspectCount = team.League?.ProspectCount ?? 0,
                 TotalPlayers = entries.Count,
                 ActiveCount = entries.Count(e => e.RosterStatus == RosterStatus.Active),
                 BenchCount = entries.Count(e => e.RosterStatus == RosterStatus.Bench),
@@ -684,6 +709,12 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
+        /// <summary>
+        /// Builds a player-card stat line from a season and one aggregated
+        /// card line. Goalie fields (Wins, Losses, OvertimeLosses) are
+        /// carried through for goalies; they stay 0 for skaters, whose
+        /// lines only use GamesPlayed / Goals / Assists / Points.
+        /// </summary>
         private static SeasonStatLineDto? ToSeasonStatLineDto(
             Season? season,
             CardStatLine? line)
@@ -842,6 +873,12 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
+        /// <summary>
+        /// One card line after sequences have been summed: one row per
+        /// (player, season, league), already aggregated. Carries both the
+        /// skater fields and the goalie fields; the card only displays the
+        /// ones matching the player's position.
+        /// </summary>
         private sealed class CardStatLine
         {
             public int PlayerId { get; set; }

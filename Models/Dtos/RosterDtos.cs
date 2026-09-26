@@ -197,6 +197,12 @@
         /// <summary>Sum of the Active + Bench players' salaries for this season, in dollars.</summary>
         public decimal CapSalary { get; set; }
 
+        /// <summary>
+        /// Salary cap that applies to this season, in dollars. Used by the
+        /// frontend to compute the progress bar percentage.
+        /// </summary>
+        public decimal SalaryCap { get; set; }
+
         /// <summary>Number of Active + Bench players with a contract covering this season.</summary>
         public int SignedPlayers { get; set; }
     }
@@ -217,6 +223,12 @@
 
         /// <summary>Name of the season, for example "2026-2027".</summary>
         public string SeasonName { get; set; } = string.Empty;
+
+        /// <summary>Maximum number of players per fantasy team (active + bench + prospects).</summary>
+        public int LeagueMaximumRosterSize { get; set; }
+
+        /// <summary>Number of prospects per fantasy team. Subtracted from LeagueMaximumRosterSize to get the maximum number of signed (Active + Bench) players.</summary>
+        public int LeagueProspectCount { get; set; }
 
         /// <summary>Number of players on the roster.</summary>
         public int TotalPlayers { get; set; }
