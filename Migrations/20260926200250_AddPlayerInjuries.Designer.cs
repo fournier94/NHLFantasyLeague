@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NhlFantasyLeague.api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NhlFantasyLeague.api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260926200250_AddPlayerInjuries")]
+    partial class AddPlayerInjuries
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -414,13 +417,7 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<string>("HeroImageUrl")
                         .HasColumnType("text");
 
-                    b.Property<int>("InjuryKind")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("InjuryLongDescription")
-                        .HasColumnType("text");
-
-                    b.Property<string>("InjuryShortDescription")
+                    b.Property<string>("InjuryDescription")
                         .HasColumnType("text");
 
                     b.Property<string>("InjuryStatus")

@@ -84,6 +84,11 @@ export interface RosterEntry {
     rosterSlot: number;
     fantasySalary: number;
     headshotUrl: string | null;
+    isInjured: boolean;
+    injuryStatus: string | null;
+    injuryKind: 'None' | 'Injury' | 'Suspension';
+    injuryShortDescription: string | null;
+    injuryLongDescription: string | null;
     twoSeasonsAgo: SeasonStatLine | null;
     lastSeason: SeasonStatLine | null;
     currentSeason: SeasonStatLine | null;
@@ -139,6 +144,11 @@ export interface PlayerSearchResult {
     rosterEntryId?: number | null;
     /** "Active", "Bench" or "Prospect" for the current season, or null when free agent. */
     rosterStatus?: string | null;
+    isInjured?: boolean;
+    injuryStatus?: string | null;
+    injuryKind?: 'None' | 'Injury' | 'Suspension';
+    injuryShortDescription?: string | null;
+    injuryLongDescription?: string | null;
 }
 
 /** Request body of POST /api/Roster/assign (the salary is derived server-side). */

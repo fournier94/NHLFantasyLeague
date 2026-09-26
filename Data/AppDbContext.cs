@@ -32,6 +32,7 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<PlayerCareerStat> PlayerCareerStats { get; set; }
         public DbSet<PlayerContract> PlayerContracts { get; set; }
         public DbSet<CapFreezePlayerReview> CapFreezePlayerReviews { get; set; }
+        public DbSet<PlayerInjuryHistory> PlayerInjuryHistories { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -191,6 +192,25 @@ namespace NhlFantasyLeague.api.Data
                 .WithMany()
                 .HasForeignKey(s => s.PlayerId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<PlayerInjuryHistory>()
+                .HasOne(h => h.Player)
+                .WithMany()
+                .HasForeignKey(h => h.PlayerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // One open spell per (player, status, team). Filtered index:
+            // only rows with ResolvedAt IS NULL count, so an open spell
+            // and its resolved predecessor never collide.
+            modelBuilder.Entity<PlayerInjuryHistory>()
+                .HasIndex(h => new
+                {
+                    h.PlayerId,
+                    h.InjuryStatus,
+                    h.TeamAbbreviation
+                })
+                .HasFilter("\"ResolvedAt\" IS NULL")
+                .IsUnique();
 
             modelBuilder.Entity<PlayerContract>()
                 .HasOne(c => c.Player)

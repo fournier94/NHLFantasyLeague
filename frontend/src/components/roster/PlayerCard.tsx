@@ -16,6 +16,7 @@ import {
     isAuraOff,
 } from '@/lib/auraConfig';
 
+// Goalies show PJ/V/D/DP; skaters show PJ/B/A/PTS.
 const skaterColumns = ['PJ', 'B', 'A', 'PTS'];
 const goalieColumns = ['PJ', 'V', 'D', 'DP'];
 
@@ -76,6 +77,53 @@ function contractLabel(
             : '1 an';
 
     return `${salary} · ${years}`;
+}
+
+/**
+ * Renders the injury or suspension icon, or null when the player is
+ * not injured.
+ *
+ * Injury     -> red cross
+ * Suspension -> amber cross
+ * None       -> nothing rendered
+ */
+function InjuryBadge({
+    isInjured,
+    injuryKind,
+    shortDescription,
+    size = 16,
+}: {
+    isInjured: boolean;
+    injuryKind: string;
+    shortDescription: string | null;
+    size?: number;
+}) {
+    if (!isInjured) return null;
+
+    const isSuspension = injuryKind === 'Suspension';
+    const crossColor = isSuspension ? '#fbbf24' : '#ef4444';
+    const label = isSuspension ? 'Suspension' : 'Blessé';
+
+    return (
+        <span
+            title={shortDescription ?? label}
+            aria-label={label}
+            className='inline-flex shrink-0 items-center justify-center'
+            style={{ width: size, height: size }}
+        >
+            <svg
+                viewBox='0 0 24 24'
+                width={size}
+                height={size}
+                xmlns='http://www.w3.org/2000/svg'
+            >
+                {/* Vertical bar */}
+                <rect x='9' y='3' width='6' height='18' fill={crossColor} />
+                {/* Horizontal bar */}
+                <rect x='3' y='9' width='18' height='6' fill={crossColor} />
+            </svg>
+        </span>
+    );
 }
 
 interface PlayerCardProps {
@@ -168,10 +216,6 @@ export function PlayerCard({
         : undefined;
 
     // --- Name aura (team color) -----------------------------------------
-    // Drives both the player name and the position label. The position
-    // gets slightly smaller sizes (about 40% of the name's) so it does
-    // not overpower its small font size, but the same intensity slider
-    // controls both.
     const nameRest = [
         `0 0 ${auraRangeFor(nameAura, 'playerCardName', 0).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x66, 0xCC)}`,
         `0 0 ${auraRangeFor(nameAura, 'playerCardName', 1).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x33, 0xAA)}`,
@@ -257,7 +301,7 @@ export function PlayerCard({
             )}
 
             <div className='relative z-10 hidden md:block'>
-                <div className='flex items-center justify-center gap-2 pl-54 pr-12'>
+                <div className='relative flex items-center justify-center gap-2 pl-54 pr-12'>
                     <h3
                         className={`truncate text-center text-xl font-semibold text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
                         style={
@@ -291,6 +335,16 @@ export function PlayerCard({
                         <NhlTeamLogo
                             abbreviation={entry.nhlTeamAbbreviation}
                             size={24}
+                        />
+                    </div>
+
+                    {/* Pinned to the right edge of the header row. */}
+                    <div className='absolute right-0 top-1/2 -translate-y-1/2'>
+                        <InjuryBadge
+                            isInjured={entry.isInjured}
+                            injuryKind={entry.injuryKind}
+                            shortDescription={entry.injuryShortDescription}
+                            size={18}
                         />
                     </div>
                 </div>
@@ -473,7 +527,7 @@ export function PlayerCard({
                 </div>
 
                 <div className='relative min-w-0 flex-1'>
-                    <div className='absolute left-0 right-0 top-[-4px] flex items-center justify-center gap-1.5'>
+                    <div className='absolute left-0 right-0 top-[-2px] flex items-center justify-center gap-1.5'>
                         <p
                             className={`truncate text-sm font-semibold text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
                             style={
@@ -507,6 +561,16 @@ export function PlayerCard({
                             <NhlTeamLogo
                                 abbreviation={entry.nhlTeamAbbreviation}
                                 size={18}
+                            />
+                        </div>
+
+                        {/* Pinned to the right edge of the mobile header. */}
+                        <div className='absolute right-0 top-1/2 -translate-y-1/2'>
+                            <InjuryBadge
+                                isInjured={entry.isInjured}
+                                injuryKind={entry.injuryKind}
+                                shortDescription={entry.injuryShortDescription}
+                                size={14}
                             />
                         </div>
                     </div>

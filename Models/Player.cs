@@ -41,6 +41,42 @@ namespace NhlFantasyLeague.api.Models
 
         public string? HeroImageUrl { get; set; }
 
+        /// <summary>
+        /// True when ESPN currently lists this player as injured or
+        /// suspended. Cleared on every successful refresh, then re-set
+        /// for the players ESPN still reports.
+        /// </summary>
+        public bool IsInjured { get; set; }
+
+        /// <summary>
+        /// Raw ESPN status string ("Out", "Day-To-Day", "Injured Reserve",
+        /// "Suspension"), or null when not injured.
+        /// </summary>
+        public string? InjuryStatus { get; set; }
+
+        /// <summary>
+        /// Normalized classification of InjuryStatus, used by the frontend
+        /// to pick between the injury icon and the suspension icon.
+        /// </summary>
+        public InjuryKind InjuryKind { get; set; } = InjuryKind.None;
+
+        /// <summary>
+        /// Short one-line note from ESPN, used almost everywhere.
+        /// </summary>
+        public string? InjuryShortDescription { get; set; }
+
+        /// <summary>
+        /// Long analyst note from ESPN, used on the injuries page and the
+        /// player page only.
+        /// </summary>
+        public string? InjuryLongDescription { get; set; }
+
+        /// <summary>
+        /// UTC timestamp of the last refresh that touched this player's
+        /// injury fields, whether it set them or cleared them.
+        /// </summary>
+        public DateTime? InjuryUpdatedAt { get; set; }
+
         public PlayerStatus Status { get; set; } = PlayerStatus.Unsigned;
 
         public ICollection<PlayerContract> Contracts { get; set; }

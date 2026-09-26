@@ -1,0 +1,766 @@
+﻿using Microsoft.EntityFrameworkCore;
+using NhlFantasyLeague.api.Data;
+using NhlFantasyLeague.api.Models;
+using NhlFantasyLeague.api.Models.NHL;
+using System.Globalization;
+using System.Net.Http;
+using System.Text;
+
+namespace NhlFantasyLeague.api.Services.NHL
+{
+    public class NhlInjuryService
+    {
+        private readonly HttpClient _httpClient;
+        private readonly AppDbContext _dbContext;
+        private readonly ILogger<NhlInjuryService> _logger;
+
+        private const string EspnInjuriesUrl =
+            "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries";
+
+        private const double AutoAcceptLast = 0.97;
+        private const double AutoAcceptFirst = 0.92;
+        private const double MinLeadOverRunnerUp = 0.05;
+
+        public NhlInjuryService(
+            HttpClient httpClient,
+            AppDbContext dbContext,
+            ILogger<NhlInjuryService> logger)
+        {
+            _httpClient = httpClient;
+            _dbContext = dbContext;
+            _logger = logger;
+        }
+
+        public async Task<NhlInjurySyncResult> RefreshAsync(
+            CancellationToken ct = default)
+        {
+            var now = DateTime.UtcNow;
+
+            // --- Fetch ----------------------------------------------------
+            NhlInjuryResponse? payload;
+
+            try
+            {
+                payload = await _httpClient.GetFromJsonAsync<NhlInjuryResponse>(
+                    EspnInjuriesUrl, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    "ESPN injuries fetch failed: {Type}: {Message}",
+                    ex.GetType().Name, ex.Message);
+
+                return new NhlInjurySyncResult
+                {
+                    Success = false,
+                    Message = "ESPN fetch failed. Existing injury data was left untouched."
+                };
+            }
+
+            if (payload == null || payload.Teams.Count == 0)
+            {
+                _logger.LogWarning("ESPN injuries payload was empty.");
+                return new NhlInjurySyncResult
+                {
+                    Success = false,
+                    Message = "ESPN returned no injuries. Existing data left untouched."
+                };
+            }
+
+            // --- Team abbreviation lookup ---------------------------------
+            var teamRows = await _dbContext.NhlTeams
+                .Where(t =>
+                    t.Abbreviation != null &&
+                    t.Abbreviation != "")
+                .Select(t => new { t.Abbreviation, t.NhlTeamId })
+                .ToListAsync(ct);
+
+            var teamByAbbrev = teamRows
+                .GroupBy(t => t.Abbreviation.ToLowerInvariant())
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.First().NhlTeamId);
+
+            // --- Load every player once, indexed by NHL team --------------
+            var allPlayers = await _dbContext.Players
+                .Where(p =>
+                    !string.IsNullOrWhiteSpace(p.FirstName) &&
+                    !string.IsNullOrWhiteSpace(p.LastName))
+                .ToListAsync(ct);
+
+            var playersByTeam = allPlayers
+                .Where(p => p.NhlTeamId != null)
+                .GroupBy(p => p.NhlTeamId!.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var playersByPrevTeam = allPlayers
+                .Where(p => p.PreviousNhlTeamId != null)
+                .GroupBy(p => p.PreviousNhlTeamId!.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            // --- Clear current injury fields ------------------------------
+            var previouslyInjured = allPlayers
+                .Where(p => p.IsInjured)
+                .ToList();
+
+            foreach (var p in allPlayers)
+            {
+                p.IsInjured = false;
+                p.InjuryStatus = null;
+                p.InjuryKind = InjuryKind.None;
+                p.InjuryShortDescription = null;
+                p.InjuryLongDescription = null;
+                p.InjuryUpdatedAt = now;
+            }
+
+            // --- Match + apply --------------------------------------------
+            var matched = 0;
+            var unmatched = 0;
+            var unmatchedNames = new List<string>();
+
+            foreach (var team in payload.Teams)
+            {
+                var teamId = await ResolveTeamIdAsync(
+                    team, teamByAbbrev, ct);
+
+                if (teamId == null)
+                {
+                    _logger.LogWarning(
+                        "ESPN team '{Name}' could not be mapped to an NHL team.",
+                        team.DisplayName);
+
+                    unmatched += team.Players.Count;
+
+                    foreach (var p in team.Players)
+                    {
+                        var n = p.Athlete?.DisplayName ?? "(unknown)";
+                        unmatchedNames.Add(
+                            $"{n} — team '{team.DisplayName}' not mapped");
+                    }
+
+                    continue;
+                }
+
+                var candidates = new List<Player>();
+
+                if (playersByTeam.TryGetValue(teamId.Value, out var current))
+                    candidates.AddRange(current);
+
+                if (playersByPrevTeam.TryGetValue(teamId.Value, out var previous))
+                    candidates.AddRange(previous);
+
+                if (candidates.Count == 0)
+                {
+                    unmatched += team.Players.Count;
+
+                    foreach (var p in team.Players)
+                    {
+                        var n = p.Athlete?.DisplayName ?? "(unknown)";
+                        unmatchedNames.Add(
+                            $"{n} — no candidates on {team.DisplayName}");
+                    }
+
+                    continue;
+                }
+
+                foreach (var row in team.Players)
+                {
+                    var name = row.Athlete?.DisplayName;
+
+                    if (string.IsNullOrWhiteSpace(name))
+                    {
+                        unmatched++;
+                        continue;
+                    }
+
+                    var match = MatchPlayer(name, row.Athlete?.Position?.Abbreviation, candidates);
+
+                    if (match == null)
+                    {
+                        _logger.LogInformation(
+                            "ESPN injury row '{Name}' ({Team}) did not match any player.",
+                            name, team.DisplayName);
+
+                        unmatchedNames.Add(
+                            $"{name} ({row.Athlete?.Position?.Abbreviation}) — {team.DisplayName}");
+                        unmatched++;
+                        continue;
+                    }
+
+                    ApplyInjury(match, row, now);
+                    matched++;
+                }
+            }
+
+            // --- Resolve history spells that ended -------------------------
+            var openSpells = await _dbContext.PlayerInjuryHistories
+                .Where(h => h.ResolvedAt == null)
+                .ToListAsync(ct);
+
+            var playerById = allPlayers.ToDictionary(p => p.Id);
+
+            foreach (var spell in openSpells)
+            {
+                if (!playerById.TryGetValue(spell.PlayerId, out var player))
+                {
+                    spell.ResolvedAt = now;
+                    continue;
+                }
+
+                var stillSameSpell =
+                    player.IsInjured &&
+                    player.InjuryStatus == spell.InjuryStatus &&
+                    string.Equals(
+                        player.NhlTeam?.Abbreviation,
+                        spell.TeamAbbreviation,
+                        StringComparison.OrdinalIgnoreCase);
+
+                if (!stillSameSpell)
+                {
+                    spell.ResolvedAt = now;
+                }
+                else
+                {
+                    spell.LastSeenAt = now;
+                }
+            }
+
+            await _dbContext.SaveChangesAsync(ct);
+
+            return new NhlInjurySyncResult
+            {
+                Success = true,
+                Message = $"Injuries refreshed: {matched} matched, {unmatched} unmatched.",
+                MatchedCount = matched,
+                UnmatchedCount = unmatched,
+                PreviouslyInjuredCount = previouslyInjured.Count,
+                UnmatchedNames = unmatchedNames
+            };
+        }
+
+        // =================================================================
+        // Matching
+        // =================================================================
+
+        private static Player? MatchPlayer(
+            string espnName,
+            string? espnPosition,
+            List<Player> candidates)
+        {
+            var entryInfo = BuildEntryNameInfo(espnName);
+
+            var scored = new List<(Player Player, double First, double Last, double Score)>();
+
+            foreach (var candidate in candidates)
+            {
+                if (!PositionsCompatible(espnPosition, candidate.Position))
+                    continue;
+
+                var playerInfo = BuildPlayerNameInfo(candidate);
+                var (first, last) = ScoreNames(entryInfo, playerInfo);
+
+                if (last < 0.90 || first < 0.85)
+                    continue;
+
+                var score = 0.6 * last + 0.4 * first;
+                scored.Add((candidate, first, last, score));
+            }
+
+            if (scored.Count == 0)
+                return null;
+
+            var ordered = scored.OrderByDescending(s => s.Score).ToList();
+            var best = ordered[0];
+
+            var runnerUp = ordered
+                .Skip(1)
+                .Select(s => s.Score)
+                .DefaultIfEmpty(0)
+                .Max();
+
+            var strong = best.Last >= AutoAcceptLast && best.First >= AutoAcceptFirst;
+            var clearLead = best.Score - runnerUp >= MinLeadOverRunnerUp;
+
+            return strong && clearLead ? best.Player : null;
+        }
+
+        private void ApplyInjury(Player player, NhlInjuryPlayer row, DateTime now)
+        {
+            player.IsInjured = true;
+            player.InjuryStatus = row.Status;
+            player.InjuryKind = ClassifyKind(row.Status);
+            player.InjuryShortDescription = row.ShortComment;
+            player.InjuryLongDescription = row.LongComment;
+            player.InjuryUpdatedAt = now;
+
+            // History upsert: find the open spell for (player, status, team),
+            // update LastSeenAt, or open a new one.
+            var teamAbbrev = player.NhlTeam?.Abbreviation
+                ?? _dbContext.NhlTeams
+                    .Where(t => t.NhlTeamId == player.NhlTeamId)
+                    .Select(t => t.Abbreviation)
+                    .FirstOrDefault()
+                ?? string.Empty;
+
+            var open = _dbContext.PlayerInjuryHistories.Local
+                .FirstOrDefault(h =>
+                    h.PlayerId == player.Id &&
+                    h.ResolvedAt == null &&
+                    h.InjuryStatus == row.Status &&
+                    h.TeamAbbreviation == teamAbbrev);
+
+            if (open == null)
+            {
+                open = _dbContext.PlayerInjuryHistories
+                    .FirstOrDefault(h =>
+                        h.PlayerId == player.Id &&
+                        h.ResolvedAt == null &&
+                        h.InjuryStatus == row.Status &&
+                        h.TeamAbbreviation == teamAbbrev);
+            }
+
+            if (open != null)
+            {
+                open.LastSeenAt = now;
+                return;
+            }
+
+            _dbContext.PlayerInjuryHistories.Add(new PlayerInjuryHistory
+            {
+                PlayerId = player.Id,
+                InjuryStatus = row.Status ?? string.Empty,
+                InjuryDescription = row.ShortComment ?? row.LongComment,
+                TeamAbbreviation = teamAbbrev,
+                FirstSeenAt = now,
+                LastSeenAt = now,
+                ResolvedAt = null
+            });
+        }
+
+        /// <summary>
+        /// Maps an ESPN status string to a normalized InjuryKind.
+        ///
+        /// "Suspension" / "Suspended" -> Suspension.
+        /// Anything else non-empty -> Injury.
+        /// Empty or null -> None.
+        /// </summary>
+        private static InjuryKind ClassifyKind(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+                return InjuryKind.None;
+
+            var s = status.Trim().ToLowerInvariant();
+
+            if (s.Contains("suspend"))
+                return InjuryKind.Suspension;
+
+            return InjuryKind.Injury;
+        }
+
+        private async Task<int?> ResolveTeamIdAsync(
+            NhlInjuryTeam team,
+            Dictionary<string, int> teamByAbbrev,
+            CancellationToken ct)
+        {
+            // 1. ESPN team id equals our abbreviation? Most common case.
+            if (!string.IsNullOrWhiteSpace(team.Id) &&
+                teamByAbbrev.TryGetValue(
+                    team.Id.Trim().ToLowerInvariant(),
+                    out var byId))
+            {
+                return byId;
+            }
+
+            if (string.IsNullOrWhiteSpace(team.DisplayName))
+                return null;
+
+            // 2. Match by name, ignoring accents and punctuation.
+            var espnName = NormalizeTeamName(team.DisplayName);
+
+            var allTeams = await _dbContext.NhlTeams
+                .Select(t => new { t.NhlTeamId, t.Name })
+                .ToListAsync(ct);
+
+            var byName = allTeams.FirstOrDefault(t =>
+                NormalizeTeamName(t.Name) == espnName);
+
+            if (byName != null)
+            {
+                return byName.NhlTeamId;
+            }
+
+            // 3. Last resort: one normalized name contains the other.
+            var byContains = allTeams.FirstOrDefault(t =>
+                NormalizeTeamName(t.Name).Contains(espnName) ||
+                espnName.Contains(NormalizeTeamName(t.Name)));
+
+            return byContains?.NhlTeamId;
+        }
+
+        /// <summary>
+        /// Strips accents, lowercases, and removes punctuation so
+        /// "Montréal Canadiens" and "Montreal Canadiens" compare equal.
+        /// </summary>
+        private static string NormalizeTeamName(string text)
+        {
+            var normalized = RemoveDiacritics(text)
+                .ToLowerInvariant()
+                .Replace(".", "")
+                .Replace("-", "")
+                .Replace("'", "")
+                .Replace(" ", "");
+
+            return normalized;
+        }
+
+        // =================================================================
+        // Name matching helpers (adapted from CapFreezeMatchingService)
+        // =================================================================
+
+        private sealed class PlayerNameInfo
+        {
+            public string Last { get; set; } = "";
+            public HashSet<string> FirstVariants { get; set; } = new();
+        }
+
+        private sealed class EntryNameInfo
+        {
+            public List<(HashSet<string> FirstVariants, string Last)> Splits { get; } = new();
+        }
+
+        private static (double First, double Last) ScoreNames(
+            EntryNameInfo entry,
+            PlayerNameInfo player)
+        {
+            double bestFirst = 0;
+            double bestLast = 0;
+            double bestCombined = -1;
+
+            foreach (var split in entry.Splits)
+            {
+                var last = JaroWinkler(split.Last, player.Last);
+
+                if (last < 0.80)
+                    continue;
+
+                var first = BestFirstNameScore(split.FirstVariants, player.FirstVariants);
+                var combined = 0.6 * last + 0.4 * first;
+
+                if (combined > bestCombined)
+                {
+                    bestCombined = combined;
+                    bestFirst = first;
+                    bestLast = last;
+                }
+            }
+
+            return (bestFirst, bestLast);
+        }
+
+        private static double BestFirstNameScore(
+            HashSet<string> a,
+            HashSet<string> b)
+        {
+            double best = 0;
+
+            foreach (var x in a)
+            {
+                foreach (var y in b)
+                {
+                    if (x == y)
+                        return 1.0;
+
+                    if (AreNicknames(x, y))
+                        best = Math.Max(best, 0.95);
+                    else if (x.Length >= 3 && y.Length >= 3 &&
+                             (x.StartsWith(y) || y.StartsWith(x)))
+                        best = Math.Max(best, 0.92);
+                    else
+                        best = Math.Max(best, JaroWinkler(x, y));
+                }
+            }
+
+            return best;
+        }
+
+        private static EntryNameInfo BuildEntryNameInfo(string name)
+        {
+            var tokens = Tokenize(name);
+            var info = new EntryNameInfo();
+
+            for (var i = 1; i < tokens.Count; i++)
+            {
+                info.Splits.Add((
+                    FirstNameVariants(string.Join(" ", tokens.Take(i))),
+                    string.Concat(tokens.Skip(i))));
+            }
+
+            return info;
+        }
+
+        private static PlayerNameInfo BuildPlayerNameInfo(Player player)
+        {
+            return new PlayerNameInfo
+            {
+                Last = string.Concat(Tokenize(player.LastName)),
+                FirstVariants = FirstNameVariants(player.FirstName)
+            };
+        }
+
+        private static HashSet<string> FirstNameVariants(string? rawFirst)
+        {
+            var variants = new HashSet<string>();
+
+            void AddFrom(string text)
+            {
+                var tokens = Tokenize(text);
+
+                if (tokens.Count == 0)
+                    return;
+
+                variants.Add(string.Concat(tokens));
+
+                if (tokens.Count > 1)
+                    variants.Add(string.Concat(tokens.Select(t => t[0])));
+            }
+
+            if (string.IsNullOrWhiteSpace(rawFirst))
+                return variants;
+
+            var open = rawFirst.IndexOf('(');
+            var close = rawFirst.IndexOf(')');
+
+            if (open >= 0 && close > open)
+            {
+                AddFrom(rawFirst.Substring(0, open));
+                AddFrom(rawFirst.Substring(open + 1, close - open - 1));
+            }
+            else
+            {
+                AddFrom(rawFirst);
+            }
+
+            return variants;
+        }
+
+        private static List<string> Tokenize(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return new List<string>();
+
+            var cleaned = RemoveDiacritics(name)
+                .ToLowerInvariant()
+                .Replace("'", "")
+                .Replace("’", "")
+                .Replace(".", "");
+
+            return cleaned
+                .Split(new[] { ' ', '-', '(', ')', ',', '\t' },
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Where(t => t != "jr" && t != "sr")
+                .ToList();
+        }
+
+        private static string RemoveDiacritics(string text)
+        {
+            var prepared = text
+                .Replace("ø", "o").Replace("Ø", "O")
+                .Replace("æ", "ae").Replace("Æ", "AE")
+                .Replace("ł", "l").Replace("Ł", "L")
+                .Replace("đ", "d").Replace("Đ", "D")
+                .Replace("ß", "ss")
+                .Normalize(NormalizationForm.FormD);
+
+            var sb = new StringBuilder();
+
+            foreach (var c in prepared)
+            {
+                if (CharUnicodeInfo.GetUnicodeCategory(c) !=
+                    UnicodeCategory.NonSpacingMark)
+                {
+                    sb.Append(c);
+                }
+            }
+
+            return sb.ToString().Normalize(NormalizationForm.FormC);
+        }
+
+        private static string PositionGroup(string? position)
+        {
+            var p = (position ?? "").Trim().ToUpperInvariant();
+
+            if (p.Length == 0) return "";
+            if (p.Contains('G')) return "G";
+            if (p.Contains('D')) return "D";
+            if (p.Contains('C') || p.Contains('L') || p.Contains('R') ||
+                p.Contains('W') || p.Contains('F')) return "F";
+
+            return "";
+        }
+
+        /// <summary>
+        /// Position gate for name matching.
+        ///
+        /// We only reject a pair when one side is a goalie and the other is
+        /// not: goalies are easy to misidentify and their injuries do not
+        /// overlap with skater rows. Any other disagreement (C vs D, LW vs
+        /// RW, ...) is allowed, because ESPN and the NHL regularly classify
+        /// the same player differently.
+        /// </summary>
+        private static bool PositionsCompatible(string? a, string? b)
+        {
+            var ga = PositionGroup(a);
+            var gb = PositionGroup(b);
+
+            if (ga.Length == 0 || gb.Length == 0)
+                return true;
+
+            if (ga == gb)
+                return true;
+
+            // The only hard exclusion: G vs non-G.
+            var oneIsGoalie = ga == "G" || gb == "G";
+
+            return !oneIsGoalie;
+        }
+
+        private static readonly Dictionary<string, int> NicknameGroupIds =
+            BuildNicknameMap();
+
+        private static Dictionary<string, int> BuildNicknameMap()
+        {
+            var groups = new[]
+            {
+                new[] { "zachary", "zack", "zach", "zac" },
+                new[] { "nicholas", "nick", "nico", "nicolas" },
+                new[] { "joseph", "joe", "joey" },
+                new[] { "matthew", "matt", "matty" },
+                new[] { "cameron", "cam" },
+                new[] { "alexander", "alexandre", "aleksander", "alex" },
+                new[] { "alexei", "alexey", "aleksei", "aleksey" },
+                new[] { "artem", "artyom", "artemy" },
+                new[] { "benjamin", "ben", "benny" },
+                new[] { "william", "will", "bill", "billy", "willy" },
+                new[] { "christopher", "chris" },
+                new[] { "michael", "mike", "mikey" },
+                new[] { "anthony", "tony" },
+                new[] { "daniel", "dan", "danny", "danil", "daniil" },
+                new[] { "jonathan", "jon", "jonny", "jonathon" },
+                new[] { "jacob", "jake" },
+                new[] { "ronald", "ronnie", "ron" },
+                new[] { "samuel", "sam", "sammy" },
+                new[] { "joshua", "josh" },
+                new[] { "andrew", "andy", "drew" },
+                new[] { "timothy", "tim", "timmy" },
+                new[] { "thomas", "tom", "tommy" },
+                new[] { "robert", "rob", "bob", "bobby", "robbie" },
+                new[] { "richard", "rick", "ricky", "rich" },
+                new[] { "edward", "ed", "eddie" },
+                new[] { "james", "jim", "jimmy", "jamie" },
+                new[] { "steven", "stephen", "steve", "stevie" },
+                new[] { "patrick", "pat" },
+                new[] { "jeffrey", "jeff" },
+                new[] { "gregory", "greg" },
+                new[] { "vincent", "vince", "vinny", "vinnie" },
+                new[] { "frederick", "frederic", "fred", "freddy" },
+                new[] { "mitchell", "mitch" },
+                new[] { "nathan", "nate", "nathaniel" },
+                new[] { "dmitri", "dmitry", "dmitriy" },
+                new[] { "sergei", "sergey" },
+                new[] { "evgeni", "evgeny", "yevgeni" },
+                new[] { "vladislav", "vlad" },
+                new[] { "vasily", "vasiliy", "vasili" },
+                new[] { "nikolai", "nikolay" },
+                new[] { "ilya", "ilia" },
+                new[] { "yegor", "egor" },
+                new[] { "fedor", "fyodor" },
+                new[] { "arseni", "arsenii", "arseny" },
+                new[] { "phillip", "philip", "phil" },
+                new[] { "yaroslav", "jaroslav" }
+            };
+
+            var map = new Dictionary<string, int>();
+
+            for (var g = 0; g < groups.Length; g++)
+            {
+                foreach (var name in groups[g])
+                    map[name] = g;
+            }
+
+            return map;
+        }
+
+        private static bool AreNicknames(string a, string b)
+        {
+            return NicknameGroupIds.TryGetValue(a, out var ga) &&
+                   NicknameGroupIds.TryGetValue(b, out var gb) &&
+                   ga == gb;
+        }
+
+        private static double JaroWinkler(string s1, string s2)
+        {
+            if (s1 == s2) return 1.0;
+            if (s1.Length == 0 || s2.Length == 0) return 0.0;
+
+            var matchDistance = Math.Max(0, Math.Max(s1.Length, s2.Length) / 2 - 1);
+
+            var s1Matches = new bool[s1.Length];
+            var s2Matches = new bool[s2.Length];
+            var matches = 0;
+
+            for (var i = 0; i < s1.Length; i++)
+            {
+                var start = Math.Max(0, i - matchDistance);
+                var end = Math.Min(i + matchDistance + 1, s2.Length);
+
+                for (var j = start; j < end; j++)
+                {
+                    if (s2Matches[j] || s1[i] != s2[j]) continue;
+
+                    s1Matches[i] = true;
+                    s2Matches[j] = true;
+                    matches++;
+                    break;
+                }
+            }
+
+            if (matches == 0) return 0.0;
+
+            var k = 0;
+            var transpositions = 0;
+
+            for (var i = 0; i < s1.Length; i++)
+            {
+                if (!s1Matches[i]) continue;
+
+                while (!s2Matches[k]) k++;
+
+                if (s1[i] != s2[k]) transpositions++;
+                k++;
+            }
+
+            double m = matches;
+            var jaro = (m / s1.Length + m / s2.Length +
+                        (m - transpositions / 2.0) / m) / 3.0;
+
+            var prefix = 0;
+            for (var i = 0; i < Math.Min(4, Math.Min(s1.Length, s2.Length)); i++)
+            {
+                if (s1[i] == s2[i]) prefix++;
+                else break;
+            }
+
+            return jaro + prefix * 0.1 * (1.0 - jaro);
+        }
+    }
+
+    public class NhlInjurySyncResult
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public int MatchedCount { get; set; }
+        public int UnmatchedCount { get; set; }
+        public int PreviouslyInjuredCount { get; set; }
+        public List<string> UnmatchedNames { get; set; } = new();
+    }
+}

@@ -123,6 +123,21 @@
         /// <summary>Player headshot photo url, or null when unavailable.</summary>
         public string? HeadshotUrl { get; set; }
 
+        /// <summary>True when ESPN currently lists the player as injured or suspended.</summary>
+        public bool IsInjured { get; set; }
+
+        /// <summary>Raw ESPN status ("Out", "Day-To-Day", "Injured Reserve", "Suspension"), or null.</summary>
+        public string? InjuryStatus { get; set; }
+
+        /// <summary>"None", "Injury" or "Suspension" — used to pick the right icon.</summary>
+        public string InjuryKind { get; set; } = "None";
+
+        /// <summary>Short injury note, used almost everywhere.</summary>
+        public string? InjuryShortDescription { get; set; }
+
+        /// <summary>Long injury note, used on the injuries page and player page.</summary>
+        public string? InjuryLongDescription { get; set; }
+
         /// <summary>Two seasons ago stat line (2024-25), or null when unavailable.</summary>
         public SeasonStatLineDto? TwoSeasonsAgo { get; set; }
 
@@ -312,5 +327,20 @@
 
         /// <summary>Roster status for the current season ("Active", "Bench" or "Prospect"), or null when the player is a free agent.</summary>
         public string? RosterStatus { get; set; }
+
+        /// <summary>True when ESPN currently lists the player as injured or suspended.</summary>
+        public bool IsInjured { get; set; }
+
+        /// <summary>Raw ESPN status ("Out", "Day-To-Day", "Injured Reserve", "Suspension"), or null.</summary>
+        public string? InjuryStatus { get; set; }
+
+        /// <summary>"None", "Injury" or "Suspension" — used to pick the right icon.</summary>
+        public string InjuryKind { get; set; } = "None";
+
+        /// <summary>Short injury note, used almost everywhere.</summary>
+        public string? InjuryShortDescription { get; set; }
+
+        /// <summary>Long injury note, used on the injuries page and player page.</summary>
+        public string? InjuryLongDescription { get; set; }
     }
 }

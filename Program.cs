@@ -15,6 +15,7 @@ builder.Services.AddHttpClient<NhlPlayerService>();
 builder.Services.AddHttpClient<NhlTeamService>();
 builder.Services.AddHttpClient<NhlStatsService>();
 builder.Services.AddHttpClient<NhlGameLogService>();
+builder.Services.AddHttpClient<NhlInjuryService>();
 
 // CapFreeze services
 builder.Services.AddHttpClient<CapFreezePageService>();
