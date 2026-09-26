@@ -11,26 +11,22 @@ import {
     type RosterEntry,
     type TeamRoster,
 } from '@/api/client';
+import { useAuraAll } from '@/lib/auraContext';
+import { AURA_CHANNELS } from '@/lib/auraConfig';
 
-// Statuses sent to the API verbatim; labels are the French display names.
 const ROSTER_STATUSES = [
     { value: 'Active', label: 'Actif' },
     { value: 'Bench', label: 'Banc' },
     { value: 'Prospect', label: 'Prospect' },
 ] as const;
 
-// The search starts after this many characters, to avoid a query per letter.
 const MIN_SEARCH_LENGTH = 2;
-
-// Wait a little after the last keystroke before calling the API (debounce).
 const SEARCH_DEBOUNCE_MS = 300;
 
-// French label of a roster status ("Active" -> "Actif", ...).
 function statusLabel(status: string): string {
     return ROSTER_STATUSES.find((entry) => entry.value === status)?.label ?? status;
 }
 
-// Shared control styles, to keep the JSX readable.
 const selectClass =
     'w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/50';
 
@@ -60,12 +56,8 @@ export default function AdminPage() {
     const [rosterLoading, setRosterLoading] = useState(false);
     const [rosterError, setRosterError] = useState<string | null>(null);
 
-    // Controls the visual intensity of player-card auras.
-    // 1 = least flashy
-    // 10 = flashiest
-    const [auraFlashiness, setAuraFlashiness] = useState(1);
+    const { intensities, setIntensity, reset } = useAuraAll();
 
-    // Load the fantasy teams once, when the page is opened.
     useEffect(() => {
         let cancelled = false;
 
@@ -81,17 +73,14 @@ export default function AdminPage() {
                 }
             });
 
-        // Avoid setting state after unmount (React StrictMode mounts twice in dev).
         return () => {
             cancelled = true;
         };
     }, []);
 
-    // Debounced player search: runs 300 ms after the user stops typing.
     useEffect(() => {
         const text = query.trim();
 
-        // Nothing to search yet, or a player was just picked from the panel.
         if (text.length < MIN_SEARCH_LENGTH || selectedPlayer) {
             setResults([]);
             setSearching(false);
@@ -100,8 +89,6 @@ export default function AdminPage() {
 
         setSearching(true);
 
-        // Flipped when the effect is cleaned up (text changed / unmounted), so a
-        // stale response never overwrites the results of a newer search.
         let cancelled = false;
 
         const timer = setTimeout(() => {
@@ -129,7 +116,6 @@ export default function AdminPage() {
         };
     }, [query, selectedPlayer]);
 
-    // Loads the roster of the team chosen in the roster section.
     useEffect(() => {
         if (!rosterTeamId) {
             setTeamRoster(null);
@@ -169,7 +155,6 @@ export default function AdminPage() {
         setResults([]);
         setReleaseArmed(false);
 
-        // Pre-select the player's current team + status (free agents start fresh).
         if (player.rosterEntryId != null) {
             setFantasyTeamId(player.fantasyTeamId != null ? String(player.fantasyTeamId) : '');
             setRosterStatus(player.rosterStatus ?? 'Active');
@@ -182,7 +167,6 @@ export default function AdminPage() {
         setError(null);
     }
 
-    // Clears the whole form after a successful movement.
     function resetForm() {
         setQuery('');
         setResults([]);
@@ -192,7 +176,6 @@ export default function AdminPage() {
         setReleaseArmed(false);
     }
 
-    // Reloads the roster list of the team section after a successful movement.
     async function refreshRosterIfVisible() {
         if (!rosterTeamId || !teamRoster) {
             return;
@@ -205,7 +188,6 @@ export default function AdminPage() {
         }
     }
 
-    // Opens the same adaptive panel from a roster list row.
     function handleRosterEntrySelect(entry: RosterEntry) {
         const selection: PlayerSearchResult = {
             playerId: entry.playerId,
@@ -232,7 +214,6 @@ export default function AdminPage() {
         setError(null);
     }
 
-    // Shared skeleton of the four movements: busy flag, banners, form reset.
     async function runMovement(call: () => Promise<{ message: string }>) {
         setSubmitting(true);
         setError(null);
@@ -241,7 +222,6 @@ export default function AdminPage() {
         try {
             const result = await call();
 
-            // The API returns a ready-to-display message.
             setSuccess(result.message);
             resetForm();
         } catch (err) {
@@ -252,7 +232,6 @@ export default function AdminPage() {
     }
 
     function handleAssign() {
-        // Both a player and a team must be selected.
         if (!selectedPlayer || !fantasyTeamId) {
             return;
         }
@@ -264,15 +243,12 @@ export default function AdminPage() {
                 rosterStatus,
             });
 
-            // Keep the team roster section in sync after the assignment.
             void refreshRosterIfVisible();
 
             return result;
         });
     }
 
-    // Applies team + status in one call, then clears the input and the
-    // selection so the form is ready for the next player.
     async function handleCombinedUpdate() {
         if (!selectedPlayer?.rosterEntryId) {
             return;
@@ -292,7 +268,6 @@ export default function AdminPage() {
             setSuccess(result.message);
             void refreshRosterIfVisible();
 
-            // Clear the input field and unselect the player that was just updated.
             resetForm();
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Erreur inconnue.');
@@ -311,15 +286,12 @@ export default function AdminPage() {
                 rosterEntryId: selectedPlayer.rosterEntryId,
             });
 
-            // Keep the team roster section in sync after the release.
             void refreshRosterIfVisible();
 
             return result;
         });
     }
 
-    // The panel adapts to the selected player: free agents get the "Ajouter"
-    // flow, assigned players get the movement blocks.
     const isAssigned = selectedPlayer?.rosterEntryId != null;
 
     const currentStatusLabel = selectedPlayer
@@ -344,42 +316,59 @@ export default function AdminPage() {
             </div>
 
             {/* Appearance settings */}
-            <div className='max-w-lg space-y-3'>
-                <h3 className='text-lg font-semibold text-foreground'>
-                    Apparence
-                </h3>
+            <div className='max-w-2xl space-y-3'>
+                <div className='flex items-center justify-between'>
+                    <h3 className='text-lg font-semibold text-foreground'>
+                        Apparence
+                    </h3>
 
-                <div className='rounded-lg border border-border bg-card p-4'>
-                    <div className='flex items-center justify-between'>
-                        <label
-                            htmlFor='aura-flashiness'
-                            className='text-sm font-medium text-foreground'
+                    <button
+                        type='button'
+                        onClick={reset}
+                        className={secondaryButtonClass}
+                    >
+                        Réinitialiser
+                    </button>
+                </div>
+
+                <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
+                    {AURA_CHANNELS.map(({ key, label }) => (
+                        <div
+                            key={key}
+                            className='rounded-lg border border-border bg-card p-3'
                         >
-                            Intensité des auras
-                        </label>
+                            <div className='flex items-center justify-between'>
+                                <label
+                                    htmlFor={`aura-${key}`}
+                                    className='text-sm font-medium text-foreground'
+                                >
+                                    {label}
+                                </label>
 
-                        <span className='text-sm font-semibold text-primary'>
-                            {auraFlashiness}/10
-                        </span>
-                    </div>
+                                <span className='text-sm font-semibold text-primary'>
+                                    {intensities[key]}/10
+                                </span>
+                            </div>
 
-                    <input
-                        id='aura-flashiness'
-                        type='range'
-                        min='1'
-                        max='10'
-                        step='1'
-                        value={auraFlashiness}
-                        onChange={(event) =>
-                            setAuraFlashiness(Number(event.target.value))
-                        }
-                        className='mt-3 w-full cursor-pointer'
-                    />
+                            <input
+                                id={`aura-${key}`}
+                                type='range'
+                                min='0'
+                                max='10'
+                                step='1'
+                                value={intensities[key]}
+                                onChange={(event) =>
+                                    setIntensity(key, Number(event.target.value))
+                                }
+                                className='mt-2 w-full cursor-pointer'
+                            />
 
-                    <div className='mt-1 flex justify-between text-xs text-muted-foreground'>
-                        <span>Subtile</span>
-                        <span>Flashy</span>
-                    </div>
+                            <div className='mt-1 flex justify-between text-[0.65rem] text-muted-foreground'>
+                                <span>Off</span>
+                                <span>Max</span>
+                            </div>
+                        </div>
+                    ))}
                 </div>
             </div>
 
@@ -395,7 +384,6 @@ export default function AdminPage() {
                 </p>
             )}
 
-            {/* Player management */}
             <div className='max-w-lg space-y-3'>
                 <div className='relative'>
                     <input
@@ -404,7 +392,6 @@ export default function AdminPage() {
                         autoComplete='off'
                         onChange={(event) => {
                             setQuery(event.target.value);
-                            // Editing the text invalidates a previously picked player.
                             setSelectedPlayer(null);
                         }}
                         placeholder='Rechercher un joueur (min. 2 lettres)'
@@ -588,7 +575,6 @@ export default function AdminPage() {
                 )}
             </div>
 
-            {/* Team roster */}
             <div className='max-w-lg space-y-3'>
                 <h3 className='text-lg font-semibold text-foreground'>
                     Alignement d'une équipe

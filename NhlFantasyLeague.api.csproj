@@ -16,6 +16,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Remove="frontend\src\lib\auraConfig.ts" />
+    <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
   </ItemGroup>
 
@@ -30,6 +32,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />
   </ItemGroup>
 

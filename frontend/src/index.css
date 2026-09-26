@@ -148,23 +148,61 @@
     --accent-purple: #A259FF;
 }
 
-/* Mobile page title font */
-/* Mobile page title font + neon glow */
-.mobile-page-title {
-    font-family: 'Coors Script', cursive;
-    color: #F2F5FA;
-    text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.8), 0 0 45px rgba(0, 168, 255, 0.5);
-    animation: neon-pulse 2.5s ease-in-out infinite alternate;
-}
+/* ------------------------------------------------------------------ */
+/* Aura pulse keyframes                                                */
+/*                                                                     */
+/* These read --aura-rest and --aura-peak, which every component       */
+/* that has an aura sets inline from the intensity slider. At          */
+/* intensity 0, the component does not add the class at all, so the    */
+/* pulse is fully off.                                                 */
+/* ------------------------------------------------------------------ */
 
-@keyframes neon-pulse {
+@keyframes aura-pulse-text {
     from {
-        text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.7), 0 0 40px rgba(0, 168, 255, 0.4);
+        text-shadow: var(--aura-rest);
     }
 
     to {
-        text-shadow: 0 0 3px #F2F5FA, 0 0 9px #00A8FF, 0 0 18px #00A8FF, 0 0 32px rgba(0, 168, 255, 0.9), 0 0 55px rgba(0, 168, 255, 0.6);
+        text-shadow: var(--aura-peak);
     }
+}
+
+@keyframes aura-pulse-filter {
+    from {
+        filter: var(--aura-rest);
+    }
+
+    to {
+        filter: var(--aura-peak);
+    }
+}
+
+@keyframes aura-pulse-box {
+    from {
+        box-shadow: var(--aura-rest);
+    }
+
+    to {
+        box-shadow: var(--aura-peak);
+    }
+}
+
+.aura-pulse-text {
+    animation: aura-pulse-text 2.5s ease-in-out infinite alternate;
+}
+
+.aura-pulse-filter {
+    animation: aura-pulse-filter 2.5s ease-in-out infinite alternate;
+}
+
+.aura-pulse-box {
+    animation: aura-pulse-box 2.5s ease-in-out infinite alternate;
+}
+
+/* Mobile page title font only; the glow comes from JS. */
+.mobile-page-title {
+    font-family: 'Coors Script', cursive;
+    color: #F2F5FA;
 }
 
 /* Small helpers for the tokens Tailwind does not know about. */
@@ -180,7 +218,7 @@
     color: var(--accent-green);
 }
 
-/* Glow is reserved for emphasis only (active nav item, positive stat) - never on everything. */
+/* Static glow helpers, unchanged. Not slider-driven. */
 .glow-blue {
     box-shadow: 0 0 12px rgba(0, 168, 255, 0.25);
 }
@@ -192,50 +230,18 @@
 .glow-purple {
     box-shadow: 0 0 12px rgba(162, 89, 255, 0.25);
 }
-/* Mobile hamburger icon neon glow */
+
+/* Hamburger icon and league logo keep their base color only;
+   the glow is added by JS as a filter animation. */
 .mobile-menu-icon {
     color: #F2F5FA;
-    filter: drop-shadow(0 0 2px #F2F5FA) drop-shadow(0 0 5px #00A8FF) drop-shadow(0 0 10px #00A8FF) drop-shadow(0 0 18px rgba(0, 168, 255, 0.7));
-    animation: menu-icon-neon-pulse 2.5s ease-in-out infinite alternate;
 }
 
-@keyframes menu-icon-neon-pulse {
-    from {
-        filter: drop-shadow(0 0 2px #F2F5FA) drop-shadow(0 0 5px #00A8FF) drop-shadow(0 0 10px #00A8FF) drop-shadow(0 0 16px rgba(0, 168, 255, 0.5));
-    }
-
-    to {
-        filter: drop-shadow(0 0 2px #F2F5FA) drop-shadow(0 0 7px #00A8FF) drop-shadow(0 0 14px #00A8FF) drop-shadow(0 0 24px rgba(0, 168, 255, 0.8));
-    }
-}
-/* League logo neon glow */
 .league-logo {
-    filter: drop-shadow(0 0 1px #F2F5FA) drop-shadow(0 0 2px #00A8FF) drop-shadow(0 0 4px #00A8FF) drop-shadow(0 0 6px rgba(0, 168, 255, 0.5));
-    animation: logo-neon-pulse 2.5s ease-in-out infinite alternate;
+    /* no styles here anymore; glow is applied inline by TopBar */
 }
 
-@keyframes logo-neon-pulse {
-    from {
-        filter: drop-shadow(0 0 1px #F2F5FA) drop-shadow(0 0 2px #00A8FF) drop-shadow(0 0 4px #00A8FF) drop-shadow(0 0 5px rgba(0, 168, 255, 0.4));
-    }
-
-    to {
-        filter: drop-shadow(0 0 1px #F2F5FA) drop-shadow(0 0 3px #00A8FF) drop-shadow(0 0 5px #00A8FF) drop-shadow(0 0 7px rgba(0, 168, 255, 0.5));
-    }
-}
-/* Roster section titles neon glow */
+/* Roster section titles keep their font and base color only. */
 .roster-section-title {
     color: #F2F5FA;
-    text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.8), 0 0 45px rgba(0, 168, 255, 0.5);
-    animation: roster-title-neon-pulse 2.5s ease-in-out infinite alternate;
-}
-
-@keyframes roster-title-neon-pulse {
-    from {
-        text-shadow: 0 0 3px #F2F5FA, 0 0 7px #00A8FF, 0 0 14px #00A8FF, 0 0 25px rgba(0, 168, 255, 0.7), 0 0 40px rgba(0, 168, 255, 0.4);
-    }
-
-    to {
-        text-shadow: 0 0 3px #F2F5FA, 0 0 9px #00A8FF, 0 0 18px #00A8FF, 0 0 32px rgba(0, 168, 255, 0.9), 0 0 55px rgba(0, 168, 255, 0.6);
-    }
 }

@@ -2,46 +2,32 @@
 import { getTeamRoster, type RosterEntry, type TeamRoster } from '@/api/client';
 import { PlayerCard } from '@/components/roster/PlayerCard';
 import { RosterSection } from '@/components/roster/RosterSection';
+import { useAura } from '@/lib/auraContext';
+import {
+    auraPulseClass,
+    auraPulseStyle,
+    auraRangeFor,
+    isAuraOff,
+} from '@/lib/auraConfig';
 
-// TODO(auth): replace with the signed-in user's fantasy team once
-// authentication exists. Team 5 is farn.
 const TEMPORARY_TEAM_ID = 5;
 
-/** Returns true when the entry belongs to the active lineup. */
 function isActive(entry: RosterEntry): boolean {
     return entry.rosterStatus === 'Active';
 }
 
-/**
- * Percentage of the cap used, clamped to [0, 100]. Used to size the
- * filled bar and to pick the track color.
- */
 function capPercentage(capSalary: number, salaryCap: number): number {
     if (salaryCap <= 0) return 0;
     const pct = (capSalary / salaryCap) * 100;
     return Math.max(0, Math.min(100, pct));
 }
 
-/**
- * Track color, based on the percentage of cap used:
- *   > 90%    -> neon red
- *   75-90%   -> neon yellow
- *   < 75%    -> neon green
- */
 function trackColorClass(pct: number): string {
     if (pct > 90) return 'bg-rose-500';
     if (pct >= 75) return 'bg-yellow-300';
     return 'bg-lime-400';
 }
 
-/**
- * Compact millions label for a dollar amount:
- *   4 000 000  -> "4M"
- *   4 150 000  -> "4.15M"
- *   950 000    -> "0.95M"
- *   24 900 000 -> "24.9M"
- * Trailing zeros and a trailing decimal point are removed.
- */
 function compactMillions(value: number): string {
     const millions = value / 1_000_000;
     const rounded = millions.toFixed(2).replace(/\.?0+$/, '');
@@ -53,10 +39,12 @@ export default function MonEquipePage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // Single aura around the whole bar. No separate fill slider.
+    const trackAura = useAura('capBarTrack');
+
     useEffect(() => {
         let cancelled = false;
 
-        // Runs once, when the page is first opened.
         getTeamRoster(TEMPORARY_TEAM_ID)
             .then((data) => {
                 if (!cancelled) {
@@ -74,7 +62,6 @@ export default function MonEquipePage() {
                 }
             });
 
-        // Avoid setting state after unmount (React StrictMode mounts twice in dev).
         return () => {
             cancelled = true;
         };
@@ -84,7 +71,6 @@ export default function MonEquipePage() {
     if (error) return <p className='text-destructive'>{error}</p>;
     if (!roster) return null;
 
-    // No re-sort: the API already returns the desired order.
     const forwards = roster.entries.filter(
         (entry) => isActive(entry) && entry.position !== 'D' && entry.position !== 'G',
     );
@@ -93,9 +79,20 @@ export default function MonEquipePage() {
     const bench = roster.entries.filter((entry) => entry.rosterStatus === 'Bench');
     const prospects = roster.entries.filter((entry) => entry.rosterStatus === 'Prospect');
 
-    // Max signed players = total roster size minus the prospect slots.
     const maxSignedPlayers =
         roster.leagueMaximumRosterSize - roster.leagueProspectCount;
+
+    const trackRest = [
+        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 0).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
+        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 1).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
+        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
+    ].join(', ');
+
+    const trackPeak = [
+        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 0).toFixed(2)}px rgba(0, 168, 255, 0.95)`,
+        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 1).toFixed(2)}px rgba(0, 168, 255, 0.75)`,
+        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.45)`,
+    ].join(', ');
 
     return (
         <section className='space-y-4'>
@@ -105,9 +102,6 @@ export default function MonEquipePage() {
                 </h2>
             </div>
 
-            {/* Cap projection: current season + next four, based on the
-          contracts already in the system. Sits directly on the page
-          background, no wrapper card. */}
             {roster.futureCapBySeason.length > 0 && (
                 <div className='-mt-4 space-y-2'>
                     {roster.futureCapBySeason.map((row) => {
@@ -116,25 +110,26 @@ export default function MonEquipePage() {
 
                         return (
                             <div key={row.nhlSeasonCode}>
-                                {/* Year on the left, bar on the right. */}
                                 <div className='flex items-center gap-3'>
                                     <span className='w-12 shrink-0 text-xs font-medium text-foreground'>
                                         {row.label}
                                     </span>
 
                                     <div
-                                        className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} shadow-[0_0_8px_rgba(0,168,255,1),0_0_20px_rgba(0,168,255,0.85),0_0_36px_rgba(0,168,255,0.55)]`}
+                                        className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} ${!isAuraOff(trackAura) ? auraPulseClass('box') : ''}`}
+                                        style={
+                                            !isAuraOff(trackAura)
+                                                ? auraPulseStyle(trackRest, trackPeak)
+                                                : undefined
+                                        }
                                     >
                                         <div
-                                            className='h-full rounded bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,1),0_0_18px_rgba(34,211,238,0.8)] transition-[width]'
+                                            className='h-full rounded bg-cyan-400 transition-[width]'
                                             style={{ width: `${pct}%` }}
                                         />
                                     </div>
                                 </div>
 
-                                {/* Labels under the bar: signed on the left,
-                    available cap on the right. The left padding matches
-                    the year column so the labels line up under the bar. */}
                                 <div className='mt-1 flex items-center justify-between pl-15 text-xs text-white'>
                                     <span>
                                         {maxSignedPlayers > 0
