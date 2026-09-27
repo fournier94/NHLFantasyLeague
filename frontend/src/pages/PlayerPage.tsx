@@ -18,10 +18,41 @@ import {
 } from '@/lib/auraConfig';
 import { getNhlTeamColor } from '@/lib/nhlTeamColors';
 import { setPendingCardId } from '@/lib/scrollRestoration';
+import ReactCountryFlag from 'react-country-flag';
+import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 
 // ---------------------------------------------------------------------
 // Formatters
 // ---------------------------------------------------------------------
+
+/** Maps the Alpha-3 country codes stored in the DB to the Alpha-2 codes react-world-flags expects. */
+const COUNTRY_CODE_MAP: Record<string, string> = {
+    CAN: 'CA',
+    USA: 'US',
+    SWE: 'SE',
+    FIN: 'FI',
+    RUS: 'RU',
+    CZE: 'CZ',
+    SVK: 'SK',
+    CHE: 'CH',
+    DEU: 'DE',
+    AUT: 'AT',
+    DNK: 'DK',
+    NOR: 'NO',
+    LVA: 'LV',
+    SVN: 'SI',
+    BLR: 'BY',
+    KAZ: 'KZ',
+    GBR: 'GB',
+    ENG: 'GB',
+    FRA: 'FR',
+    POL: 'PL',
+};
+
+function toFlagCode(country: string | null | undefined): string | null {
+    if (!country) return null;
+    return COUNTRY_CODE_MAP[country.toUpperCase()] ?? country.toUpperCase();
+}
 
 const salaryFormatter = new Intl.NumberFormat('fr-CA', {
     maximumFractionDigits: 0,
@@ -683,6 +714,7 @@ export default function PlayerPage() {
 
     const birthPlaceParts = [player.birthCity, player.birthCountry]
         .filter((v): v is string => Boolean(v));
+    const birthCountryFlagCode = toFlagCode(player.birthCountry);
 
     const draftLine =
         player.draftYear && player.draftOverallPick
@@ -729,7 +761,7 @@ export default function PlayerPage() {
                         </div>
 
                         {player.position && (
-                            <p className='mt-1 flex items-center text-sm text-foreground'>
+                            <p className='mt-1 flex h-5 items-center text-sm text-foreground'>
                                 <span>
                                     {displayPosition(player.position)}
                                     {shootsDisplay && (
@@ -744,7 +776,7 @@ export default function PlayerPage() {
                                     <img
                                         src={player.nhlTeamLogoUrl}
                                         alt={player.nhlTeamAbbreviation ?? ''}
-                                        className={`ml-2 h-5 w-5 ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
+                                        className={`h-8 w-8 shrink-0 ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
                                         style={
                                             !isAuraOff(pageTeamLogoAura)
                                                 ? auraPulseStyle(pageTeamLogoRest, pageTeamLogoPeak)
@@ -767,18 +799,27 @@ export default function PlayerPage() {
                             </p>
                         )}
 
-                        {birthPlaceParts.length > 0 && (
-                            <p className='text-sm text-foreground'>
-                                {birthPlaceParts.map((part, i) => (
-                                    <span key={i}>
-                                        {i > 0 && (
-                                            <span className='mx-1 inline-block font-black [text-shadow:0_0_1px_currentColor,0_0_1px_currentColor]'>
-                                                •
-                                            </span>
-                                        )}
-                                        {part}
+                        {(player.birthCity || birthCountryFlagCode) && (
+                            <p className='flex items-center text-sm text-foreground'>
+                                <span>{player.birthCity}</span>
+
+                                {birthCountryFlagCode && (
+                                    <span
+                                        title={player.birthCountry ?? ''}
+                                        style={{ display: 'inline-block', lineHeight: 0 }}
+                                        className='ml-2'
+                                    >
+                                        <ReactCountryFlag
+                                            countryCode={birthCountryFlagCode}
+                                            svg
+                                            style={{
+                                                width: '1.25rem',
+                                                height: '1.25rem',
+                                                display: 'inline-block',
+                                            }}
+                                        />
                                     </span>
-                                ))}
+                                )}
                             </p>
                         )}
 
@@ -796,9 +837,14 @@ export default function PlayerPage() {
 
                         {draftLine && (
                             <p className='mt-2 text-sm text-foreground'>
-                                Drafted by{' '}
-                                <span className='font-semibold text-primary'>
-                                    {player.draftTeamAbbreviation}
+                                <span className='inline-flex items-center gap-1.5'>
+                                    Drafted by
+                                    {player.draftTeamAbbreviation && (
+                                        <NhlTeamLogo
+                                            abbreviation={player.draftTeamAbbreviation}
+                                            size={20}
+                                        />
+                                    )}
                                 </span>
                                 <br />- {draftLine}
                             </p>
