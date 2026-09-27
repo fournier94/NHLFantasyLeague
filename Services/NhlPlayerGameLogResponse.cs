@@ -34,6 +34,18 @@ namespace NhlFantasyLeague.api.Services
         [JsonPropertyName("points")]
         public int Points { get; set; }
 
+        /// <summary>Penalty minutes in this game.</summary>
+        [JsonPropertyName("pim")]
+        public int PenaltyMinutes { get; set; }
+
+        /// <summary>Plus/minus in this game.</summary>
+        [JsonPropertyName("plusMinus")]
+        public int PlusMinus { get; set; }
+
+        /// <summary>Shots on goal in this game.</summary>
+        [JsonPropertyName("shots")]
+        public int Shots { get; set; }
+
         [JsonPropertyName("decision")]
         public string? Decision { get; set; }
 

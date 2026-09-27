@@ -26,10 +26,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             _dbContext = dbContext;
         }
 
-        /// <summary>
-        /// Returns the detail payload for one player, or null when the
-        /// player does not exist.
-        /// </summary>
         public async Task<PlayerDetailDto?> GetPlayerDetailAsync(int nhlPlayerId)
         {
             var player = await _dbContext.Players
@@ -58,7 +54,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ThenBy(s => s.Sequence)
                 .ToListAsync();
 
-            // Current-season roster entry, if any.
             var currentSeason = await _dbContext.Seasons
                 .FirstOrDefaultAsync(s => s.NhlSeasonCode == CurrentSeasonNhlCode);
 
@@ -73,7 +68,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                         e.SeasonId == currentSeason.Id);
             }
 
-            // Current-season fantasy stat row (FantasyPoints, HatTricks).
             PlayerSeasonStat? fantasySeasonStat = null;
 
             if (currentSeason != null)
@@ -84,17 +78,37 @@ namespace NhlFantasyLeague.api.Services.NHL
                         s.SeasonId == currentSeason.Id);
             }
 
-            // Recent games. Join OpponentNhlTeam so we can build the
-            // "vs/@" opponent abbreviation without a second round trip.
-            var recentGames = await _dbContext.PlayerGameLogs
-                .Include(g => g.OpponentNhlTeam)
-                .Where(g => g.PlayerId == player.Id)
+            // Every current-season game for this player, sorted oldest
+            // first, so we can slice them into quarters.
+            var currentSeasonGames = new List<PlayerGameLog>();
+
+            if (currentSeason != null)
+            {
+                currentSeasonGames = await _dbContext.PlayerGameLogs
+                    .Include(g => g.OpponentNhlTeam)
+                    .Where(g =>
+                        g.PlayerId == player.Id &&
+                        g.SeasonId == currentSeason.Id)
+                    .OrderBy(g => g.GameDate)
+                    .ThenBy(g => g.NhlGameId)
+                    .ToListAsync();
+            }
+
+            // Recent games, most recent first, for the game log table.
+            var recentGames = currentSeasonGames
                 .OrderByDescending(g => g.GameDate)
                 .ThenByDescending(g => g.NhlGameId)
                 .Take(RecentGameCount)
-                .ToListAsync();
+                .ToList();
 
-            // Previous NHL team lookup (for the "was on X" line).
+            // Quarter boundaries: earliest and latest regular-season game
+            // dates across EVERY player in the league this season.
+            var seasonQuarters = await BuildSeasonQuartersAsync(
+                player.Id,
+                currentSeason,
+                currentSeasonGames);
+
+            // Previous NHL team lookup.
             NhlTeam? previousTeam = null;
 
             if (player.PreviousNhlTeamId.HasValue)
@@ -104,7 +118,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                         t.NhlTeamId == player.PreviousNhlTeamId.Value);
             }
 
-            // Current cap hit: the contract covering the current season.
             var currentContract = contracts.FirstOrDefault(c =>
                 c.StartSeason <= CurrentSeasonNhlCode &&
                 c.EndSeason >= CurrentSeasonNhlCode);
@@ -201,9 +214,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                         Goals = g.Goals,
                         Assists = g.Assists,
                         Points = g.Points,
-                        PenaltyMinutes = 0,
-                        PlusMinus = 0,
-                        Shots = 0,
+                        PenaltyMinutes = g.PenaltyMinutes,
+                        PlusMinus = g.PlusMinus,
+                        Shots = g.Shots,
                         FantasyPoints = g.FantasyPoints,
                         GoalieWin = g.GoalieWin,
                         GoalieOvertimeLoss = g.GoalieOvertimeLoss,
@@ -212,12 +225,131 @@ namespace NhlFantasyLeague.api.Services.NHL
                         ShotsAgainst = g.ShotsAgainst,
                         Saves = g.ShotsAgainst - g.GoalsAgainst
                     })
-                    .ToList()
+                    .ToList(),
+
+                SeasonQuarters = seasonQuarters
             };
         }
 
         // =================================================================
-        // Helpers
+        // Quarter helpers
+        // =================================================================
+
+        /// <summary>
+        /// Splits the regular season into four calendar quarters based on
+        /// the earliest and latest regular-season game dates across the
+        /// whole league (approximated by the min/max GameDate of every
+        /// PlayerGameLog row for the current season). The player's own
+        /// current-season games are then bucketed into those four
+        /// windows. Quarters with no games are returned anyway, with
+        /// zero values, so the frontend can always show four rows.
+        /// </summary>
+        private async Task<List<QuarterDto>> BuildSeasonQuartersAsync(
+            int playerId,
+            Season? currentSeason,
+            List<PlayerGameLog> playerGames)
+        {
+            if (currentSeason == null)
+            {
+                return BuildEmptyQuarters();
+            }
+
+            // Earliest and latest date of ANY regular-season game
+            // played this season, across the whole league.
+            var range = await _dbContext.PlayerGameLogs
+                .Where(g => g.SeasonId == currentSeason.Id)
+                .GroupBy(g => 1)
+                .Select(g => new
+                {
+                    First = g.Min(x => x.GameDate),
+                    Last = g.Max(x => x.GameDate)
+                })
+                .FirstOrDefaultAsync();
+
+            if (range == null)
+            {
+                return BuildEmptyQuarters();
+            }
+
+            var firstDate = range.First;
+            var lastDate = range.Last;
+
+            var totalDays = lastDate.DayNumber - firstDate.DayNumber;
+
+            if (totalDays < 0)
+            {
+                return BuildEmptyQuarters();
+            }
+
+            // Four equal spans. Because DayNumber math is integer, the
+            // four boundaries may not be perfectly even; we size each
+            // quarter as (totalDays + 1) / 4 to guarantee they cover the
+            // whole range without gaps.
+            var daysPerQuarter = (totalDays + 1) / 4;
+
+            if (daysPerQuarter < 1)
+            {
+                daysPerQuarter = 1;
+            }
+
+            var quarters = new List<QuarterDto>();
+
+            for (var q = 0; q < 4; q++)
+            {
+                var startOffset = q * daysPerQuarter;
+                var endOffset = (q == 3)
+                    ? totalDays
+                    : Math.Min(totalDays, startOffset + daysPerQuarter - 1);
+
+                var qStart = firstDate.AddDays(startOffset);
+                var qEnd = firstDate.AddDays(endOffset);
+
+                var games = playerGames
+                    .Where(g => g.GameDate >= qStart && g.GameDate <= qEnd)
+                    .ToList();
+
+                quarters.Add(new QuarterDto
+                {
+                    Label = $"Q{q + 1}",
+                    StartDate = qStart,
+                    EndDate = qEnd,
+                    GamesPlayed = games.Count,
+                    Goals = games.Sum(g => g.Goals),
+                    Assists = games.Sum(g => g.Assists),
+                    Points = games.Sum(g => g.Points),
+                    PenaltyMinutes = games.Sum(g => g.PenaltyMinutes),
+                    PlusMinus = games.Sum(g => g.PlusMinus),
+                    Shots = games.Sum(g => g.Shots),
+                    Wins = games.Count(g => g.GoalieWin),
+                    Losses = games.Count(g =>
+                        !g.GoalieWin &&
+                        !g.GoalieOvertimeLoss &&
+                        (g.ShotsAgainst > 0 || g.GoalsAgainst > 0)),
+                    OvertimeLosses = games.Count(g => g.GoalieOvertimeLoss),
+                    Shutouts = games.Count(g => g.Shutout),
+                    Saves = games.Sum(g => g.ShotsAgainst - g.GoalsAgainst),
+                    ShotsAgainst = games.Sum(g => g.ShotsAgainst),
+                    GoalsAgainst = games.Sum(g => g.GoalsAgainst),
+                    FantasyPoints = games.Sum(g => g.FantasyPoints)
+                });
+            }
+
+            return quarters;
+        }
+
+        private static List<QuarterDto> BuildEmptyQuarters()
+        {
+            return new List<QuarterDto>
+            {
+                new() { Label = "Q1" },
+                new() { Label = "Q2" },
+                new() { Label = "Q3" },
+                new() { Label = "Q4" }
+            };
+        }
+
+        // =================================================================
+        // Career helpers
         // =================================================================
 
         private enum CareerCategory
@@ -326,6 +458,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                     string.Equals(r.LeagueAbbreviation, "NHL", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
+            var saves = regular.Sum(r => r.Saves);
+            var shotsAgainst = regular.Sum(r => r.ShotsAgainst);
+
             return new CareerTotalsDto
             {
                 GamesPlayed = regular.Sum(r => r.GamesPlayed),
@@ -351,9 +486,14 @@ namespace NhlFantasyLeague.api.Services.NHL
                 Losses = regular.Sum(r => r.Losses),
                 OvertimeLosses = regular.Sum(r => r.OvertimeLosses),
                 Shutouts = regular.Sum(r => r.Shutouts),
-                Saves = regular.Sum(r => r.Saves),
-                ShotsAgainst = regular.Sum(r => r.ShotsAgainst),
+                Saves = saves,
+                ShotsAgainst = shotsAgainst,
                 GoalsAgainst = regular.Sum(r => r.GoalsAgainst),
+
+                // Computed: Saves / ShotsAgainst. Zero when nothing to divide.
+                SavePercentage = shotsAgainst > 0
+                    ? Math.Round((decimal)saves / shotsAgainst, 3)
+                    : 0m,
 
                 PlayoffWins = playoffs.Sum(r => r.Wins),
                 PlayoffLosses = playoffs.Sum(r => r.Losses),
@@ -388,7 +528,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             return Math.Max(1, endYear - startYear + 1);
         }
 
-        /// <summary>"20252026" -> "25-26". Keeps the row labels short.</summary>
         private static string FormatSeason(int seasonCode)
         {
             var startYear = seasonCode / 10000;

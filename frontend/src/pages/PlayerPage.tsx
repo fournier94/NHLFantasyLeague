@@ -1,11 +1,13 @@
 ﻿import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
     getPlayerDetail,
     type CareerRow,
     type GameLogRow,
     type PlayerDetail,
+    type Quarter,
 } from '@/api/client';
+import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------
 // Formatters
@@ -53,16 +55,39 @@ function formatDecimal(value: number, digits = 2): string {
 }
 
 // ---------------------------------------------------------------------
-// Shared table styles
+// Table primitives (dark theme, matching MonÉquipe)
 // ---------------------------------------------------------------------
 
-const thClass = 'border border-[#1B3A5C] px-2 py-1 text-left';
-const thRightClass = 'border border-[#1B3A5C] px-2 py-1 text-right';
-const tdClass = 'border border-[#C9D9EC] px-2 py-1 text-left';
-const tdRightClass = 'border border-[#C9D9EC] px-2 py-1 text-right';
+const thBase = 'px-2 py-1.5 font-medium whitespace-nowrap';
+const thLeft = `${thBase} text-left`;
+const thRight = `${thBase} text-right`;
+const tdBase = 'px-2 py-1 whitespace-nowrap';
+const tdLeft = `${tdBase} text-left`;
+const tdRight = `${tdBase} text-right`;
 
-function rowBg(index: number): string {
-    return index % 2 === 0 ? 'bg-[#EDF3FB]' : 'bg-[#F7FAFD]';
+function TableShell({ children }: { children: React.ReactNode }) {
+    // overflow-x-auto lets the table scroll horizontally on narrow
+    // screens instead of squashing or wrapping.
+    return (
+        <div className='w-full overflow-x-auto rounded-lg border border-border bg-card'>
+            {children}
+        </div>
+    );
+}
+
+function TableHead({ children }: { children: React.ReactNode }) {
+    return (
+        <thead className='border-b border-border text-[0.65rem] uppercase tracking-wide text-muted-foreground'>
+            {children}
+        </thead>
+    );
+}
+
+function rowClass(index: number): string {
+    return cn(
+        'border-b border-border/40 last:border-b-0',
+        index % 2 === 0 ? 'bg-transparent' : 'bg-secondary/20',
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -71,125 +96,137 @@ function rowBg(index: number): string {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
     return (
-        <h2 className='mt-6 mb-2 text-xl font-bold text-[#1B3A5C]'>
+        <h2 className='mt-6 mb-2 text-lg font-semibold text-foreground md:text-xl'>
             {children}
         </h2>
+    );
+}
+
+function SubSectionTitle({ children }: { children: React.ReactNode }) {
+    return (
+        <h3 className='mb-1 text-sm font-medium text-muted-foreground'>
+            {children}
+        </h3>
     );
 }
 
 function SkaterCareerTable({ rows }: { rows: CareerRow[] }) {
     if (rows.length === 0) {
         return (
-            <p className='text-sm text-muted-foreground'>
-                Aucune donnée.
-            </p>
+            <TableShell>
+                <div className='p-3 text-sm text-muted-foreground'>
+                    Aucune donnée.
+                </div>
+            </TableShell>
         );
     }
 
     return (
-        <table className='w-full border-collapse text-xs tabular-nums'>
-            <thead>
-                <tr className='bg-[#1B3A5C] text-white'>
-                    <th className={thClass}>Season</th>
-                    <th className={thClass}>Team</th>
-                    <th className={thClass}>Lge</th>
-                    <th className={thRightClass}>GP</th>
-                    <th className={thRightClass}>G</th>
-                    <th className={thRightClass}>A</th>
-                    <th className={thRightClass}>Pts</th>
-                    <th className={thRightClass}>PIM</th>
-                    <th className={thRightClass}>+/-</th>
-                    <th className={thRightClass}>PPP</th>
-                    <th className={thRightClass}>SOG</th>
-                    <th className={thRightClass}>GWG</th>
-                    <th className={thRightClass}>ATOI</th>
-                </tr>
-            </thead>
-
-            <tbody>
-                {rows.map((row, index) => (
-                    <tr
-                        key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                        className={rowBg(index)}
-                    >
-                        <td className={tdClass}>{row.seasonLabel}</td>
-                        <td className={tdClass}>{teamDisplay(row)}</td>
-                        <td className={tdClass}>{row.leagueAbbreviation}</td>
-                        <td className={tdRightClass}>{row.gamesPlayed}</td>
-                        <td className={tdRightClass}>{row.goals}</td>
-                        <td className={tdRightClass}>{row.assists}</td>
-                        <td className={tdRightClass}>{row.points}</td>
-                        <td className={tdRightClass}>{row.penaltyMinutes}</td>
-                        <td className={tdRightClass}>
-                            {row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus}
-                        </td>
-                        <td className={tdRightClass}>{row.powerPlayPoints}</td>
-                        <td className={tdRightClass}>{row.shots}</td>
-                        <td className={tdRightClass}>{row.gameWinningGoals}</td>
-                        <td className={tdRightClass}>
-                            {row.averageTimeOnIce ?? '—'}
-                        </td>
+        <TableShell>
+            <table className='w-full min-w-[640px] text-xs tabular-nums'>
+                <TableHead>
+                    <tr>
+                        <th className={thLeft}>Season</th>
+                        <th className={thLeft}>Team</th>
+                        <th className={thLeft}>Lge</th>
+                        <th className={thRight}>GP</th>
+                        <th className={thRight}>G</th>
+                        <th className={thRight}>A</th>
+                        <th className={thRight}>Pts</th>
+                        <th className={thRight}>PIM</th>
+                        <th className={thRight}>+/-</th>
+                        <th className={thRight}>PPP</th>
+                        <th className={thRight}>SOG</th>
+                        <th className={thRight}>GWG</th>
+                        <th className={thRight}>ATOI</th>
                     </tr>
-                ))}
-            </tbody>
-        </table>
+                </TableHead>
+                <tbody className='text-foreground'>
+                    {rows.map((row, index) => (
+                        <tr
+                            key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
+                            className={rowClass(index)}
+                        >
+                            <td className={tdLeft}>{row.seasonLabel}</td>
+                            <td className={tdLeft}>{teamDisplay(row)}</td>
+                            <td className={tdLeft}>{row.leagueAbbreviation}</td>
+                            <td className={tdRight}>{row.gamesPlayed}</td>
+                            <td className={tdRight}>{row.goals}</td>
+                            <td className={tdRight}>{row.assists}</td>
+                            <td className={tdRight}>{row.points}</td>
+                            <td className={tdRight}>{row.penaltyMinutes}</td>
+                            <td className={tdRight}>
+                                {row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus}
+                            </td>
+                            <td className={tdRight}>{row.powerPlayPoints}</td>
+                            <td className={tdRight}>{row.shots}</td>
+                            <td className={tdRight}>{row.gameWinningGoals}</td>
+                            <td className={tdRight}>{row.averageTimeOnIce ?? '—'}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </TableShell>
     );
 }
 
 function GoalieCareerTable({ rows }: { rows: CareerRow[] }) {
     if (rows.length === 0) {
         return (
-            <p className='text-sm text-muted-foreground'>
-                Aucune donnée.
-            </p>
+            <TableShell>
+                <div className='p-3 text-sm text-muted-foreground'>
+                    Aucune donnée.
+                </div>
+            </TableShell>
         );
     }
 
     return (
-        <table className='w-full border-collapse text-xs tabular-nums'>
-            <thead>
-                <tr className='bg-[#1B3A5C] text-white'>
-                    <th className={thClass}>Season</th>
-                    <th className={thClass}>Team</th>
-                    <th className={thClass}>Lge</th>
-                    <th className={thRightClass}>GP</th>
-                    <th className={thRightClass}>W</th>
-                    <th className={thRightClass}>L</th>
-                    <th className={thRightClass}>OTL</th>
-                    <th className={thRightClass}>SO</th>
-                    <th className={thRightClass}>SV%</th>
-                    <th className={thRightClass}>GAA</th>
-                    <th className={thRightClass}>SV</th>
-                    <th className={thRightClass}>SA</th>
-                </tr>
-            </thead>
-
-            <tbody>
-                {rows.map((row, index) => (
-                    <tr
-                        key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                        className={rowBg(index)}
-                    >
-                        <td className={tdClass}>{row.seasonLabel}</td>
-                        <td className={tdClass}>{teamDisplay(row)}</td>
-                        <td className={tdClass}>{row.leagueAbbreviation}</td>
-                        <td className={tdRightClass}>{row.gamesPlayed}</td>
-                        <td className={tdRightClass}>{row.wins}</td>
-                        <td className={tdRightClass}>{row.losses}</td>
-                        <td className={tdRightClass}>{row.overtimeLosses}</td>
-                        <td className={tdRightClass}>{row.shutouts}</td>
-                        <td className={tdRightClass}>
-                            {formatDecimal(row.savePercentage, 3)}
-                        </td>
-                        <td className={tdRightClass}>
-                            {formatDecimal(row.goalsAgainstAverage, 2)}
-                        </td>
-                        <td className={tdRightClass}>{row.saves}</td>
-                        <td className={tdRightClass}>{row.shotsAgainst}</td>
+        <TableShell>
+            <table className='w-full min-w-[600px] text-xs tabular-nums'>
+                <TableHead>
+                    <tr>
+                        <th className={thLeft}>Season</th>
+                        <th className={thLeft}>Team</th>
+                        <th className={thLeft}>Lge</th>
+                        <th className={thRight}>GP</th>
+                        <th className={thRight}>W</th>
+                        <th className={thRight}>L</th>
+                        <th className={thRight}>OTL</th>
+                        <th className={thRight}>SO</th>
+                        <th className={thRight}>SV%</th>
+                        <th className={thRight}>GAA</th>
+                        <th className={thRight}>SV</th>
+                        <th className={thRight}>SA</th>
                     </tr>
-                ))}
-            </tbody>
-        </table>
+                </TableHead>
+                <tbody className='text-foreground'>
+                    {rows.map((row, index) => (
+                        <tr
+                            key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
+                            className={rowClass(index)}
+                        >
+                            <td className={tdLeft}>{row.seasonLabel}</td>
+                            <td className={tdLeft}>{teamDisplay(row)}</td>
+                            <td className={tdLeft}>{row.leagueAbbreviation}</td>
+                            <td className={tdRight}>{row.gamesPlayed}</td>
+                            <td className={tdRight}>{row.wins}</td>
+                            <td className={tdRight}>{row.losses}</td>
+                            <td className={tdRight}>{row.overtimeLosses}</td>
+                            <td className={tdRight}>{row.shutouts}</td>
+                            <td className={tdRight}>
+                                {formatDecimal(row.savePercentage, 3)}
+                            </td>
+                            <td className={tdRight}>
+                                {formatDecimal(row.goalsAgainstAverage, 2)}
+                            </td>
+                            <td className={tdRight}>{row.saves}</td>
+                            <td className={tdRight}>{row.shotsAgainst}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </TableShell>
     );
 }
 
@@ -202,96 +239,233 @@ function GameLogTable({
 }) {
     if (rows.length === 0) {
         return (
-            <p className='text-sm text-muted-foreground'>
-                Aucune partie récente.
-            </p>
+            <TableShell>
+                <div className='p-3 text-sm text-muted-foreground'>
+                    Aucune partie récente.
+                </div>
+            </TableShell>
         );
     }
 
     return (
-        <table className='w-full border-collapse text-xs tabular-nums'>
-            <thead>
-                <tr className='bg-[#1B3A5C] text-white'>
-                    <th className={thClass}>Date</th>
-                    <th className={thClass}>Opp</th>
-                    <th className={thClass}>Loc</th>
-                    {isGoalie ? (
-                        <>
-                            <th className={thRightClass}>Déc.</th>
-                            <th className={thRightClass}>BA</th>
-                            <th className={thRightClass}>AR</th>
-                            <th className={thRightClass}>Pts</th>
-                        </>
-                    ) : (
-                        <>
-                            <th className={thRightClass}>B</th>
-                            <th className={thRightClass}>A</th>
-                            <th className={thRightClass}>Pts</th>
-                            <th className={thRightClass}>FP</th>
-                        </>
-                    )}
-                </tr>
-            </thead>
+        <TableShell>
+            <table className='w-full min-w-[560px] text-xs tabular-nums'>
+                <TableHead>
+                    <tr>
+                        <th className={thLeft}>Date</th>
+                        <th className={thLeft}>Opp</th>
+                        <th className={thLeft}>Loc</th>
+                        {isGoalie ? (
+                            <>
+                                <th className={thRight}>Déc.</th>
+                                <th className={thRight}>BA</th>
+                                <th className={thRight}>AR</th>
+                                <th className={thRight}>FP</th>
+                            </>
+                        ) : (
+                            <>
+                                <th className={thRight}>B</th>
+                                <th className={thRight}>A</th>
+                                <th className={thRight}>Pts</th>
+                                <th className={thRight}>PIM</th>
+                                <th className={thRight}>+/-</th>
+                                <th className={thRight}>SOG</th>
+                                <th className={thRight}>FP</th>
+                            </>
+                        )}
+                    </tr>
+                </TableHead>
+                <tbody className='text-foreground'>
+                    {rows.map((game, index) => {
+                        const result = isGoalie
+                            ? game.goalieWin
+                                ? 'W'
+                                : game.goalieOvertimeLoss
+                                    ? 'OTL'
+                                    : 'L'
+                            : null;
 
-            <tbody>
-                {rows.map((game, index) => {
-                    const result = isGoalie
-                        ? game.goalieWin
-                            ? 'W'
-                            : game.goalieOvertimeLoss
-                                ? 'OTL'
-                                : 'L'
-                        : null;
+                        return (
+                            <tr key={game.nhlGameId} className={rowClass(index)}>
+                                <td className={tdLeft}>
+                                    {shortGameDate(game.gameDate)}
+                                </td>
+                                <td className={tdLeft}>
+                                    {game.opponentAbbreviation}
+                                </td>
+                                <td className={tdLeft}>
+                                    {game.isHomeGame ? 'H' : 'R'}
+                                </td>
+                                {isGoalie ? (
+                                    <>
+                                        <td className={tdRight}>
+                                            {result}
+                                            {game.shutout ? ' (SO)' : ''}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {game.goalsAgainst}
+                                        </td>
+                                        <td className={tdRight}>{game.saves}</td>
+                                        <td className={tdRight}>
+                                            {game.fantasyPoints}
+                                        </td>
+                                    </>
+                                ) : (
+                                    <>
+                                        <td className={tdRight}>{game.goals}</td>
+                                        <td className={tdRight}>{game.assists}</td>
+                                        <td className={tdRight}>{game.points}</td>
+                                        <td className={tdRight}>
+                                            {game.penaltyMinutes}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {game.plusMinus > 0
+                                                ? `+${game.plusMinus}`
+                                                : game.plusMinus}
+                                        </td>
+                                        <td className={tdRight}>{game.shots}</td>
+                                        <td className={tdRight}>
+                                            {game.fantasyPoints}
+                                        </td>
+                                    </>
+                                )}
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </TableShell>
+    );
+}
 
-                    return (
-                        <tr key={game.nhlGameId} className={rowBg(index)}>
-                            <td className={tdClass}>
-                                {shortGameDate(game.gameDate)}
-                            </td>
-                            <td className={tdClass}>
-                                {game.opponentAbbreviation}
-                            </td>
-                            <td className={tdClass}>
-                                {game.isHomeGame ? 'H' : 'R'}
-                            </td>
+function QuarterTable({
+    quarters,
+    isGoalie,
+}: {
+    quarters: Quarter[];
+    isGoalie: boolean;
+}) {
+    // Always four rows; quarters with no games show dashes.
+    const rows = quarters.length === 4 ? quarters : [];
 
-                            {isGoalie ? (
-                                <>
-                                    <td className={tdRightClass}>
-                                        {result}
-                                        {game.shutout ? ' (SO)' : ''}
-                                    </td>
-                                    <td className={tdRightClass}>
-                                        {game.goalsAgainst}
-                                    </td>
-                                    <td className={tdRightClass}>
-                                        {game.saves}
-                                    </td>
-                                    <td className={tdRightClass}>
-                                        {game.fantasyPoints}
-                                    </td>
-                                </>
-                            ) : (
-                                <>
-                                    <td className={tdRightClass}>
-                                        {game.goals}
-                                    </td>
-                                    <td className={tdRightClass}>
-                                        {game.assists}
-                                    </td>
-                                    <td className={tdRightClass}>
-                                        {game.points}
-                                    </td>
-                                    <td className={tdRightClass}>
-                                        {game.fantasyPoints}
-                                    </td>
-                                </>
-                            )}
-                        </tr>
-                    );
-                })}
-            </tbody>
-        </table>
+    if (rows.length === 0) {
+        return null;
+    }
+
+    // Every cell goes through this. It returns the number when there
+    // are games, a dash otherwise, so the return type is `number | "—"`
+    // and every call site passes the same union.
+    const cell = (value: number, hasGames: boolean): number | '—' =>
+        hasGames ? value : '—';
+
+    return (
+        <TableShell>
+            <table className='w-full min-w-[480px] text-xs tabular-nums'>
+                <TableHead>
+                    <tr>
+                        <th className={thLeft}>Quart</th>
+                        <th className={thLeft}>Dates</th>
+                        {isGoalie ? (
+                            <>
+                                <th className={thRight}>GP</th>
+                                <th className={thRight}>W</th>
+                                <th className={thRight}>L</th>
+                                <th className={thRight}>OTL</th>
+                                <th className={thRight}>SO</th>
+                                <th className={thRight}>AR</th>
+                                <th className={thRight}>FP</th>
+                            </>
+                        ) : (
+                            <>
+                                <th className={thRight}>GP</th>
+                                <th className={thRight}>B</th>
+                                <th className={thRight}>A</th>
+                                <th className={thRight}>Pts</th>
+                                <th className={thRight}>PIM</th>
+                                <th className={thRight}>+/-</th>
+                                <th className={thRight}>SOG</th>
+                                <th className={thRight}>FP</th>
+                            </>
+                        )}
+                    </tr>
+                </TableHead>
+                <tbody className='text-foreground'>
+                    {rows.map((q, index) => {
+                        const hasGames = q.gamesPlayed > 0;
+
+                        const dates =
+                            q.startDate && q.endDate
+                                ? `${shortGameDate(q.startDate)} – ${shortGameDate(q.endDate)}`
+                                : '—';
+
+                        return (
+                            <tr key={q.label} className={rowClass(index)}>
+                                <td className={tdLeft}>{q.label}</td>
+                                <td className={`${tdLeft} text-muted-foreground`}>
+                                    {dates}
+                                </td>
+                                {isGoalie ? (
+                                    <>
+                                        <td className={tdRight}>
+                                            {cell(q.gamesPlayed, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.wins, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.losses, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.overtimeLosses, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.shutouts, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.saves, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.fantasyPoints, hasGames)}
+                                        </td>
+                                    </>
+                                ) : (
+                                    <>
+                                        <td className={tdRight}>
+                                            {cell(q.gamesPlayed, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.goals, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.assists, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.points, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.penaltyMinutes, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {hasGames
+                                                ? q.plusMinus > 0
+                                                    ? `+${q.plusMinus}`
+                                                    : q.plusMinus
+                                                : '—'}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.shots, hasGames)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {cell(q.fantasyPoints, hasGames)}
+                                        </td>
+                                    </>
+                                )}
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </TableShell>
     );
 }
 
@@ -300,12 +474,14 @@ function GameLogTable({
 // ---------------------------------------------------------------------
 
 export default function PlayerPage() {
+    const navigate = useNavigate();
     const { nhlPlayerId } = useParams<{ nhlPlayerId: string }>();
 
     const [player, setPlayer] = useState<PlayerDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [showYouthMinor, setShowYouthMinor] = useState(false);
+    const [showGameLog, setShowGameLog] = useState(false);
 
     useEffect(() => {
         if (!nhlPlayerId) {
@@ -342,22 +518,34 @@ export default function PlayerPage() {
         };
     }, [nhlPlayerId]);
 
+    // Close button: go back to wherever the user came from. If there is
+    // no history (e.g. the page was opened directly), fall back to
+    // /joueurs so we never leave the user stuck.
+    function handleClose() {
+        if (window.history.length > 1) {
+            navigate(-1);
+        } else {
+            navigate('/joueurs');
+        }
+    }
+
     if (loading) {
         return <p className='text-muted-foreground'>Chargement...</p>;
     }
 
     if (error || !player) {
         return (
-            <div>
+            <div className='space-y-3'>
                 <p className='text-destructive'>
                     {error ?? 'Joueur introuvable.'}
                 </p>
-                <Link
-                    to='/joueurs'
-                    className='mt-2 inline-block text-sm text-primary hover:underline'
+                <button
+                    type='button'
+                    onClick={handleClose}
+                    className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
                 >
-                    ← Retour aux joueurs
-                </Link>
+                    Fermer
+                </button>
             </div>
         );
     }
@@ -407,19 +595,21 @@ export default function PlayerPage() {
         player.nhlTotals.playoffGamesPlayed > 0;
 
     return (
-        <section className='mx-auto max-w-5xl space-y-4'>
-            <div>
-                <Link
-                    to='/joueurs'
-                    className='text-sm text-primary hover:underline'
+        <section className='mx-auto w-full max-w-5xl space-y-4'>
+            {/* Top bar: Close button only. Back link removed on purpose. */}
+            <div className='flex items-center justify-between gap-2'>
+                <button
+                    type='button'
+                    onClick={handleClose}
+                    className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
                 >
-                    ← Retour aux joueurs
-                </Link>
+                    ✕ Fermer
+                </button>
             </div>
 
             {/* Hero banner (only when the API returned one) */}
             {player.heroImageUrl && (
-                <div className='-mx-4 -mt-4 mb-2 h-40 overflow-hidden rounded-b-lg border-b border-border bg-black md:-mx-6'>
+                <div className='-mx-3 -mt-3 mb-2 h-40 overflow-hidden rounded-b-lg border-b border-border bg-black sm:-mx-4 sm:-mt-4 md:-mx-6 md:-mt-6'>
                     <img
                         src={player.heroImageUrl}
                         alt=''
@@ -429,10 +619,11 @@ export default function PlayerPage() {
                 </div>
             )}
 
-            {/* Identity + headshot */}
-            <div className='flex flex-wrap items-start justify-between gap-4'>
-                <div className='min-w-0 flex-1'>
-                    <div className='flex items-center gap-3'>
+            {/* Identity + headshot.
+                Stacks vertically on phones, side-by-side from sm up. */}
+            <div className='flex flex-col items-start gap-4 sm:flex-row sm:items-start sm:justify-between'>
+                <div className='w-full min-w-0 sm:flex-1'>
+                    <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
                         <h1 className='text-2xl font-bold text-foreground'>
                             {player.firstName} {player.lastName}
                         </h1>
@@ -478,8 +669,7 @@ export default function PlayerPage() {
                             <span className='font-semibold text-primary'>
                                 {player.draftTeamAbbreviation}
                             </span>
-                            <br />
-                            - {draftLine}
+                            <br />- {draftLine}
                         </p>
                     )}
 
@@ -495,7 +685,7 @@ export default function PlayerPage() {
                     <img
                         src={player.headshotUrl}
                         alt={`${player.firstName} ${player.lastName}`}
-                        className='h-32 w-32 rounded-md bg-white object-cover'
+                        className='h-24 w-24 shrink-0 rounded-md bg-white object-cover sm:h-32 sm:w-32'
                         loading='lazy'
                     />
                 )}
@@ -529,14 +719,23 @@ export default function PlayerPage() {
                 </div>
             )}
 
+            {/* Quarter-by-quarter stats for the current season */}
+            {player.seasonQuarters.length === 4 && (
+                <>
+                    <SectionTitle>Par quart (saison courante)</SectionTitle>
+                    <QuarterTable
+                        quarters={player.seasonQuarters}
+                        isGoalie={isGoalie}
+                    />
+                </>
+            )}
+
             {/* Career */}
             <SectionTitle>Career</SectionTitle>
 
             <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
                 <div>
-                    <h3 className='mb-1 text-sm font-semibold text-[#1B3A5C]'>
-                        Regular Season
-                    </h3>
+                    <SubSectionTitle>Regular Season</SubSectionTitle>
                     {isGoalie ? (
                         <GoalieCareerTable rows={player.regularSeason} />
                     ) : (
@@ -545,9 +744,7 @@ export default function PlayerPage() {
                 </div>
 
                 <div>
-                    <h3 className='mb-1 text-sm font-semibold text-[#1B3A5C]'>
-                        Playoffs
-                    </h3>
+                    <SubSectionTitle>Playoffs</SubSectionTitle>
                     {isGoalie ? (
                         <GoalieCareerTable rows={player.playoffs} />
                     ) : (
@@ -558,178 +755,207 @@ export default function PlayerPage() {
 
             {hasNhlTotals && (
                 <div className='mt-2'>
-                    <h3 className='mb-1 text-sm font-semibold text-[#1B3A5C]'>
-                        NHL Totals
-                    </h3>
+                    <SubSectionTitle>NHL Totals</SubSectionTitle>
 
                     {isGoalie ? (
-                        <table className='w-full border-collapse text-xs tabular-nums'>
-                            <thead>
-                                <tr className='bg-[#1B3A5C] text-white'>
-                                    <th className={thClass}>&nbsp;</th>
-                                    <th className={thRightClass}>GP</th>
-                                    <th className={thRightClass}>W</th>
-                                    <th className={thRightClass}>L</th>
-                                    <th className={thRightClass}>OTL</th>
-                                    <th className={thRightClass}>SO</th>
-                                    <th className={thRightClass}>SV</th>
-                                    <th className={thRightClass}>SA</th>
-                                    <th className={thRightClass}>GA</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr className={rowBg(0)}>
-                                    <td className={`${tdClass} font-semibold`}>
-                                        Regular Season
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.gamesPlayed}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.wins}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.losses}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.overtimeLosses}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.shutouts}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.saves}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.shotsAgainst}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.goalsAgainst}
-                                    </td>
-                                </tr>
-                                <tr className={rowBg(1)}>
-                                    <td className={`${tdClass} font-semibold`}>
-                                        Playoffs
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffGamesPlayed}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffWins}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffLosses}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffOvertimeLosses}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffShutouts}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        —
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        —
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        —
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+                        <TableShell>
+                            <table className='w-full min-w-[640px] text-xs tabular-nums'>
+                                <TableHead>
+                                    <tr>
+                                        <th className={thLeft}>&nbsp;</th>
+                                        <th className={thRight}>GP</th>
+                                        <th className={thRight}>W</th>
+                                        <th className={thRight}>L</th>
+                                        <th className={thRight}>OTL</th>
+                                        <th className={thRight}>SO</th>
+                                        <th className={thRight}>SV%</th>
+                                        <th className={thRight}>SV</th>
+                                        <th className={thRight}>SA</th>
+                                        <th className={thRight}>GA</th>
+                                    </tr>
+                                </TableHead>
+                                <tbody className='text-foreground'>
+                                    <tr className={rowClass(0)}>
+                                        <td className={`${tdLeft} font-semibold`}>
+                                            Regular Season
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.gamesPlayed}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.wins}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.losses}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.overtimeLosses}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.shutouts}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.shotsAgainst > 0
+                                                ? formatDecimal(
+                                                    player.nhlTotals.savePercentage,
+                                                    3,
+                                                )
+                                                : '—'}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.saves}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.shotsAgainst}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.goalsAgainst}
+                                        </td>
+                                    </tr>
+                                    <tr className={rowClass(1)}>
+                                        <td className={`${tdLeft} font-semibold`}>
+                                            Playoffs
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffGamesPlayed}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffWins}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffLosses}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffOvertimeLosses}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffShutouts}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            —
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            —
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            —
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            —
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </TableShell>
                     ) : (
-                        <table className='w-full border-collapse text-xs tabular-nums'>
-                            <thead>
-                                <tr className='bg-[#1B3A5C] text-white'>
-                                    <th className={thClass}>&nbsp;</th>
-                                    <th className={thRightClass}>GP</th>
-                                    <th className={thRightClass}>G</th>
-                                    <th className={thRightClass}>A</th>
-                                    <th className={thRightClass}>Pts</th>
-                                    <th className={thRightClass}>PIM</th>
-                                    <th className={thRightClass}>+/-</th>
-                                    <th className={thRightClass}>PPP</th>
-                                    <th className={thRightClass}>SOG</th>
-                                    <th className={thRightClass}>GWG</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr className={rowBg(0)}>
-                                    <td className={`${tdClass} font-semibold`}>
-                                        Regular Season
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.gamesPlayed}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.goals}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.assists}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.points}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.penaltyMinutes}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.plusMinus > 0
-                                            ? `+${player.nhlTotals.plusMinus}`
-                                            : player.nhlTotals.plusMinus}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.powerPlayPoints}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.shots}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.gameWinningGoals}
-                                    </td>
-                                </tr>
-                                <tr className={rowBg(1)}>
-                                    <td className={`${tdClass} font-semibold`}>
-                                        Playoffs
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffGamesPlayed}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffGoals}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffAssists}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffPoints}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffPenaltyMinutes}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        —
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffPowerPlayPoints}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffShots}
-                                    </td>
-                                    <td className={`${tdRightClass} font-semibold`}>
-                                        {player.nhlTotals.playoffGameWinningGoals}
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+                        <TableShell>
+                            <table className='w-full min-w-[640px] text-xs tabular-nums'>
+                                <TableHead>
+                                    <tr>
+                                        <th className={thLeft}>&nbsp;</th>
+                                        <th className={thRight}>GP</th>
+                                        <th className={thRight}>G</th>
+                                        <th className={thRight}>A</th>
+                                        <th className={thRight}>Pts</th>
+                                        <th className={thRight}>PIM</th>
+                                        <th className={thRight}>+/-</th>
+                                        <th className={thRight}>PPP</th>
+                                        <th className={thRight}>SOG</th>
+                                        <th className={thRight}>GWG</th>
+                                    </tr>
+                                </TableHead>
+                                <tbody className='text-foreground'>
+                                    <tr className={rowClass(0)}>
+                                        <td className={`${tdLeft} font-semibold`}>
+                                            Regular Season
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.gamesPlayed}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.goals}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.assists}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.points}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.penaltyMinutes}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.plusMinus > 0
+                                                ? `+${player.nhlTotals.plusMinus}`
+                                                : player.nhlTotals.plusMinus}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.powerPlayPoints}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.shots}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.gameWinningGoals}
+                                        </td>
+                                    </tr>
+                                    <tr className={rowClass(1)}>
+                                        <td className={`${tdLeft} font-semibold`}>
+                                            Playoffs
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffGamesPlayed}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffGoals}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffAssists}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffPoints}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffPenaltyMinutes}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            —
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffPowerPlayPoints}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffShots}
+                                        </td>
+                                        <td className={`${tdRight} font-semibold`}>
+                                            {player.nhlTotals.playoffGameWinningGoals}
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </TableShell>
                     )}
                 </div>
             )}
 
-            {/* Recent games */}
-            <SectionTitle>Dernières parties</SectionTitle>
-            <GameLogTable rows={player.recentGames} isGoalie={isGoalie} />
+            {/* Game logs (hidden until the user clicks) */}
+            <SectionTitle>Fiches de match</SectionTitle>
+            <button
+                type='button'
+                onClick={() => setShowGameLog((v) => !v)}
+                className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
+            >
+                {showGameLog ? '▼ Masquer' : '▶ Afficher'} les fiches de match
+            </button>
+
+            {showGameLog && (
+                <div className='mt-3'>
+                    <GameLogTable
+                        rows={player.recentGames}
+                        isGoalie={isGoalie}
+                    />
+                </div>
+            )}
 
             {/* Tournaments */}
             <SectionTitle>Tournaments</SectionTitle>
@@ -746,7 +972,8 @@ export default function PlayerPage() {
                     onClick={() => setShowYouthMinor((v) => !v)}
                     className='cursor-pointer text-sm font-semibold text-primary hover:underline'
                 >
-                    {showYouthMinor ? '▼' : '▶'} Youth / Minor ({player.youthMinor.length})
+                    {showYouthMinor ? '▼' : '▶'} Youth / Minor (
+                    {player.youthMinor.length})
                 </button>
 
                 {showYouthMinor && (
@@ -768,40 +995,42 @@ export default function PlayerPage() {
                     Aucun contrat enregistré.
                 </p>
             ) : (
-                <table className='w-full border-collapse text-xs tabular-nums'>
-                    <thead>
-                        <tr className='bg-[#1B3A5C] text-white'>
-                            <th className={thClass}>Salaire annuel</th>
-                            <th className={thClass}>Début</th>
-                            <th className={thClass}>Fin</th>
-                            <th className={thRightClass}>Années restantes</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {player.contracts.map((contract, index) => (
-                            <tr
-                                key={`${contract.startSeason}-${contract.endSeason}`}
-                                className={rowBg(index)}
-                            >
-                                <td className={tdClass}>
-                                    {salaryFormatter.format(contract.salary)} $
-                                    <span className='ml-2 text-[0.7rem] text-muted-foreground'>
-                                        ({compactMillions(contract.salary)})
-                                    </span>
-                                </td>
-                                <td className={tdClass}>
-                                    {String(contract.startSeason).slice(0, 4)}
-                                </td>
-                                <td className={tdClass}>
-                                    {String(contract.endSeason).slice(4, 8)}
-                                </td>
-                                <td className={tdRightClass}>
-                                    {contract.yearsRemaining}
-                                </td>
+                <TableShell>
+                    <table className='w-full min-w-[560px] text-xs tabular-nums'>
+                        <TableHead>
+                            <tr>
+                                <th className={thLeft}>Salaire annuel</th>
+                                <th className={thLeft}>Début</th>
+                                <th className={thLeft}>Fin</th>
+                                <th className={thRight}>Années restantes</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </TableHead>
+                        <tbody className='text-foreground'>
+                            {player.contracts.map((contract, index) => (
+                                <tr
+                                    key={`${contract.startSeason}-${contract.endSeason}`}
+                                    className={rowClass(index)}
+                                >
+                                    <td className={tdLeft}>
+                                        {salaryFormatter.format(contract.salary)} $
+                                        <span className='ml-2 text-[0.7rem] text-muted-foreground'>
+                                            ({compactMillions(contract.salary)})
+                                        </span>
+                                    </td>
+                                    <td className={tdLeft}>
+                                        {String(contract.startSeason).slice(0, 4)}
+                                    </td>
+                                    <td className={tdLeft}>
+                                        {String(contract.endSeason).slice(4, 8)}
+                                    </td>
+                                    <td className={tdRight}>
+                                        {contract.yearsRemaining}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </TableShell>
             )}
 
             {player.currentCapHit != null && (
@@ -829,7 +1058,8 @@ export default function PlayerPage() {
                         </p>
                         <p className='text-muted-foreground'>
                             Statut : {player.rosterStatus ?? '—'}
-                            {player.rosterSlot != null && ` · Slot ${player.rosterSlot}`}
+                            {player.rosterSlot != null &&
+                                ` · Slot ${player.rosterSlot}`}
                         </p>
                         {player.fantasySalary != null && (
                             <p className='text-muted-foreground'>
@@ -839,9 +1069,14 @@ export default function PlayerPage() {
                         )}
                         {player.seasonFantasyPoints != null && (
                             <p className='text-muted-foreground'>
-                                Points fantasy (saison) : {player.seasonFantasyPoints}
+                                Points fantasy (saison) :{' '}
+                                {player.seasonFantasyPoints}
                                 {player.seasonHatTricks != null && (
-                                    <> · Tour du chapeau : {player.seasonHatTricks}</>
+                                    <>
+                                        {' '}
+                                        · Tour du chapeau :{' '}
+                                        {player.seasonHatTricks}
+                                    </>
                                 )}
                             </p>
                         )}
@@ -857,54 +1092,62 @@ export default function PlayerPage() {
                     Aucune blessure enregistrée.
                 </p>
             ) : (
-                <table className='w-full border-collapse text-xs tabular-nums'>
-                    <thead>
-                        <tr className='bg-[#1B3A5C] text-white'>
-                            <th className={thClass}>Statut</th>
-                            <th className={thClass}>Équipe</th>
-                            <th className={thClass}>Vue le</th>
-                            <th className={thClass}>Dernière vue</th>
-                            <th className={thClass}>Résolue le</th>
-                            <th className={thClass}>Note</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {player.injuryHistory.map((spell, index) => (
-                            <tr
-                                key={`${spell.firstSeenAt}-${index}`}
-                                className={rowBg(index)}
-                            >
-                                <td className={tdClass}>{spell.injuryStatus}</td>
-                                <td className={tdClass}>
-                                    {spell.teamAbbreviation}
-                                </td>
-                                <td className={tdClass}>
-                                    {shortDate(spell.firstSeenAt)}
-                                </td>
-                                <td className={tdClass}>
-                                    {shortDate(spell.lastSeenAt)}
-                                </td>
-                                <td className={tdClass}>
-                                    {spell.resolvedAt
-                                        ? shortDate(spell.resolvedAt)
-                                        : 'En cours'}
-                                </td>
-                                <td className={`${tdClass} text-[0.7rem] text-muted-foreground`}>
-                                    {spell.injuryDescription ?? '—'}
-                                </td>
+                <TableShell>
+                    <table className='w-full min-w-[640px] text-xs tabular-nums'>
+                        <TableHead>
+                            <tr>
+                                <th className={thLeft}>Statut</th>
+                                <th className={thLeft}>Équipe</th>
+                                <th className={thLeft}>Vue le</th>
+                                <th className={thLeft}>Dernière vue</th>
+                                <th className={thLeft}>Résolue le</th>
+                                <th className={thLeft}>Note</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </TableHead>
+                        <tbody className='text-foreground'>
+                            {player.injuryHistory.map((spell, index) => (
+                                <tr
+                                    key={`${spell.firstSeenAt}-${index}`}
+                                    className={rowClass(index)}
+                                >
+                                    <td className={tdLeft}>
+                                        {spell.injuryStatus}
+                                    </td>
+                                    <td className={tdLeft}>
+                                        {spell.teamAbbreviation}
+                                    </td>
+                                    <td className={tdLeft}>
+                                        {shortDate(spell.firstSeenAt)}
+                                    </td>
+                                    <td className={tdLeft}>
+                                        {shortDate(spell.lastSeenAt)}
+                                    </td>
+                                    <td className={tdLeft}>
+                                        {spell.resolvedAt
+                                            ? shortDate(spell.resolvedAt)
+                                            : 'En cours'}
+                                    </td>
+                                    <td
+                                        className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
+                                    >
+                                        {spell.injuryDescription ?? '—'}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </TableShell>
             )}
 
+            {/* Bottom close for long pages */}
             <div className='pt-4'>
-                <Link
-                    to='/joueurs'
-                    className='text-sm text-primary hover:underline'
+                <button
+                    type='button'
+                    onClick={handleClose}
+                    className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
                 >
-                    ← Retour aux joueurs
-                </Link>
+                    ✕ Fermer
+                </button>
             </div>
         </section>
     );

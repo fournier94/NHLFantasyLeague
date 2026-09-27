@@ -14,10 +14,10 @@ namespace NhlFantasyLeague.api.Services.NHL
         private readonly NhlStatsService _nhlStatsService;
 
         public NhlGameLogService(
-    HttpClient httpClient,
-    AppDbContext dbContext,
-    NhlPlayerService playerService,
-    NhlStatsService nhlStatsService)
+            HttpClient httpClient,
+            AppDbContext dbContext,
+            NhlPlayerService playerService,
+            NhlStatsService nhlStatsService)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
@@ -26,8 +26,8 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         public async Task<NhlPlayerGameLogResponse?> GetPlayerGameLogAsync(
-int nhlPlayerId,
-int seasonCode)
+            int nhlPlayerId,
+            int seasonCode)
         {
             var url =
                 $"https://api-web.nhle.com/v1/player/{nhlPlayerId}/game-log/{seasonCode}/2";
@@ -36,8 +36,8 @@ int seasonCode)
         }
 
         public async Task<int> SavePlayerGameLogsAsync(
-    int nhlPlayerId,
-    int seasonCode)
+            int nhlPlayerId,
+            int seasonCode)
         {
             var playerResponse = await _playerService.GetPlayerAsync(nhlPlayerId);
 
@@ -81,8 +81,6 @@ int seasonCode)
                     "G",
                     StringComparison.OrdinalIgnoreCase);
 
-            // Load NHL teams once instead of querying the database
-            // for every individual game.
             var teams = await _dbContext.NhlTeams
                 .ToListAsync();
 
@@ -91,7 +89,6 @@ int seasonCode)
                     t => t.Abbreviation,
                     StringComparer.OrdinalIgnoreCase);
 
-            // Load all existing game logs for this player/season once.
             var existingLogs = await _dbContext.PlayerGameLogs
                 .Where(g =>
                     g.PlayerId == player.Id &&
@@ -126,8 +123,6 @@ int seasonCode)
 
                 if (isGoalie)
                 {
-                    // Goalies can receive points from goals/assists,
-                    // but never receive a hat-trick bonus.
                     goalieWin =
                         string.Equals(
                             game.Decision,
@@ -144,13 +139,9 @@ int seasonCode)
                 }
                 else
                 {
-                    // Only skaters can receive a hat-trick bonus.
                     hatTrick = game.Goals >= 3;
                 }
 
-                // The NHL game-log response does not provide the
-                // "points" field for goalies. Calculate it from
-                // goals + assists instead.
                 int points = isGoalie
                     ? game.Goals + game.Assists
                     : game.Points;
@@ -193,6 +184,9 @@ int seasonCode)
                         Goals = game.Goals,
                         Assists = game.Assists,
                         Points = points,
+                        PenaltyMinutes = game.PenaltyMinutes,
+                        PlusMinus = game.PlusMinus,
+                        Shots = game.Shots,
                         HatTrick = hatTrick,
                         GoalieWin = goalieWin,
                         GoalieOvertimeLoss = goalieOTLoss,
@@ -215,6 +209,9 @@ int seasonCode)
                     existingLog.Goals = game.Goals;
                     existingLog.Assists = game.Assists;
                     existingLog.Points = points;
+                    existingLog.PenaltyMinutes = game.PenaltyMinutes;
+                    existingLog.PlusMinus = game.PlusMinus;
+                    existingLog.Shots = game.Shots;
                     existingLog.HatTrick = hatTrick;
                     existingLog.GoalieWin = goalieWin;
                     existingLog.GoalieOvertimeLoss = goalieOTLoss;
@@ -227,8 +224,6 @@ int seasonCode)
 
             await _dbContext.SaveChangesAsync();
 
-            // Recalculate fantasy-specific season statistics
-            // after inserting/updating the game logs.
             await _nhlStatsService.UpdatePlayerSeasonStatsAsync(
                 nhlPlayerId,
                 seasonCode);

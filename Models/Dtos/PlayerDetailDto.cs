@@ -101,6 +101,14 @@
         /// from PlayerGameLog, capped at 10 rows.
         /// </summary>
         public List<GameLogRowDto> RecentGames { get; set; } = new();
+
+        /// <summary>
+        /// Four rows, one per calendar quarter of the regular season.
+        /// The quarter boundaries are computed from the earliest and
+        /// latest regular-season game dates across the whole league.
+        /// Quarters with no games are still returned, with zeros.
+        /// </summary>
+        public List<QuarterDto> SeasonQuarters { get; set; } = new();
     }
 
     /// <summary>
@@ -171,8 +179,6 @@
         public int PlayoffShots { get; set; }
         public int PlayoffGameWinningGoals { get; set; }
 
-        // Goalie totals for the "NHL Totals" line when the player is a
-        // goalie. Zero for skaters.
         public int Wins { get; set; }
         public int Losses { get; set; }
         public int OvertimeLosses { get; set; }
@@ -181,10 +187,60 @@
         public int ShotsAgainst { get; set; }
         public int GoalsAgainst { get; set; }
 
+        /// <summary>
+        /// Save percentage across all NHL regular-season games, computed
+        /// as Saves / ShotsAgainst. Zero when ShotsAgainst is zero.
+        /// </summary>
+        public decimal SavePercentage { get; set; }
+
         public int PlayoffWins { get; set; }
         public int PlayoffLosses { get; set; }
         public int PlayoffOvertimeLosses { get; set; }
         public int PlayoffShutouts { get; set; }
+    }
+
+    /// <summary>
+    /// Aggregated stats for one quarter of the regular season. Carries
+    /// both skater and goalie fields; the frontend picks which to show.
+    /// </summary>
+    public class QuarterDto
+    {
+        /// <summary>"Q1" / "Q2" / "Q3" / "Q4".</summary>
+        public string Label { get; set; } = string.Empty;
+
+        /// <summary>First day of the quarter.</summary>
+        public DateOnly StartDate { get; set; }
+
+        /// <summary>Last day of the quarter (inclusive).</summary>
+        public DateOnly EndDate { get; set; }
+
+        /// <summary>Games the player played in this quarter.</summary>
+        public int GamesPlayed { get; set; }
+
+        // Skater fields
+        public int Goals { get; set; }
+        public int Assists { get; set; }
+        public int Points { get; set; }
+        public int PenaltyMinutes { get; set; }
+        public int PlusMinus { get; set; }
+        public int Shots { get; set; }
+
+        // Goalie fields
+        public int Wins { get; set; }
+        public int Losses { get; set; }
+        public int OvertimeLosses { get; set; }
+        public int Shutouts { get; set; }
+        public int Saves { get; set; }
+        /// <summary>
+        /// Save percentage across all NHL regular-season games, computed
+        /// as Saves / ShotsAgainst. Zero when ShotsAgainst is zero.
+        /// </summary>
+        public decimal SavePercentage { get; set; }
+        public int ShotsAgainst { get; set; }
+        public int GoalsAgainst { get; set; }
+
+        /// <summary>Fantasy points scored in this quarter.</summary>
+        public int FantasyPoints { get; set; }
     }
 
     /// <summary>

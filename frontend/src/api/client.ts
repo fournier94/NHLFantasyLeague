@@ -310,6 +310,9 @@ export interface CareerTotals {
     shotsAgainst: number;
     goalsAgainst: number;
 
+    /** Save percentage across NHL regular-season games, computed server-side. */
+    savePercentage: number;
+
     playoffWins: number;
     playoffLosses: number;
     playoffOvertimeLosses: number;
@@ -335,6 +338,37 @@ export interface GameLogRow {
     goalsAgainst: number;
     shotsAgainst: number;
     saves: number;
+}
+
+/** One quarter of the regular season, computed from the league schedule. */
+export interface Quarter {
+    /** "Q1", "Q2", "Q3" or "Q4". */
+    label: string;
+    /** First day of the quarter, ISO date. */
+    startDate: string;
+    /** Last day of the quarter, ISO date (inclusive). */
+    endDate: string;
+
+    gamesPlayed: number;
+
+    // Skater fields
+    goals: number;
+    assists: number;
+    points: number;
+    penaltyMinutes: number;
+    plusMinus: number;
+    shots: number;
+
+    // Goalie fields
+    wins: number;
+    losses: number;
+    overtimeLosses: number;
+    shutouts: number;
+    saves: number;
+    shotsAgainst: number;
+    goalsAgainst: number;
+
+    fantasyPoints: number;
 }
 
 /** One injury spell from PlayerInjuryHistory. */
@@ -414,6 +448,8 @@ export interface PlayerDetail {
     youthMinor: CareerRow[];
 
     recentGames: GameLogRow[];
+    /** Four rows, one per calendar quarter of the regular season. */
+    seasonQuarters: Quarter[];
 }
 
 /** Fetches everything the player detail page needs, by NHL player id. */

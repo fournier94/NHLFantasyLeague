@@ -16,6 +16,7 @@ import {
     auraRangeFor,
     isAuraOff,
 } from '@/lib/auraConfig';
+import { Link } from 'react-router-dom';
 
 // Goalies show PJ/V/D/DP; skaters show PJ/B/A/PTS.
 const skaterColumns = ['PJ', 'B', 'A', 'PTS'];
@@ -302,13 +303,17 @@ export function PlayerCard({
     ].join(', ');
 
     return (
-        <article
-            className={cn(
-                'relative h-34 overflow-hidden rounded-lg border border-border bg-card p-3 md:h-auto md:min-h-46',
-                className,
-            )}
-            style={bgTintStyle}
+        <Link
+            to={`/joueurs/${entry.nhlPlayerId}`}
+            className='block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded-lg'
         >
+            <article
+                className={cn(
+                    'relative h-34 overflow-hidden rounded-lg border border-border bg-card p-3 md:h-auto md:min-h-46',
+                    className,
+                )}
+                style={bgTintStyle}
+            >
             {!isAuraOff(bgAura) && (
                 <div
                     aria-hidden='true'
@@ -715,6 +720,7 @@ export function PlayerCard({
                     </div>
                 </div>
             </div>
-        </article>
+            </article>
+        </Link>
     );
 }
