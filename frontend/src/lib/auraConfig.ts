@@ -41,7 +41,9 @@ export type AuraChannel =
     | 'playerCardLogo'
     | 'playerCardPicture'
     | 'playerCardText'
-    | 'capBarTrack';
+    | 'capBarTrack'
+    | 'playerPageCloseButton'
+    | 'playerPageTeamLogo';
 
 /**
  * Multiplies the (max - min) gap of every channel by this factor.
@@ -62,6 +64,8 @@ export const AURA_DEFAULTS: Record<AuraChannel, number> = {
     playerCardPicture: 3,
     playerCardText: 5,
     capBarTrack: 3,
+    playerPageCloseButton: 7,
+    playerPageTeamLogo: 2,
 };
 
 /**
@@ -86,19 +90,27 @@ export const LEAGUE_LOGO_PULSE_PEAK_SCALE = 1.5;
 // =====================================================================
 
 /** Labels shown next to each slider on the admin page. */
-export const AURA_CHANNELS: { key: AuraChannel; label: string }[] = [
-    { key: 'mobilePageTitle', label: 'Titre de page (mobile)' },
-    { key: 'mobileMenuIcon', label: 'Icône menu (mobile)' },
-    { key: 'leagueLogo', label: 'Logo de la ligue' },
-    { key: 'rosterSectionTitle', label: 'Titres de section roster' },
-    { key: 'playerCardBackgroundColor', label: 'Carte · couleur de fond' },
-    { key: 'playerCardBackground', label: 'Carte · fond (auras équipe)' },
-    { key: 'playerCardName', label: 'Carte · nom + position' },
-    { key: 'playerCardLogo', label: 'Carte · logo LNH' },
-    { key: 'playerCardPicture', label: 'Carte · photo' },
-    { key: 'playerCardText', label: 'Carte · texte (stats + contrats)' },
-    { key: 'capBarTrack', label: 'Barre de masse' },
-];
+export const AURA_CHANNELS: {
+    key: AuraChannel;
+    label: string;
+    group: string;
+}[] = [
+        { key: 'mobilePageTitle', label: 'Titre de page (mobile)', group: 'Général' },
+        { key: 'mobileMenuIcon', label: 'Icône menu (mobile)', group: 'Général' },
+        { key: 'leagueLogo', label: 'Logo de la ligue', group: 'Général' },
+
+        { key: 'rosterSectionTitle', label: 'Titres de section roster', group: 'Mon équipe' },
+        { key: 'playerCardBackgroundColor', label: 'Carte · couleur de fond', group: 'Mon équipe' },
+        { key: 'playerCardBackground', label: 'Carte · fond (auras équipe)', group: 'Mon équipe' },
+        { key: 'playerCardName', label: 'Carte · nom + position', group: 'Mon équipe' },
+        { key: 'playerCardLogo', label: 'Carte · logo LNH', group: 'Mon équipe' },
+        { key: 'playerCardPicture', label: 'Carte · photo', group: 'Mon équipe' },
+        { key: 'playerCardText', label: 'Carte · texte (stats + contrats)', group: 'Mon équipe' },
+        { key: 'capBarTrack', label: 'Barre de masse', group: 'Mon équipe' },
+
+        { key: 'playerPageCloseButton', label: 'Bouton Fermer', group: 'Page joueur' },
+        { key: 'playerPageTeamLogo', label: 'Logo équipe LNH', group: 'Page joueur' },
+    ];
 
 export interface AuraLayerRange {
     min: number;
@@ -206,6 +218,29 @@ export const AURA_RANGES: Record<AuraChannel, AuraChannelRanges> = {
             { min: 1, max: 8 },
             { min: 3, max: 22 },
             { min: 6, max: 40 },
+        ],
+    },
+
+    // Same shape as the mobile page title: a text-shadow chain. The
+    // Close button uses it as a `text-shadow` on the ✕ glyph plus the
+    // label, so the chain is small (a button, not a heading).
+    playerPageCloseButton: {
+        layers: [
+            { min: 1, max: 3 },
+            { min: 3, max: 8 },
+            { min: 6, max: 14 },
+            { min: 10, max: 22 },
+        ],
+    },
+
+    // Player page team logo. Same layer shape as playerCardLogo so the
+    // two sliders feel equivalent at the same intensity. Reused on the
+    // <img> as a filter drop-shadow chain in team color.
+    playerPageTeamLogo: {
+        layers: [
+            { min: 1, max: 3 },
+            { min: 3, max: 6 },
+            { min: 5, max: 14 },
         ],
     },
 };

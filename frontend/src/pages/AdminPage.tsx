@@ -331,41 +331,58 @@ export default function AdminPage() {
                     </button>
                 </div>
 
-                <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
-                    {AURA_CHANNELS.map(({ key, label }) => (
-                        <div
-                            key={key}
-                            className='rounded-lg border border-border bg-card p-3'
-                        >
-                            <div className='flex items-center justify-between'>
-                                <label
-                                    htmlFor={`aura-${key}`}
-                                    className='text-sm font-medium text-foreground'
-                                >
-                                    {label}
-                                </label>
+                <div className='space-y-6'>
+                    {Object.entries(
+                        AURA_CHANNELS.reduce<
+                            Record<string, typeof AURA_CHANNELS>
+                        >((groups, channel) => {
+                            (groups[channel.group] ??= []).push(channel);
+                            return groups;
+                        }, {}),
+                    ).map(([groupName, channels]) => (
+                        <div key={groupName} className='space-y-3'>
+                            <h4 className='text-sm font-semibold uppercase tracking-wide text-muted-foreground'>
+                                {groupName}
+                            </h4>
 
-                                <span className='text-sm font-semibold text-primary'>
-                                    {intensities[key]}/10
-                                </span>
-                            </div>
+                            <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
+                                {channels.map(({ key, label }) => (
+                                    <div
+                                        key={key}
+                                        className='rounded-lg border border-border bg-card p-3'
+                                    >
+                                        <div className='flex items-center justify-between'>
+                                            <label
+                                                htmlFor={`aura-${key}`}
+                                                className='text-sm font-medium text-foreground'
+                                            >
+                                                {label}
+                                            </label>
 
-                            <input
-                                id={`aura-${key}`}
-                                type='range'
-                                min='0'
-                                max='10'
-                                step='1'
-                                value={intensities[key]}
-                                onChange={(event) =>
-                                    setIntensity(key, Number(event.target.value))
-                                }
-                                className='mt-2 w-full cursor-pointer'
-                            />
+                                            <span className='text-sm font-semibold text-primary'>
+                                                {intensities[key]}/10
+                                            </span>
+                                        </div>
 
-                            <div className='mt-1 flex justify-between text-[0.65rem] text-muted-foreground'>
-                                <span>Off</span>
-                                <span>Max</span>
+                                        <input
+                                            id={`aura-${key}`}
+                                            type='range'
+                                            min='0'
+                                            max='10'
+                                            step='1'
+                                            value={intensities[key]}
+                                            onChange={(event) =>
+                                                setIntensity(key, Number(event.target.value))
+                                            }
+                                            className='mt-2 w-full cursor-pointer'
+                                        />
+
+                                        <div className='mt-1 flex justify-between text-[0.65rem] text-muted-foreground'>
+                                            <span>Off</span>
+                                            <span>Max</span>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     ))}

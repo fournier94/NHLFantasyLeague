@@ -9,6 +9,7 @@ import {
     auraRangeFor,
     isAuraOff,
 } from '@/lib/auraConfig';
+import { consumePendingCardId } from '@/lib/scrollRestoration';
 
 const TEMPORARY_TEAM_ID = 5;
 
@@ -66,6 +67,35 @@ export default function MonEquipePage() {
             cancelled = true;
         };
     }, []);
+
+    // Restore scroll position when coming back from a player page.
+    // Runs after the roster has rendered so the card element exists in
+    // the DOM. Uses requestAnimationFrame so the browser has painted
+    // before we measure / scroll.
+    useEffect(() => {
+        if (!roster) {
+            return;
+        }
+
+        const pendingId = consumePendingCardId();
+
+        if (!pendingId) {
+            return;
+        }
+
+        const frame = requestAnimationFrame(() => {
+            const element = document.getElementById(pendingId);
+
+            if (element) {
+                element.scrollIntoView({
+                    block: 'start',
+                    behavior: 'auto',
+                });
+            }
+        });
+
+        return () => cancelAnimationFrame(frame);
+    }, [roster]);
 
     if (loading) return <p className='text-muted-foreground'>Chargement...</p>;
     if (error) return <p className='text-destructive'>{error}</p>;

@@ -305,7 +305,9 @@ export function PlayerCard({
     return (
         <Link
             to={`/joueurs/${entry.nhlPlayerId}`}
-            className='block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded-lg'
+            state={{ fromCardId: `player-card-${entry.nhlPlayerId}` }}
+            id={`player-card-${entry.nhlPlayerId}`}
+            className='block scroll-mt-[calc(var(--header-height,4rem)+0.5rem)] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded-lg'
         >
             <article
                 className={cn(
@@ -314,247 +316,18 @@ export function PlayerCard({
                 )}
                 style={bgTintStyle}
             >
-            {!isAuraOff(bgAura) && (
-                <div
-                    aria-hidden='true'
-                    className='pointer-events-none absolute inset-0'
-                    style={backgroundStyle}
-                />
-            )}
-
-            <div className='z-10 hidden md:flex md:h-full md:flex-col'>
-                <div className='relative flex items-center justify-center gap-2 pl-54 pr-12'>
-                    <h3
-                        className={`truncate text-center text-xl font-semibold text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
-                        style={
-                            !isAuraOff(nameAura)
-                                ? auraPulseStyle(nameRest, namePeak)
-                                : undefined
-                        }
-                    >
-                        {displayName}
-                    </h3>
-
-                    <span
-                        className={`shrink-0 text-xs uppercase tracking-wide text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
-                        style={
-                            !isAuraOff(nameAura)
-                                ? auraPulseStyle(positionRest, positionPeak)
-                                : undefined
-                        }
-                    >
-                        {entry.position}
-                    </span>
-
+                {!isAuraOff(bgAura) && (
                     <div
-                        className={`shrink-0 ${!isAuraOff(logoAura) ? auraPulseClass('filter') : ''}`}
-                        style={
-                            !isAuraOff(logoAura)
-                                ? auraPulseStyle(logoRest, logoPeak)
-                                : undefined
-                        }
-                    >
-                        <NhlTeamLogo
-                            abbreviation={entry.nhlTeamAbbreviation}
-                            size={24}
-                        />
-                    </div>
+                        aria-hidden='true'
+                        className='pointer-events-none absolute inset-0'
+                        style={backgroundStyle}
+                    />
+                )}
 
-                    <div className='absolute right-0 top-1/2 -translate-y-1/2'>
-                        <InjuryBadge
-                            isInjured={entry.isInjured}
-                            injuryKind={entry.injuryKind}
-                            shortDescription={entry.injuryShortDescription}
-                            size={18}
-                        />
-                    </div>
-                </div>
-
-                <div className='mt-2 flex flex-1 flex-col'>
-                    <div
-                        className={`absolute left-3 top-1/2 h-38 w-38 -translate-y-1/2 rounded-md ${!isAuraOff(pictureAura) ? auraPulseClass('box') : ''}`}
-                        style={
-                            !isAuraOff(pictureAura)
-                                ? auraPulseStyle(pictureRest, picturePeak)
-                                : undefined
-                        }
-                    >
-                        {showImage ? (
-                            <img
-                                src={entry.headshotUrl ?? undefined}
-                                alt={displayName}
-                                className='h-full w-full rounded-md bg-white object-cover'
-                                loading='lazy'
-                                onError={() => setImageFailed(true)}
-                            />
-                        ) : (
-                            <div className='flex h-full w-full items-center justify-center rounded-md bg-white text-lg font-semibold text-black'>
-                                {initials}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className='pl-46 flex flex-1 flex-col'>
-                        <div className='flex flex-1 flex-col justify-center'>
-                            <table className='mx-auto w-full max-w-md text-xs tabular-nums'>
-                                <thead>
-                                    <tr className='text-white'>
-                                        <th className='w-1/6 px-1 text-left font-normal' />
-                                        <th className='w-1/6 px-1 text-left font-normal' />
-
-                                        {columns.map((column) => (
-                                            <th
-                                                key={column}
-                                                className={`w-1/6 px-1 text-center font-normal ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                                style={
-                                                    !isAuraOff(textAura)
-                                                        ? auraPulseStyle(textRest, textPeak)
-                                                        : undefined
-                                                }
-                                            >
-                                                {column}
-                                            </th>
-                                        ))}
-                                    </tr>
-                                </thead>
-
-                                <tbody className='text-white'>
-                                    {rows.map((row, index) => {
-                                        const rawLabel =
-                                            row.line?.label ??
-                                            seasonLabelFromCode(row.code);
-
-                                        return (
-                                            <tr key={index}>
-                                                <td
-                                                    className={`px-1 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                                    style={
-                                                        !isAuraOff(textAura)
-                                                            ? auraPulseStyle(textRest, textPeak)
-                                                            : undefined
-                                                    }
-                                                >
-                                                    {shortSeasonLabel(rawLabel)}
-                                                </td>
-
-                                                <td
-                                                    className={`px-1 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                                    style={
-                                                        !isAuraOff(textAura)
-                                                            ? auraPulseStyle(textRest, textPeak)
-                                                            : undefined
-                                                    }
-                                                >
-                                                    {row.line?.leagueAbbreviation ?? '—'}
-                                                </td>
-
-                                                {statValues(
-                                                    row.line,
-                                                    isGoalie,
-                                                ).map(
-                                                    (
-                                                        value,
-                                                        valueIndex,
-                                                    ) => (
-                                                        <td
-                                                            key={valueIndex}
-                                                            className={`px-1 text-center text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                                            style={
-                                                                !isAuraOff(textAura)
-                                                                    ? auraPulseStyle(textRest, textPeak)
-                                                                    : undefined
-                                                            }
-                                                        >
-                                                            {value}
-                                                        </td>
-                                                    ),
-                                                )}
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div>
-                            {hasTwoContracts ? (
-                                <div
-                                    className={`mt-2 mx-auto flex w-full max-w-md items-center justify-between pl-1 pr-3 text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                    style={
-                                        !isAuraOff(textAura)
-                                            ? auraPulseStyle(textRest, textPeak)
-                                            : undefined
-                                    }
-                                >
-                                    <span className='whitespace-nowrap'>
-                                        {currentContractLabel}
-                                    </span>
-
-                                    <span
-                                        aria-hidden='true'
-                                        className='text-[0.7rem] opacity-80'
-                                    >
-                                        →
-                                    </span>
-
-                                    <span className='whitespace-nowrap'>
-                                        {secondContractLabel}
-                                    </span>
-                                </div>
-                            ) : (
-                                <div
-                                    className={`mt-2 mx-auto flex w-full max-w-md items-center justify-center px-1 text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                    style={
-                                        !isAuraOff(textAura)
-                                            ? auraPulseStyle(textRest, textPeak)
-                                            : undefined
-                                    }
-                                >
-                                    <span className='whitespace-nowrap'>
-                                        {currentContractLabel}
-                                    </span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div className='relative z-10 flex h-full items-center gap-3 md:hidden'>
-                <div
-                    className={`flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white ${!isAuraOff(pictureAura) ? auraPulseClass('box') : ''}`}
-                    style={
-                        !isAuraOff(pictureAura)
-                            ? auraPulseStyle(pictureRest, picturePeak)
-                            : undefined
-                    }
-                >
-                    {showImage ? (
-                        <img
-                            src={entry.headshotUrl ?? undefined}
-                            alt={displayName}
-                            className='h-full w-full object-cover'
-                            loading='lazy'
-                            onError={() => setImageFailed(true)}
-                        />
-                    ) : (
-                        <span
-                            className={`text-sm font-semibold text-black ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                            style={
-                                !isAuraOff(textAura)
-                                    ? auraPulseStyle(textRest, textPeak)
-                                    : undefined
-                            }
-                        >
-                            {initials}
-                        </span>
-                    )}
-                </div>
-
-                <div className='relative min-w-0 flex-1'>
-                    <div className='absolute left-0 right-0 top-[-2px] flex items-center justify-center gap-1.5'>
-                        <p
-                            className={`truncate text-sm font-semibold text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
+                <div className='z-10 hidden md:flex md:h-full md:flex-col'>
+                    <div className='relative flex items-center justify-center gap-2 pl-54 pr-12'>
+                        <h3
+                            className={`truncate text-center text-xl font-semibold text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
                             style={
                                 !isAuraOff(nameAura)
                                     ? auraPulseStyle(nameRest, namePeak)
@@ -562,7 +335,7 @@ export function PlayerCard({
                             }
                         >
                             {displayName}
-                        </p>
+                        </h3>
 
                         <span
                             className={`shrink-0 text-xs uppercase tracking-wide text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
@@ -585,7 +358,7 @@ export function PlayerCard({
                         >
                             <NhlTeamLogo
                                 abbreviation={entry.nhlTeamAbbreviation}
-                                size={18}
+                                size={24}
                             />
                         </div>
 
@@ -594,132 +367,361 @@ export function PlayerCard({
                                 isInjured={entry.isInjured}
                                 injuryKind={entry.injuryKind}
                                 shortDescription={entry.injuryShortDescription}
-                                size={14}
+                                size={18}
                             />
                         </div>
                     </div>
 
-                    <div className='pt-9'>
-                        <table className='relative top-[-6px] w-full text-xs tabular-nums'>
-                            <thead>
-                                <tr className='text-white'>
-                                    <th className='whitespace-nowrap px-0.5 text-left font-normal' />
-                                    <th className='w-1/6 px-0.5 text-left font-normal' />
+                    <div className='mt-2 flex flex-1 flex-col'>
+                        <div
+                            className={`absolute left-3 top-1/2 h-38 w-38 -translate-y-1/2 rounded-md ${!isAuraOff(pictureAura) ? auraPulseClass('box') : ''}`}
+                            style={
+                                !isAuraOff(pictureAura)
+                                    ? auraPulseStyle(pictureRest, picturePeak)
+                                    : undefined
+                            }
+                        >
+                            {showImage ? (
+                                <img
+                                    src={entry.headshotUrl ?? undefined}
+                                    alt={displayName}
+                                    className='h-full w-full rounded-md bg-white object-cover'
+                                    loading='lazy'
+                                    onError={() => setImageFailed(true)}
+                                />
+                            ) : (
+                                <div className='flex h-full w-full items-center justify-center rounded-md bg-white text-lg font-semibold text-black'>
+                                    {initials}
+                                </div>
+                            )}
+                        </div>
 
-                                    {columns.map((column) => (
-                                        <th
-                                            key={column}
-                                            className={`w-1/6 px-0.5 text-center font-normal text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                            style={
-                                                !isAuraOff(textAura)
-                                                    ? auraPulseStyle(textRest, textPeak)
-                                                    : undefined
-                                            }
-                                        >
-                                            {column}
-                                        </th>
-                                    ))}
-                                </tr>
-                            </thead>
+                        <div className='pl-46 flex flex-1 flex-col'>
+                            <div className='flex flex-1 flex-col justify-center'>
+                                <table className='mx-auto w-full max-w-md text-xs tabular-nums'>
+                                    <thead>
+                                        <tr className='text-white'>
+                                            <th className='w-1/6 px-1 text-left font-normal' />
+                                            <th className='w-1/6 px-1 text-left font-normal' />
 
-                            <tbody className='text-white'>
-                                {rows.map((row, index) => {
-                                    const rawLabel =
-                                        row.line?.label ??
-                                        seasonLabelFromCode(row.code);
+                                            {columns.map((column) => (
+                                                <th
+                                                    key={column}
+                                                    className={`w-1/6 px-1 text-center font-normal ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                    style={
+                                                        !isAuraOff(textAura)
+                                                            ? auraPulseStyle(textRest, textPeak)
+                                                            : undefined
+                                                    }
+                                                >
+                                                    {column}
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    </thead>
 
-                                    return (
-                                        <tr key={index}>
-                                            <td
-                                                className={`whitespace-nowrap px-0.5 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                                style={
-                                                    !isAuraOff(textAura)
-                                                        ? auraPulseStyle(textRest, textPeak)
-                                                        : undefined
-                                                }
-                                            >
-                                                {shortSeasonLabel(rawLabel)}
-                                            </td>
+                                    <tbody className='text-white'>
+                                        {rows.map((row, index) => {
+                                            const rawLabel =
+                                                row.line?.label ??
+                                                seasonLabelFromCode(row.code);
 
-                                            <td
-                                                className={`px-0.5 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                                style={
-                                                    !isAuraOff(textAura)
-                                                        ? auraPulseStyle(textRest, textPeak)
-                                                        : undefined
-                                                }
-                                            >
-                                                {row.line?.leagueAbbreviation ?? '—'}
-                                            </td>
-
-                                            {statValues(
-                                                row.line,
-                                                isGoalie,
-                                            ).map(
-                                                (
-                                                    value,
-                                                    valueIndex,
-                                                ) => (
+                                            return (
+                                                <tr key={index}>
                                                     <td
-                                                        key={valueIndex}
-                                                        className={`px-0.5 text-center text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                        className={`px-1 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
                                                         style={
                                                             !isAuraOff(textAura)
                                                                 ? auraPulseStyle(textRest, textPeak)
                                                                 : undefined
                                                         }
                                                     >
-                                                        {value}
+                                                        {shortSeasonLabel(rawLabel)}
                                                     </td>
-                                                ),
-                                            )}
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
 
-                        {hasTwoContracts ? (
-                            <div
-                                className={`mt-1 flex w-full translate-y-[3px] items-center justify-between text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                style={
-                                    !isAuraOff(textAura)
-                                        ? auraPulseStyle(textRest, textPeak)
-                                        : undefined
-                                }
-                            >
-                                <span>
-                                    {currentContractLabel}
-                                </span>
+                                                    <td
+                                                        className={`px-1 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                        style={
+                                                            !isAuraOff(textAura)
+                                                                ? auraPulseStyle(textRest, textPeak)
+                                                                : undefined
+                                                        }
+                                                    >
+                                                        {row.line?.leagueAbbreviation ?? '—'}
+                                                    </td>
 
-                                <span
-                                    aria-hidden='true'
-                                    className='text-[0.7rem] text-white opacity-80'
-                                >
-                                    →
-                                </span>
-
-                                <span className='text-[0.7rem] text-white'>
-                                    {secondContractLabel}
-                                </span>
+                                                    {statValues(
+                                                        row.line,
+                                                        isGoalie,
+                                                    ).map(
+                                                        (
+                                                            value,
+                                                            valueIndex,
+                                                        ) => (
+                                                            <td
+                                                                key={valueIndex}
+                                                                className={`px-1 text-center text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                                style={
+                                                                    !isAuraOff(textAura)
+                                                                        ? auraPulseStyle(textRest, textPeak)
+                                                                        : undefined
+                                                                }
+                                                            >
+                                                                {value}
+                                                            </td>
+                                                        ),
+                                                    )}
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
                             </div>
-                        ) : (
-                            <div
-                                className={`mt-1 flex w-full translate-y-[3px] items-center justify-center text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
-                                style={
-                                    !isAuraOff(textAura)
-                                        ? auraPulseStyle(textRest, textPeak)
-                                        : undefined
-                                }
-                            >
-                                <span>
-                                    {currentContractLabel}
-                                </span>
+
+                            <div>
+                                {hasTwoContracts ? (
+                                    <div
+                                        className={`mt-2 mx-auto flex w-full max-w-md items-center justify-between pl-1 pr-3 text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                        style={
+                                            !isAuraOff(textAura)
+                                                ? auraPulseStyle(textRest, textPeak)
+                                                : undefined
+                                        }
+                                    >
+                                        <span className='whitespace-nowrap'>
+                                            {currentContractLabel}
+                                        </span>
+
+                                        <span
+                                            aria-hidden='true'
+                                            className='text-[0.7rem] opacity-80'
+                                        >
+                                            →
+                                        </span>
+
+                                        <span className='whitespace-nowrap'>
+                                            {secondContractLabel}
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <div
+                                        className={`mt-2 mx-auto flex w-full max-w-md items-center justify-center px-1 text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                        style={
+                                            !isAuraOff(textAura)
+                                                ? auraPulseStyle(textRest, textPeak)
+                                                : undefined
+                                        }
+                                    >
+                                        <span className='whitespace-nowrap'>
+                                            {currentContractLabel}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
-                        )}
+                        </div>
                     </div>
                 </div>
-            </div>
+
+                <div className='relative z-10 flex h-full items-center gap-3 md:hidden'>
+                    <div
+                        className={`flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white ${!isAuraOff(pictureAura) ? auraPulseClass('box') : ''}`}
+                        style={
+                            !isAuraOff(pictureAura)
+                                ? auraPulseStyle(pictureRest, picturePeak)
+                                : undefined
+                        }
+                    >
+                        {showImage ? (
+                            <img
+                                src={entry.headshotUrl ?? undefined}
+                                alt={displayName}
+                                className='h-full w-full object-cover'
+                                loading='lazy'
+                                onError={() => setImageFailed(true)}
+                            />
+                        ) : (
+                            <span
+                                className={`text-sm font-semibold text-black ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                style={
+                                    !isAuraOff(textAura)
+                                        ? auraPulseStyle(textRest, textPeak)
+                                        : undefined
+                                }
+                            >
+                                {initials}
+                            </span>
+                        )}
+                    </div>
+
+                    <div className='relative min-w-0 flex-1'>
+                        <div className='absolute left-0 right-0 top-[-2px] flex items-center justify-center gap-1.5'>
+                            <p
+                                className={`truncate text-sm font-semibold text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
+                                style={
+                                    !isAuraOff(nameAura)
+                                        ? auraPulseStyle(nameRest, namePeak)
+                                        : undefined
+                                }
+                            >
+                                {displayName}
+                            </p>
+
+                            <span
+                                className={`shrink-0 text-xs uppercase tracking-wide text-white ${!isAuraOff(nameAura) ? auraPulseClass('text') : ''}`}
+                                style={
+                                    !isAuraOff(nameAura)
+                                        ? auraPulseStyle(positionRest, positionPeak)
+                                        : undefined
+                                }
+                            >
+                                {entry.position}
+                            </span>
+
+                            <div
+                                className={`shrink-0 ${!isAuraOff(logoAura) ? auraPulseClass('filter') : ''}`}
+                                style={
+                                    !isAuraOff(logoAura)
+                                        ? auraPulseStyle(logoRest, logoPeak)
+                                        : undefined
+                                }
+                            >
+                                <NhlTeamLogo
+                                    abbreviation={entry.nhlTeamAbbreviation}
+                                    size={18}
+                                />
+                            </div>
+
+                            <div className='absolute right-0 top-1/2 -translate-y-1/2'>
+                                <InjuryBadge
+                                    isInjured={entry.isInjured}
+                                    injuryKind={entry.injuryKind}
+                                    shortDescription={entry.injuryShortDescription}
+                                    size={14}
+                                />
+                            </div>
+                        </div>
+
+                        <div className='pt-9'>
+                            <table className='relative top-[-6px] w-full text-xs tabular-nums'>
+                                <thead>
+                                    <tr className='text-white'>
+                                        <th className='whitespace-nowrap px-0.5 text-left font-normal' />
+                                        <th className='w-1/6 px-0.5 text-left font-normal' />
+
+                                        {columns.map((column) => (
+                                            <th
+                                                key={column}
+                                                className={`w-1/6 px-0.5 text-center font-normal text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                style={
+                                                    !isAuraOff(textAura)
+                                                        ? auraPulseStyle(textRest, textPeak)
+                                                        : undefined
+                                                }
+                                            >
+                                                {column}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+
+                                <tbody className='text-white'>
+                                    {rows.map((row, index) => {
+                                        const rawLabel =
+                                            row.line?.label ??
+                                            seasonLabelFromCode(row.code);
+
+                                        return (
+                                            <tr key={index}>
+                                                <td
+                                                    className={`whitespace-nowrap px-0.5 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                    style={
+                                                        !isAuraOff(textAura)
+                                                            ? auraPulseStyle(textRest, textPeak)
+                                                            : undefined
+                                                    }
+                                                >
+                                                    {shortSeasonLabel(rawLabel)}
+                                                </td>
+
+                                                <td
+                                                    className={`px-0.5 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                    style={
+                                                        !isAuraOff(textAura)
+                                                            ? auraPulseStyle(textRest, textPeak)
+                                                            : undefined
+                                                    }
+                                                >
+                                                    {row.line?.leagueAbbreviation ?? '—'}
+                                                </td>
+
+                                                {statValues(
+                                                    row.line,
+                                                    isGoalie,
+                                                ).map(
+                                                    (
+                                                        value,
+                                                        valueIndex,
+                                                    ) => (
+                                                        <td
+                                                            key={valueIndex}
+                                                            className={`px-0.5 text-center text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                            style={
+                                                                !isAuraOff(textAura)
+                                                                    ? auraPulseStyle(textRest, textPeak)
+                                                                    : undefined
+                                                            }
+                                                        >
+                                                            {value}
+                                                        </td>
+                                                    ),
+                                                )}
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+
+                            {hasTwoContracts ? (
+                                <div
+                                    className={`mt-1 flex w-full translate-y-[3px] items-center justify-between text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                    style={
+                                        !isAuraOff(textAura)
+                                            ? auraPulseStyle(textRest, textPeak)
+                                            : undefined
+                                    }
+                                >
+                                    <span>
+                                        {currentContractLabel}
+                                    </span>
+
+                                    <span
+                                        aria-hidden='true'
+                                        className='text-[0.7rem] text-white opacity-80'
+                                    >
+                                        →
+                                    </span>
+
+                                    <span className='text-[0.7rem] text-white'>
+                                        {secondContractLabel}
+                                    </span>
+                                </div>
+                            ) : (
+                                <div
+                                    className={`mt-1 flex w-full translate-y-[3px] items-center justify-center text-xs text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                    style={
+                                        !isAuraOff(textAura)
+                                            ? auraPulseStyle(textRest, textPeak)
+                                            : undefined
+                                    }
+                                >
+                                    <span>
+                                        {currentContractLabel}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
             </article>
         </Link>
     );
