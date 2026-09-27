@@ -46,6 +46,13 @@ namespace NhlFantasyLeague.api.Services
         [JsonPropertyName("shootsCatches")]
         public string? ShootsCatches { get; set; }
 
+        /// <summary>
+        /// Draft details from the landing endpoint. Null for undrafted
+        /// players.
+        /// </summary>
+        [JsonPropertyName("draftDetails")]
+        public NhlDraftDetails? DraftDetails { get; set; }
+
         [JsonPropertyName("featuredStats")]
         public NhlFeaturedStats? FeaturedStats { get; set; }
 
@@ -57,6 +64,24 @@ namespace NhlFantasyLeague.api.Services
     {
         [JsonPropertyName("default")]
         public string Default { get; set; } = string.Empty;
+    }
+
+    public class NhlDraftDetails
+    {
+        [JsonPropertyName("year")]
+        public int Year { get; set; }
+
+        [JsonPropertyName("teamAbbrev")]
+        public string? TeamAbbrev { get; set; }
+
+        [JsonPropertyName("round")]
+        public int Round { get; set; }
+
+        [JsonPropertyName("pickInRound")]
+        public int PickInRound { get; set; }
+
+        [JsonPropertyName("overallPick")]
+        public int OverallPick { get; set; }
     }
 
     public class NhlFeaturedStats

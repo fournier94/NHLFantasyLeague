@@ -4,6 +4,7 @@ import { AuraProvider } from '@/lib/auraContext';
 import MonEquipePage from '@/pages/MonEquipePage';
 import LiguePage from '@/pages/LiguePage';
 import JoueursPage from '@/pages/JoueursPage';
+import PlayerPage from '@/pages/PlayerPage';
 import AdminPage from '@/pages/AdminPage';
 import ConnexionPage from '@/pages/ConnexionPage';
 
@@ -18,6 +19,7 @@ export default function App() {
                     <Route path='/mon-equipe' element={<MonEquipePage />} />
                     <Route path='/ligue' element={<LiguePage />} />
                     <Route path='/joueurs' element={<JoueursPage />} />
+                    <Route path='/joueurs/:nhlPlayerId' element={<PlayerPage />} />
                     <Route path='/admin' element={<AdminPage />} />
                     <Route path='/connexion' element={<ConnexionPage />} />
                 </Route>

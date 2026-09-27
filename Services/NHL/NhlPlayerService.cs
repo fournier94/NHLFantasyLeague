@@ -100,6 +100,10 @@ namespace NhlFantasyLeague.api.Services.NHL
                     HeadshotUrl = response.Headshot
                 };
 
+                UpdatePlayerDraftInfo(
+                    player,
+                    response);
+
                 _dbContext.Players.Add(player);
 
                 await _dbContext.SaveChangesAsync();
@@ -129,6 +133,10 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 player.HeadshotUrl =
                     response.Headshot;
+
+                UpdatePlayerDraftInfo(
+                    player,
+                    response);
 
                 await _dbContext.SaveChangesAsync();
             }
@@ -330,6 +338,10 @@ namespace NhlFantasyLeague.api.Services.NHL
             player.HeroImageUrl = nhlPlayer.HeroImage;
             player.HeadshotUrl = nhlPlayer.Headshot;
 
+            UpdatePlayerDraftInfo(
+                player,
+                nhlPlayer);
+
             await _dbContext.SaveChangesAsync();
 
             return player;
@@ -439,6 +451,10 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                     player.HeadshotUrl =
                         nhlPlayer.Headshot;
+
+                    UpdatePlayerDraftInfo(
+                        player,
+                        nhlPlayer);
 
                     Console.WriteLine(
                         $"[NHL POPULATION] Retrieved: " +
@@ -564,6 +580,31 @@ namespace NhlFantasyLeague.api.Services.NHL
                 player.PreviousNhlTeamId = player.NhlTeamId;
                 player.NhlTeamId = newNhlTeamId;
             }
+        }
+
+        /// <summary>
+        /// Copies draft details from the NHL landing response onto the
+        /// player. Undrafted players have no draftDetails, in which case
+        /// the fields stay null.
+        /// </summary>
+        public static void UpdatePlayerDraftInfo(
+            Player player,
+            NhlPlayerResponse response)
+        {
+            var draft = response.DraftDetails;
+
+            if (draft == null || draft.Year == 0)
+            {
+                // No draft info in the payload. Leave whatever we already
+                // have, in case a previous sync caught it.
+                return;
+            }
+
+            player.DraftYear = draft.Year;
+            player.DraftTeamAbbreviation = draft.TeamAbbrev;
+            player.DraftRound = draft.Round;
+            player.DraftPickInRound = draft.PickInRound;
+            player.DraftOverallPick = draft.OverallPick;
         }
 
         public async Task<Player?> TestUpdatePlayerNhlTeamAsync(int nhlPlayerId, int newNhlTeamId)

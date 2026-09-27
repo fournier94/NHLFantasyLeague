@@ -84,11 +84,6 @@ export interface RosterEntry {
     rosterSlot: number;
     fantasySalary: number;
     headshotUrl: string | null;
-    isInjured: boolean;
-    injuryStatus: string | null;
-    injuryKind: 'None' | 'Injury' | 'Suspension';
-    injuryShortDescription: string | null;
-    injuryLongDescription: string | null;
     twoSeasonsAgo: SeasonStatLine | null;
     lastSeason: SeasonStatLine | null;
     currentSeason: SeasonStatLine | null;
@@ -96,6 +91,17 @@ export interface RosterEntry {
     currentContract: PlayerContractLine | null;
     /** Second contract to display (e.g. a future deal), or null. */
     secondContract: PlayerContractLine | null;
+
+    /** True when ESPN currently lists the player as injured or suspended. */
+    isInjured: boolean;
+    /** Raw ESPN status ("Out", "Day-To-Day", "Injured Reserve", "Suspension"), or null. */
+    injuryStatus: string | null;
+    /** "None", "Injury" or "Suspension" — used to pick the right icon. */
+    injuryKind: 'None' | 'Injury' | 'Suspension';
+    /** Short injury note, used almost everywhere. */
+    injuryShortDescription: string | null;
+    /** Long injury note, used on the injuries page and player page. */
+    injuryLongDescription: string | null;
 }
 
 /** Full roster of one fantasy team for one season. */
@@ -144,11 +150,6 @@ export interface PlayerSearchResult {
     rosterEntryId?: number | null;
     /** "Active", "Bench" or "Prospect" for the current season, or null when free agent. */
     rosterStatus?: string | null;
-    isInjured?: boolean;
-    injuryStatus?: string | null;
-    injuryKind?: 'None' | 'Injury' | 'Suspension';
-    injuryShortDescription?: string | null;
-    injuryLongDescription?: string | null;
 }
 
 /** Request body of POST /api/Roster/assign (the salary is derived server-side). */
@@ -237,3 +238,184 @@ export const updateRosterEntry = (request: UpdateRosterEntryRequest) =>
 /** Removes a roster entry, making the player a free agent again (POST /api/Roster/release). */
 export const releasePlayer = (request: ReleasePlayerRequest) =>
     apiPost<RosterActionResult>('/Roster/release', request);
+
+// ---------------------------------------------------------------------
+// Player detail (GET /api/NhlPlayerDetail/{nhlPlayerId})
+// ---------------------------------------------------------------------
+
+/** One row of the career table on the player detail page. */
+export interface CareerRow {
+    season: number;
+    seasonLabel: string;
+    leagueAbbreviation: string;
+    teamName: string | null;
+    gameTypeId: number;
+    gamesPlayed: number;
+    goals: number;
+    assists: number;
+    points: number;
+    penaltyMinutes: number;
+    plusMinus: number;
+
+    // Skater extras
+    powerPlayGoals: number;
+    powerPlayPoints: number;
+    shorthandedGoals: number;
+    shorthandedPoints: number;
+    gameWinningGoals: number;
+    overtimeGoals: number;
+    shots: number;
+    shootingPercentage: number;
+    averageTimeOnIce: string | null;
+    faceoffWinningPercentage: number | null;
+
+    // Goalie extras
+    wins: number;
+    losses: number;
+    overtimeLosses: number;
+    shutouts: number;
+    saves: number;
+    shotsAgainst: number;
+    savePercentage: number;
+    goalsAgainst: number;
+    goalsAgainstAverage: number;
+}
+
+/** NHL totals block at the bottom of the career table. */
+export interface CareerTotals {
+    gamesPlayed: number;
+    goals: number;
+    assists: number;
+    points: number;
+    penaltyMinutes: number;
+    plusMinus: number;
+    powerPlayPoints: number;
+    shots: number;
+    gameWinningGoals: number;
+
+    playoffGamesPlayed: number;
+    playoffGoals: number;
+    playoffAssists: number;
+    playoffPoints: number;
+    playoffPenaltyMinutes: number;
+    playoffPowerPlayPoints: number;
+    playoffShots: number;
+    playoffGameWinningGoals: number;
+
+    wins: number;
+    losses: number;
+    overtimeLosses: number;
+    shutouts: number;
+    saves: number;
+    shotsAgainst: number;
+    goalsAgainst: number;
+
+    playoffWins: number;
+    playoffLosses: number;
+    playoffOvertimeLosses: number;
+    playoffShutouts: number;
+}
+
+export interface GameLogRow {
+    nhlGameId: number;
+    gameDate: string;
+    opponentAbbreviation: string;
+    isHomeGame: boolean;
+    goals: number;
+    assists: number;
+    points: number;
+    penaltyMinutes: number;
+    plusMinus: number;
+    shots: number;
+    fantasyPoints: number;
+
+    goalieWin: boolean;
+    goalieOvertimeLoss: boolean;
+    shutout: boolean;
+    goalsAgainst: number;
+    shotsAgainst: number;
+    saves: number;
+}
+
+/** One injury spell from PlayerInjuryHistory. */
+export interface InjuryHistoryRow {
+    injuryStatus: string;
+    injuryDescription: string | null;
+    teamAbbreviation: string;
+    firstSeenAt: string;
+    lastSeenAt: string;
+    resolvedAt: string | null;
+}
+
+/** One contract of the player. */
+export interface PlayerContract {
+    salary: number;
+    startSeason: number;
+    endSeason: number;
+    yearsRemaining: number;
+}
+
+/** Full payload of GET /api/NhlPlayerDetail/{nhlPlayerId}. */
+export interface PlayerDetail {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    shootsCatches: string | null;
+    headshotUrl: string | null;
+    heroImageUrl: string | null;
+
+    nhlTeamAbbreviation: string | null;
+    nhlTeamName: string | null;
+    nhlTeamLogoUrl: string | null;
+    previousNhlTeamAbbreviation: string | null;
+    previousNhlTeamName: string | null;
+    status: string;
+
+    birthDate: string | null;
+    age: number | null;
+    birthCity: string | null;
+    birthCountry: string | null;
+
+    heightInInches: number | null;
+    heightInCentimeters: number | null;
+    weightInPounds: number | null;
+    weightInKilograms: number | null;
+
+    draftYear: number | null;
+    draftTeamAbbreviation: string | null;
+    draftRound: number | null;
+    draftPickInRound: number | null;
+    draftOverallPick: number | null;
+
+    isInjured: boolean;
+    injuryStatus: string | null;
+    injuryKind: 'None' | 'Injury' | 'Suspension';
+    injuryShortDescription: string | null;
+    injuryLongDescription: string | null;
+    injuryUpdatedAt: string | null;
+    injuryHistory: InjuryHistoryRow[];
+
+    contracts: PlayerContract[];
+    currentCapHit: number | null;
+
+    fantasyTeamName: string | null;
+    rosterStatus: string | null;
+    rosterSlot: number | null;
+    fantasySalary: number | null;
+    seasonFantasyPoints: number | null;
+    seasonHatTricks: number | null;
+
+    regularSeason: CareerRow[];
+    playoffs: CareerRow[];
+    nhlTotals: CareerTotals;
+    tournaments: CareerRow[];
+    youthMinor: CareerRow[];
+
+    recentGames: GameLogRow[];
+}
+
+/** Fetches everything the player detail page needs, by NHL player id. */
+export const getPlayerDetail = (nhlPlayerId: number) =>
+    apiGet<PlayerDetail>(`/NhlPlayerDetail/${nhlPlayerId}`);

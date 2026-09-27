@@ -37,6 +37,18 @@ namespace NhlFantasyLeague.api.Models
 
         public string? ShootsCatches { get; set; }
 
+        // Draft information. All nullable: undrafted players have none of
+        // these set, and old rows keep working until the next population.
+        public int? DraftYear { get; set; }
+
+        public string? DraftTeamAbbreviation { get; set; }
+
+        public int? DraftRound { get; set; }
+
+        public int? DraftPickInRound { get; set; }
+
+        public int? DraftOverallPick { get; set; }
+
         public string? HeadshotUrl { get; set; }
 
         public string? HeroImageUrl { get; set; }
