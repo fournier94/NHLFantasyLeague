@@ -35,6 +35,7 @@ export type AuraChannel =
     | 'mobileMenuIcon'
     | 'leagueLogo'
     | 'rosterSectionTitle'
+    | 'playerCardBackgroundColor'
     | 'playerCardBackground'
     | 'playerCardName'
     | 'playerCardLogo'
@@ -54,10 +55,11 @@ export const AURA_DEFAULTS: Record<AuraChannel, number> = {
     mobileMenuIcon: 7,
     leagueLogo: 6,
     rosterSectionTitle: 5,
-    playerCardBackground: 6,
-    playerCardName: 3,
-    playerCardLogo: 4,
-    playerCardPicture: 5,
+    playerCardBackgroundColor: 2,
+    playerCardBackground: 0,    // 6
+    playerCardName: 5,          // 3
+    playerCardLogo: 2,
+    playerCardPicture: 3,
     playerCardText: 5,
     capBarTrack: 3,
 };
@@ -89,6 +91,7 @@ export const AURA_CHANNELS: { key: AuraChannel; label: string }[] = [
     { key: 'mobileMenuIcon', label: 'Icône menu (mobile)' },
     { key: 'leagueLogo', label: 'Logo de la ligue' },
     { key: 'rosterSectionTitle', label: 'Titres de section roster' },
+    { key: 'playerCardBackgroundColor', label: 'Carte · couleur de fond' },
     { key: 'playerCardBackground', label: 'Carte · fond (auras équipe)' },
     { key: 'playerCardName', label: 'Carte · nom + position' },
     { key: 'playerCardLogo', label: 'Carte · logo LNH' },
@@ -140,6 +143,17 @@ export const AURA_RANGES: Record<AuraChannel, AuraChannelRanges> = {
             { min: 3, max: 6 },
             { min: 6, max: 12 },
             { min: 10, max: 22 },
+        ],
+    },
+
+    // The background tint is a flat color, so this channel drives the
+    // saturation scale (via auraRangeFor) and the alpha (via auraLerp)
+    // in PlayerCard. The single "layer" here is the 0..1 saturation
+    // multiplier: slider 1 gives almost-saturated, slider 10 gives
+    // heavily desaturated.
+    playerCardBackgroundColor: {
+        layers: [
+            { min: 0.9, max: 0.15 },
         ],
     },
 
