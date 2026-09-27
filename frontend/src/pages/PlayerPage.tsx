@@ -20,6 +20,7 @@ import { getNhlTeamColor } from '@/lib/nhlTeamColors';
 import { setPendingCardId } from '@/lib/scrollRestoration';
 import ReactCountryFlag from 'react-country-flag';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
+import { Banknote, Ruler } from 'lucide-react';
 
 // ---------------------------------------------------------------------
 // Formatters
@@ -69,10 +70,31 @@ const shortDateFormatter = new Intl.DateTimeFormat('fr-CA', {
     month: 'short',
 });
 
+function formatDecimal(value: number, digits = 2): string {
+    return value.toFixed(digits);
+}
+
 function compactMillions(value: number): string {
     const millions = value / 1_000_000;
     const rounded = millions.toFixed(2).replace(/\.?0+$/, '');
     return `${rounded}M`;
+}
+
+function compactSalary(salary: number): string {
+    const millions = salary / 1_000_000;
+    const rounded = millions.toFixed(2).replace(/\.?0+$/, '');
+    return `${rounded}M`;
+}
+
+function contractLabel(
+    salary: number,
+    yearsRemaining: number,
+): string {
+    const salaryText = compactSalary(salary);
+    const years = yearsRemaining > 1
+        ? `${yearsRemaining} ans`
+        : '1 an';
+    return `${salaryText} · ${years}`;
 }
 
 function shortDate(value: string | null): string {
@@ -103,8 +125,61 @@ function displayPosition(position: string): string {
     }
 }
 
-function formatDecimal(value: number, digits = 2): string {
-    return value.toFixed(digits);
+const CURRENT_SEASON_CODE = 20262027;
+
+function careerRowsForDisplay(
+    rows: CareerRow[],
+    showAll: boolean,
+): CareerRow[] {
+    const currentExists = rows.some((r) => r.season === CURRENT_SEASON_CODE);
+
+    const withCurrent = currentExists
+        ? rows
+        : [
+            {
+                season: CURRENT_SEASON_CODE,
+                seasonLabel: '26-27',
+                leagueAbbreviation: 'NHL',
+                teamName: null,
+                gameTypeId: 2,
+                gamesPlayed: 0,
+                goals: 0,
+                assists: 0,
+                points: 0,
+                penaltyMinutes: 0,
+                plusMinus: 0,
+                powerPlayGoals: 0,
+                powerPlayPoints: 0,
+                shorthandedGoals: 0,
+                shorthandedPoints: 0,
+                gameWinningGoals: 0,
+                overtimeGoals: 0,
+                shots: 0,
+                shootingPercentage: 0,
+                averageTimeOnIce: null,
+                faceoffWinningPercentage: null,
+                wins: 0,
+                losses: 0,
+                overtimeLosses: 0,
+                shutouts: 0,
+                saves: 0,
+                shotsAgainst: 0,
+                savePercentage: 0,
+                goalsAgainst: 0,
+                goalsAgainstAverage: 0,
+            } as CareerRow,
+            ...rows,
+        ];
+
+    if (showAll) {
+        return withCurrent;
+    }
+
+    const currentStartYear = Math.floor(CURRENT_SEASON_CODE / 10000);
+    const cutoffStartYear = currentStartYear - 3;
+    const cutoff = cutoffStartYear * 10000 + (cutoffStartYear + 1);
+
+    return withCurrent.filter((r) => r.season >= cutoff);
 }
 
 // ---------------------------------------------------------------------
@@ -147,7 +222,7 @@ function rowClass(index: number): string {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
     return (
-        <h2 className='mt-6 mb-2 text-lg font-semibold text-foreground md:text-xl'>
+        <h2 className='mt-6 mb-2 text-center text-lg font-semibold text-foreground md:text-xl'>
             {children}
         </h2>
     );
@@ -530,6 +605,8 @@ export default function PlayerPage() {
     const [error, setError] = useState<string | null>(null);
     const [showYouthMinor, setShowYouthMinor] = useState(false);
     const [showGameLog, setShowGameLog] = useState(false);
+    const [showAllRegularSeason, setShowAllRegularSeason] = useState(false);
+    const [showAllPlayoffs, setShowAllPlayoffs] = useState(false);
 
     // Close button aura channel.
     const closeAura = useAura('playerPageCloseButton');
@@ -712,9 +789,33 @@ export default function PlayerPage() {
         return `${day}/${month}/${year}`;
     })();
 
-    const birthPlaceParts = [player.birthCity, player.birthCountry]
-        .filter((v): v is string => Boolean(v));
     const birthCountryFlagCode = toFlagCode(player.birthCountry);
+
+    const sortedContracts = [...player.contracts].sort(
+        (a, b) => a.startSeason - b.startSeason,
+    );
+
+    const currentContract =
+        sortedContracts.find(
+            (c) =>
+                c.startSeason <= CURRENT_SEASON_CODE &&
+                c.endSeason >= CURRENT_SEASON_CODE,
+        ) ?? sortedContracts[0] ?? null;
+
+    const secondContract =
+        currentContract == null
+            ? null
+            : sortedContracts.find(
+                (c) => c.startSeason > currentContract.endSeason,
+            ) ?? null;
+
+    const currentContractLabel = currentContract
+        ? contractLabel(currentContract.salary, currentContract.yearsRemaining)
+        : null;
+
+    const secondContractLabel = secondContract
+        ? contractLabel(secondContract.salary, secondContract.yearsRemaining)
+        : null;
 
     const draftLine =
         player.draftYear && player.draftOverallPick
@@ -749,7 +850,7 @@ export default function PlayerPage() {
 
                 {/* Identity + headshot (negative top margin cancels part of the section's space-y-4) */}
                 <div className='relative -mt-2 sm:flex sm:flex-row sm:items-start sm:gap-4'>
-                    <div className='min-w-0 sm:flex-1'>
+                    <div className='min-w-0 space-y-0.5 sm:flex-1'>
                         <div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 sm:justify-start'>
                             <h1 className='text-xl font-bold text-foreground'>
                                 {player.firstName} {player.lastName}
@@ -824,29 +925,57 @@ export default function PlayerPage() {
                         )}
 
                         {fullHeightWeight && (
-                            <p className='text-sm text-foreground'>
-                                {heightLine}
-                                {heightLine && weightLine && (
-                                    <span className='mx-1 inline-block font-black [text-shadow:0_0_1px_currentColor,0_0_1px_currentColor]'>
-                                        •
-                                    </span>
-                                )}
-                                {weightLine}
+                            <p className='flex items-center text-sm text-foreground'>
+                                <Ruler className='mr-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground' />
+                                <span>
+                                    {heightLine}
+                                    {heightLine && weightLine && (
+                                        <span className='mx-1 inline-block font-black [text-shadow:0_0_1px_currentColor,0_0_1px_currentColor]'>
+                                            •
+                                        </span>
+                                    )}
+                                    {weightLine}
+                                </span>
+                            </p>
+                        )}
+
+                        {currentContractLabel && (
+                            <p className='mt-2 flex items-center text-sm text-foreground'>
+                                <Banknote className='mr-1.5 h-3.5 w-3.5 shrink-0 text-accent-green' />
+                                <span>
+                                    {secondContractLabel ? (
+                                        <>
+                                            <span>{currentContractLabel}</span>
+                                            <span
+                                                aria-hidden='true'
+                                                className='mx-1 opacity-80'
+                                            >
+                                                →
+                                            </span>
+                                            <span>{secondContractLabel}</span>
+                                        </>
+                                    ) : (
+                                        <span>{currentContractLabel}</span>
+                                    )}
+                                </span>
                             </p>
                         )}
 
                         {draftLine && (
-                            <p className='mt-2 text-sm text-foreground'>
+                            <p className='mt-2 text-xs text-white'>
                                 <span className='inline-flex items-center gap-1.5'>
                                     Drafted by
                                     {player.draftTeamAbbreviation && (
                                         <NhlTeamLogo
                                             abbreviation={player.draftTeamAbbreviation}
-                                            size={20}
+                                            size={16}
                                         />
                                     )}
                                 </span>
-                                <br />- {draftLine}
+                                <br />
+                                <span className='text-xs text-white'>
+                                    - {draftLine}
+                                </span>
                             </p>
                         )}
 
@@ -897,6 +1026,77 @@ export default function PlayerPage() {
                     </div>
                 )}
 
+                {/* Career */}
+                <SectionTitle>Career</SectionTitle>
+
+                <div className='grid grid-cols-1 gap-0 md:grid-cols-2 md:gap-x-1'>
+                    <div>
+                        <SubSectionTitle>Regular Season</SubSectionTitle>
+                        {isGoalie ? (
+                            <GoalieCareerTable
+                                rows={careerRowsForDisplay(
+                                    player.regularSeason,
+                                    showAllRegularSeason,
+                                )}
+                            />
+                        ) : (
+                            <SkaterCareerTable
+                                rows={careerRowsForDisplay(
+                                    player.regularSeason,
+                                    showAllRegularSeason,
+                                )}
+                            />
+                        )}
+
+                        <div className='mt-1 flex justify-center'>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setShowAllRegularSeason((v) => !v)
+                                }
+                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground transition-colors hover:bg-secondary'
+                            >
+                                {showAllRegularSeason
+                                    ? '▲ Afficher moins'
+                                    : '▼ Afficher plus'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <SubSectionTitle>Playoffs</SubSectionTitle>
+                        {isGoalie ? (
+                            <GoalieCareerTable
+                                rows={careerRowsForDisplay(
+                                    player.playoffs,
+                                    showAllPlayoffs,
+                                )}
+                            />
+                        ) : (
+                            <SkaterCareerTable
+                                rows={careerRowsForDisplay(
+                                    player.playoffs,
+                                    showAllPlayoffs,
+                                )}
+                            />
+                        )}
+
+                        <div className='mt-1 flex justify-center'>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setShowAllPlayoffs((v) => !v)
+                                }
+                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground transition-colors hover:bg-secondary'
+                            >
+                                {showAllPlayoffs
+                                    ? '▲ Afficher moins'
+                                    : '▼ Afficher plus'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 {/* Quarters */}
                 {player.seasonQuarters.length === 4 && (
                     <>
@@ -909,29 +1109,6 @@ export default function PlayerPage() {
                         />
                     </>
                 )}
-
-                {/* Career */}
-                <SectionTitle>Career</SectionTitle>
-
-                <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
-                    <div>
-                        <SubSectionTitle>Regular Season</SubSectionTitle>
-                        {isGoalie ? (
-                            <GoalieCareerTable rows={player.regularSeason} />
-                        ) : (
-                            <SkaterCareerTable rows={player.regularSeason} />
-                        )}
-                    </div>
-
-                    <div>
-                        <SubSectionTitle>Playoffs</SubSectionTitle>
-                        {isGoalie ? (
-                            <GoalieCareerTable rows={player.playoffs} />
-                        ) : (
-                            <SkaterCareerTable rows={player.playoffs} />
-                        )}
-                    </div>
-                </div>
 
                 {hasNhlTotals && (
                     <div className='mt-2'>
@@ -1168,65 +1345,6 @@ export default function PlayerPage() {
                     )}
                 </div>
 
-                {/* Contracts */}
-                <SectionTitle>Contracts</SectionTitle>
-
-                {player.contracts.length === 0 ? (
-                    <p className='text-sm text-muted-foreground'>
-                        Aucun contrat enregistré.
-                    </p>
-                ) : (
-                    <TableShell>
-                        <table className='w-full min-w-[560px] text-xs tabular-nums'>
-                            <TableHead>
-                                <tr>
-                                    <th className={thLeft}>Salaire annuel</th>
-                                    <th className={thLeft}>Début</th>
-                                    <th className={thLeft}>Fin</th>
-                                    <th className={thRight}>
-                                        Années restantes
-                                    </th>
-                                </tr>
-                            </TableHead>
-                            <tbody className='text-foreground'>
-                                {player.contracts.map((contract, index) => (
-                                    <tr
-                                        key={`${contract.startSeason}-${contract.endSeason}`}
-                                        className={rowClass(index)}
-                                    >
-                                        <td className={tdLeft}>
-                                            {salaryFormatter.format(
-                                                contract.salary,
-                                            )}{' '}
-                                            $
-                                            <span className='ml-2 text-[0.7rem] text-muted-foreground'>
-                                                (
-                                                {compactMillions(
-                                                    contract.salary,
-                                                )}
-                                                )
-                                            </span>
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {String(
-                                                contract.startSeason,
-                                            ).slice(0, 4)}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {String(
-                                                contract.endSeason,
-                                            ).slice(4, 8)}
-                                        </td>
-                                        <td className={tdRight}>
-                                            {contract.yearsRemaining}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </TableShell>
-                )}
-
                 {player.currentCapHit != null && (
                     <p className='text-sm text-foreground'>
                         Cap hit (saison courante) :{' '}
@@ -1337,17 +1455,6 @@ export default function PlayerPage() {
                         </table>
                     </TableShell>
                 )}
-
-                {/* Bottom close for long pages */}
-                <div className='pt-4'>
-                    <button
-                        type='button'
-                        onClick={handleClose}
-                        className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
-                    >
-                        ✕ Fermer
-                    </button>
-                </div>
             </section>
         </>
     );
