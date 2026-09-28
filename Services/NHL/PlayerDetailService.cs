@@ -191,12 +191,24 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 CurrentCapHit = currentContract?.Salary,
 
+                FantasyTeamId = entry?.FantasyTeamId,
                 FantasyTeamName = entry?.FantasyTeam?.Name,
                 RosterStatus = entry?.RosterStatus.ToString(),
                 RosterSlot = entry?.RosterSlot,
                 FantasySalary = entry?.FantasySalary,
                 SeasonFantasyPoints = fantasySeasonStat?.FantasyPoints,
                 SeasonHatTricks = fantasySeasonStat?.HatTricks,
+                CurrentSeasonStats = fantasySeasonStat == null
+                    ? null
+                    : new CurrentSeasonStatsDto
+                    {
+                        GamesPlayed = fantasySeasonStat.GamesPlayed,
+                        Goals = fantasySeasonStat.Goals,
+                        Assists = fantasySeasonStat.Assists,
+                        Points = fantasySeasonStat.Points,
+                        HatTricks = fantasySeasonStat.HatTricks,
+                        FantasyPoints = fantasySeasonStat.FantasyPoints
+                    },
 
                 RegularSeason = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Main),
                 Playoffs = BuildCareerRows(careerRows, gameType: 3, CareerCategory.Main),

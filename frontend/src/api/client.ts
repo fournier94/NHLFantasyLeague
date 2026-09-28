@@ -281,6 +281,16 @@ export interface CareerRow {
     goalsAgainstAverage: number;
 }
 
+/** Current-season regular-season totals used by the fantasy stat table. */
+export interface CurrentSeasonStats {
+    gamesPlayed: number;
+    goals: number;
+    assists: number;
+    points: number;
+    hatTricks: number;
+    fantasyPoints: number;
+}
+
 /** NHL totals block at the bottom of the career table. */
 export interface CareerTotals {
     gamesPlayed: number;
@@ -434,12 +444,14 @@ export interface PlayerDetail {
     contracts: PlayerContract[];
     currentCapHit: number | null;
 
+    fantasyTeamId: number | null;
     fantasyTeamName: string | null;
     rosterStatus: string | null;
     rosterSlot: number | null;
     fantasySalary: number | null;
     seasonFantasyPoints: number | null;
     seasonHatTricks: number | null;
+    currentSeasonStats: CurrentSeasonStats | null;
 
     regularSeason: CareerRow[];
     playoffs: CareerRow[];

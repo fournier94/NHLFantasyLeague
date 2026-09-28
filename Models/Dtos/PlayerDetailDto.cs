@@ -70,6 +70,7 @@
         public decimal? CurrentCapHit { get; set; }
 
         // --- Fantasy context --------------------------------------------
+        public int? FantasyTeamId { get; set; }
         public string? FantasyTeamName { get; set; }
         public string? RosterStatus { get; set; }
         public int? RosterSlot { get; set; }
@@ -80,6 +81,13 @@
 
         /// <summary>Number of hat-tricks scored this season, or null when not computed yet.</summary>
         public int? SeasonHatTricks { get; set; }
+
+        /// <summary>
+        /// Regular-season totals for the current season, used by the
+        /// two-row fantasy stat table on the player page. Null when no
+        /// PlayerSeasonStat row exists yet for the current season.
+        /// </summary>
+        public CurrentSeasonStatsDto? CurrentSeasonStats { get; set; }
 
         // --- Career stats -----------------------------------------------
         public List<CareerRowDto> RegularSeason { get; set; } = new();
@@ -265,6 +273,20 @@
         public int StartSeason { get; set; }
         public int EndSeason { get; set; }
         public int YearsRemaining { get; set; }
+    }
+
+    /// <summary>
+    /// Current-season regular-season totals for the player, sourced from
+    /// PlayerSeasonStat. Used by the fantasy stat table on the player page.
+    /// </summary>
+    public class CurrentSeasonStatsDto
+    {
+        public int GamesPlayed { get; set; }
+        public int Goals { get; set; }
+        public int Assists { get; set; }
+        public int Points { get; set; }
+        public int HatTricks { get; set; }
+        public int FantasyPoints { get; set; }
     }
 
     /// <summary>

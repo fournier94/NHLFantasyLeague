@@ -1,4 +1,5 @@
 ﻿import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { getTeamRoster, type RosterEntry, type TeamRoster } from '@/api/client';
 import { PlayerCard } from '@/components/roster/PlayerCard';
 import { RosterSection } from '@/components/roster/RosterSection';
@@ -36,6 +37,10 @@ function compactMillions(value: number): string {
 }
 
 export default function MonEquipePage() {
+    const [searchParams] = useSearchParams();
+    const teamIdParam = searchParams.get('teamId');
+    const teamId = teamIdParam ? Number(teamIdParam) : TEMPORARY_TEAM_ID;
+
     const [roster, setRoster] = useState<TeamRoster | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -46,7 +51,10 @@ export default function MonEquipePage() {
     useEffect(() => {
         let cancelled = false;
 
-        getTeamRoster(TEMPORARY_TEAM_ID)
+        setLoading(true);
+        setError(null);
+
+        getTeamRoster(teamId)
             .then((data) => {
                 if (!cancelled) {
                     setRoster(data);
@@ -66,7 +74,7 @@ export default function MonEquipePage() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [teamId]);
 
     // Restore scroll position when coming back from a player page.
     // Runs after the roster has rendered so the card element exists in
