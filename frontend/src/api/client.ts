@@ -300,6 +300,10 @@ export interface CareerRow {
     savePercentage: number;
     goalsAgainst: number;
     goalsAgainstAverage: number;
+
+    /** Number of hat tricks for this season and game type, or null when
+     *  not yet computed (older seasons the NHL API can't serve). */
+    hatTricks: number | null;
 }
 
 /** Current-season regular-season totals used by the fantasy stat table. */

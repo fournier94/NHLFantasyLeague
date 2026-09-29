@@ -12,11 +12,14 @@ namespace NhlFantasyLeague.api.Controllers.NHL
     public class NhlGameLogController : ControllerBase
     {
         private readonly NhlGameLogService _nhlGameLogService;
+        private readonly NhlStatsService _nhlStatsService;
 
         public NhlGameLogController(
-NhlGameLogService nhlGameLogService)
+NhlGameLogService nhlGameLogService,
+NhlStatsService nhlStatsService)
         {
             _nhlGameLogService = nhlGameLogService;
+            _nhlStatsService = nhlStatsService;
         }
 
         [HttpGet("player/{id}/game-log/{season}")]
@@ -53,12 +56,6 @@ int season)
         /// <summary>
         /// Backfills every game log for a player and one season, then
         /// recomputes his PlayerSeasonStat (FantasyPoints + HatTricks).
-        ///
-        /// Use this to pull a past season, for example 20252026 for
-        /// 2025-26. Returns the number of new PlayerGameLog rows written
-        /// and the number of rows that already existed, so a caller can
-        /// tell "the NHL API returned no games" from "the games were
-        /// already saved".
         /// </summary>
         [HttpGet("player/{id}/game-log/{season}/backfill")]
         public async Task<IActionResult> BackfillPlayerGameLogs(
@@ -81,14 +78,10 @@ int season)
         }
 
         /// <summary>
-        /// Backfills a single season of NHL game logs for every player
-        /// in the database. Players who already have game-log rows for
-        /// that season are skipped, so the run is safe to re-run and
-        /// resumes where it left off.
-        ///
-        /// Default delay is 500 ms between players, matching the
-        /// population batch. Override it with
-        /// ?delayMsBetweenPlayers=200 for a faster (but ruder) run.
+        /// Backfills a single season of NHL game logs for every player in
+        /// the database. Players who already have game-log rows for that
+        /// season are skipped, so the run is safe to re-run and resumes
+        /// where it left off. Default delay: 500 ms between players.
         /// </summary>
         [HttpPost("season/{season}/backfill-all")]
         public async Task<IActionResult> BackfillAllPlayersGameLogs(
@@ -105,6 +98,35 @@ int season)
                 await _nhlGameLogService.BackfillAllPlayersGameLogsAsync(
                     season,
                     delayMsBetweenPlayers,
+                    ct);
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Backfills the hat-trick count on every NHL PlayerCareerStat row
+        /// in the database, by fetching the NHL game log for each
+        /// (player, season, game type) triple and counting the games with
+        /// 3+ goals. Does NOT write any PlayerGameLog rows.
+        ///
+        /// Rows already computed are skipped. Pass ?force=true to
+        /// recompute them. Default delay: 500 ms between API calls.
+        /// </summary>
+        [HttpPost("career-hat-tricks/backfill-all")]
+        public async Task<IActionResult> BackfillCareerHatTricks(
+            [FromQuery] int delayMsBetweenCalls = 500,
+            [FromQuery] bool force = false,
+            CancellationToken ct = default)
+        {
+            if (delayMsBetweenCalls < 0)
+            {
+                delayMsBetweenCalls = 0;
+            }
+
+            var result =
+                await _nhlStatsService.BackfillCareerHatTricksAsync(
+                    delayMsBetweenCalls,
+                    force,
                     ct);
 
             return Ok(result);

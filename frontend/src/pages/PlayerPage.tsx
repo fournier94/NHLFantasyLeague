@@ -136,9 +136,6 @@ function displayPosition(position: string): string {
 
 /**
  * Collapses every position string into one of "F", "D", "G", or "" (unknown).
- * Uses an explicit allowlist of known English and French position strings
- * so a French "Ailier Droit" (AD) is never confused with a defenseman
- * because it contains the letter D.
  */
 const POSITION_GROUPS: Record<string, 'F' | 'D' | 'G'> = {
     // Forwards
@@ -209,12 +206,6 @@ function formatDecimal(value: number, digits = 2): string {
     return value.toFixed(digits);
 }
 
-/**
- * Returns the rows to display for a career table: the current season
- * (injected with zeros if missing) plus the previous 3 seasons, OR the
- * full list when `showAll` is true. Rows are kept in the order they
- * arrive in (most recent first).
- */
 function careerRowsForDisplay(
     rows: CareerRow[],
     showAll: boolean,
@@ -257,6 +248,7 @@ function careerRowsForDisplay(
                     savePercentage: 0,
                     goalsAgainst: 0,
                     goalsAgainstAverage: 0,
+                    hatTricks: null,
                 } as CareerRow,
                 ...rows,
             ];
@@ -272,10 +264,6 @@ function careerRowsForDisplay(
     return withCurrent.filter((r) => r.season >= cutoff);
 }
 
-/**
- * Aggregates a set of game-log rows into the totals the fantasy table
- * needs. `hatTricks` only counts games where the player scored 3+ goals.
- */
 function aggregateGameLog(rows: GameLogRow[]) {
     const gamesPlayed = rows.length;
     const goals = rows.reduce((sum, g) => sum + g.goals, 0);
@@ -298,7 +286,7 @@ function aggregateGameLog(rows: GameLogRow[]) {
 }
 
 // ---------------------------------------------------------------------
-// Table primitives (dark theme, matching MonÉquipe)
+// Table primitives
 // ---------------------------------------------------------------------
 
 const thBase = 'px-2 py-1 font-medium whitespace-nowrap';
@@ -351,11 +339,6 @@ function SubSectionTitle({ children }: { children: React.ReactNode }) {
     );
 }
 
-/**
- * Renders the injury or suspension icon, or null when the player is
- * not injured. Same shape as the one in PlayerCard so the two pages
- * look consistent.
- */
 function InjuryBadge({
     isInjured,
     injuryKind,
@@ -396,7 +379,13 @@ function InjuryBadge({
     );
 }
 
-function SkaterCareerTable({ rows }: { rows: CareerRow[] }) {
+function SkaterCareerTable({
+    rows,
+    showFantasyPoints = false,
+}: {
+    rows: CareerRow[];
+    showFantasyPoints?: boolean;
+}) {
     if (rows.length === 0) {
         return (
             <TableShell>
@@ -418,7 +407,11 @@ function SkaterCareerTable({ rows }: { rows: CareerRow[] }) {
                         <th className={thRight}>GP</th>
                         <th className={thRight}>G</th>
                         <th className={thRight}>A</th>
-                        <th className={thRight}>Pts</th>
+                        <th className={cn(thRight, 'font-bold text-[#D4AF37]')}>Pts</th>
+                        <th className={thRight}>3B</th>
+                        {showFantasyPoints && (
+                            <th className={cn(thRight, 'font-bold text-[#D4AF37]')}>FP</th>
+                        )}
                         <th className={thRight}>PIM</th>
                         <th className={thRight}>+/-</th>
                         <th className={thRight}>PPP</th>
@@ -439,7 +432,17 @@ function SkaterCareerTable({ rows }: { rows: CareerRow[] }) {
                             <td className={tdRight}>{row.gamesPlayed}</td>
                             <td className={tdRight}>{row.goals}</td>
                             <td className={tdRight}>{row.assists}</td>
-                            <td className={tdRight}>{row.points}</td>
+                            <td className={cn(tdRight, 'text-[#D4AF37]')}>{row.points}</td>
+                            <td className={tdRight}>
+                                {row.hatTricks == null ? '—' : row.hatTricks}
+                            </td>
+                            {showFantasyPoints && (
+                                <td className={cn(tdRight, 'text-[#D4AF37]')}>
+                                    {row.hatTricks == null
+                                        ? '—'
+                                        : row.points + row.hatTricks * 2}
+                                </td>
+                            )}
                             <td className={tdRight}>{row.penaltyMinutes}</td>
                             <td className={tdRight}>
                                 {row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus}
@@ -777,12 +780,20 @@ export default function PlayerPage() {
     const injuryPanelRef = useRef<HTMLDivElement>(null);
     const injuryScrollOnOpenRef = useRef(false);
 
-    // Close button aura channel.
     const closeAura = useAura('playerPageCloseButton');
-
-    // Player page team logo aura channel. Has its own admin slider,
-    // independent of the player-card logo slider.
     const pageTeamLogoAura = useAura('playerPageTeamLogo');
+
+    useEffect(() => {
+        const state = location.state as
+            | { fromCardId?: string }
+            | null
+            | undefined;
+
+        // Nothing to do here anymore: PlayerCard records the restore
+        // position on click. Kept as a no-op so location.state changes
+        // do not surprise anything.
+        void state;
+    }, [location.state]);
 
     useEffect(() => {
         if (!nhlPlayerId) {
@@ -819,9 +830,6 @@ export default function PlayerPage() {
         };
     }, [nhlPlayerId]);
 
-    // After expanding/collapsing the Regular Season table, scroll it to
-    // the top of the viewport (just below the sticky header). Skips the
-    // very first render so it does not fire on page load.
     useEffect(() => {
         if (!regularSeasonInitialized.current) {
             regularSeasonInitialized.current = true;
@@ -844,7 +852,6 @@ export default function PlayerPage() {
         window.scrollTo({ top, behavior: 'smooth' });
     }, [showAllRegularSeason]);
 
-    // Same for the Playoffs table.
     useEffect(() => {
         if (!playoffsInitialized.current) {
             playoffsInitialized.current = true;
@@ -867,10 +874,6 @@ export default function PlayerPage() {
         window.scrollTo({ top, behavior: 'smooth' });
     }, [showAllPlayoffs]);
 
-    // When the injury panel is expanded, scroll so the bottom of the
-    // panel sits at the bottom of the viewport (with a small gap). Only
-    // fires on open, never on close. requestAnimationFrame lets the
-    // browser lay out the newly rendered rows before we measure.
     useEffect(() => {
         if (!showInjuryDetails) {
             injuryScrollOnOpenRef.current = false;
@@ -878,8 +881,6 @@ export default function PlayerPage() {
         }
 
         if (!injuryScrollOnOpenRef.current) {
-            // Flag was not set, meaning this opening was not triggered
-            // by the user's click on the injury button. Skip.
             return;
         }
 
@@ -901,8 +902,6 @@ export default function PlayerPage() {
         return () => cancelAnimationFrame(frame);
     }, [showInjuryDetails]);
 
-    // Close button: go back to wherever the user came from. If there is
-    // no history, fall back to /joueurs so we never leave the user stuck.
     function handleClose() {
         if (window.history.length > 1) {
             navigate(-1);
@@ -911,9 +910,6 @@ export default function PlayerPage() {
         }
     }
 
-    // Aura strings for the Close button, same shape as the other text
-    // auras in the app. Uses the primary blue (#00A8FF) so it matches
-    // the mobile page title.
     const closeRest = [
         `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 0).toFixed(2)}px #F2F5FA`,
         `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 1).toFixed(2)}px #00A8FF`,
@@ -928,9 +924,6 @@ export default function PlayerPage() {
         `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 3).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
     ].join(', ');
 
-    // Team logo aura on the player page, in the NHL team's primary
-    // color. Three drop-shadow layers, pulsing between a soft rest and
-    // a brighter peak. Uses the dedicated playerPageTeamLogo channel.
     const pageTeamLogoColor = getNhlTeamColor(
         player?.nhlTeamAbbreviation ?? undefined,
     );
@@ -958,10 +951,6 @@ export default function PlayerPage() {
             : {}),
     } as React.CSSProperties;
 
-    // The fixed layer: it spans the whole viewport horizontally, and
-    // the inner max-w container re-aligns the button with the page
-    // content. The top offset is header-height + 0.75rem, so the
-    // button's top edge sits fully below the header, not under it.
     function CloseButtonLayer() {
         return (
             <div className='pointer-events-none fixed inset-x-0 top-0 z-40'>
@@ -1112,8 +1101,6 @@ export default function PlayerPage() {
                 ? currentContract.salary / totals.totalFantasyPoints
                 : null;
 
-        // VOR needs a full-season sample, so only the 25-26 row
-        // (which uses last season's final totals) passes computeVor.
         const vorValue = computeVor
             ? totals.totalFantasyPoints - vor
             : null;
@@ -1143,7 +1130,6 @@ export default function PlayerPage() {
             <CloseButtonLayer />
 
             <section className='mx-auto -mt-3 w-full max-w-5xl space-y-4'>
-                {/* Hero banner, using the page margins. */}
                 {player.heroImageUrl && (
                     <div className='aspect-[22/9] w-full overflow-hidden rounded-lg border border-border bg-black'>
                         <img
@@ -1155,7 +1141,6 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                {/* Identity + headshot (negative top margin cancels part of the section's space-y-4) */}
                 <div className='relative -mt-2 sm:flex sm:flex-row sm:items-start sm:gap-4'>
                     <div className='min-w-0 space-y-1 sm:flex-1'>
                         <div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 sm:justify-start'>
@@ -1341,16 +1326,19 @@ export default function PlayerPage() {
                                 <tbody className='text-foreground'>
                                     {fantasyStatRows.map((row, i) => {
                                         const isLastYear = row.label === '25-26';
+                                        const isCurrentYear = row.label === '26-27';
 
                                         return (
                                             <tr
                                                 key={row.label}
                                                 className={
-                                                    isLastYear
-                                                        ? 'border-t border-primary/30 bg-primary/10'
-                                                        : i % 2 === 0
-                                                            ? 'bg-transparent'
-                                                            : 'bg-secondary/20'
+                                                    isCurrentYear
+                                                        ? 'bg-primary/10'
+                                                        : isLastYear
+                                                            ? 'border-t border-primary/30 bg-transparent'
+                                                            : i % 2 === 0
+                                                                ? 'bg-transparent'
+                                                                : 'bg-secondary/20'
                                                 }
                                             >
                                                 <td className='px-2 py-1 text-left font-bold text-foreground'>
@@ -1375,7 +1363,7 @@ export default function PlayerPage() {
                                                     {row.pointsPerGame.toFixed(2)}
                                                 </td>
                                                 <td
-                                                    className={`px-2 py-1 text-center ${row.label === 'Total' || row.label === 'Last 10'
+                                                    className={`px-2 py-1 text-center ${row.label === '26-27' || row.label === 'Last 10'
                                                             ? 'text-foreground'
                                                             : row.valueOverReplacement == null
                                                                 ? 'text-[#D4AF37]'
@@ -1411,7 +1399,6 @@ export default function PlayerPage() {
                     )}
                 </div>
 
-                {/* Current injury panel */}
                 {player.isInjured && (
                     <div
                         ref={injuryPanelRef}
@@ -1518,7 +1505,6 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                {/* Career */}
                 <SectionTitle>Carrière</SectionTitle>
 
                 <div className='grid grid-cols-1 gap-0 md:grid-cols-2 md:gap-x-1'>
@@ -1540,6 +1526,7 @@ export default function PlayerPage() {
                                         showAllRegularSeason,
                                         true,
                                     )}
+                                    showFantasyPoints
                                 />
                             )}
                         </div>
@@ -1778,7 +1765,6 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                {/* Quarters */}
                 {player.seasonQuarters.length === 4 && (
                     <>
                         <SectionTitle>
@@ -1791,7 +1777,6 @@ export default function PlayerPage() {
                     </>
                 )}
 
-                {/* Fiches de match */}
                 <SectionTitle>Fiches de match</SectionTitle>
                 <button
                     type='button'
@@ -1811,7 +1796,6 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                {/* Tournaments */}
                 <SectionTitle>Tournois</SectionTitle>
                 {isGoalie ? (
                     <GoalieCareerTable rows={player.tournaments} />
@@ -1819,7 +1803,6 @@ export default function PlayerPage() {
                     <SkaterCareerTable rows={player.tournaments} />
                 )}
 
-                {/* Youth / minor (collapsed) */}
                 <div className='mt-6'>
                     <button
                         type='button'
@@ -1841,10 +1824,9 @@ export default function PlayerPage() {
                     )}
                 </div>
 
-                {/* Injury history */}
                 <SectionTitle>Historique des blessures</SectionTitle>
 
-                {player.injuryHistory.filter((s) => s.resolvedAt === null).length === 0 ? (
+                {player.injuryHistory.length === 0 ? (
                     <p className='text-sm text-muted-foreground'>
                         Aucune blessure enregistrée.
                     </p>
@@ -1864,37 +1846,35 @@ export default function PlayerPage() {
                                 </tr>
                             </TableHead>
                             <tbody className='text-foreground'>
-                                {player.injuryHistory
-                                    .filter((s) => s.resolvedAt === null)
-                                    .map((spell, index) => (
-                                        <tr
-                                            key={`${spell.firstSeenAt}-${index}`}
-                                            className={rowClass(index)}
+                                {player.injuryHistory.map((spell, index) => (
+                                    <tr
+                                        key={`${spell.firstSeenAt}-${index}`}
+                                        className={rowClass(index)}
+                                    >
+                                        <td className={tdLeft}>
+                                            {spell.injuryStatus}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {spell.teamAbbreviation}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {shortDate(spell.firstSeenAt)}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {shortDate(spell.lastSeenAt)}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {spell.resolvedAt
+                                                ? shortDate(spell.resolvedAt)
+                                                : 'En cours'}
+                                        </td>
+                                        <td
+                                            className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
                                         >
-                                            <td className={tdLeft}>
-                                                {spell.injuryStatus}
-                                            </td>
-                                            <td className={tdLeft}>
-                                                {spell.teamAbbreviation}
-                                            </td>
-                                            <td className={tdLeft}>
-                                                {shortDate(spell.firstSeenAt)}
-                                            </td>
-                                            <td className={tdLeft}>
-                                                {shortDate(spell.lastSeenAt)}
-                                            </td>
-                                            <td className={tdLeft}>
-                                                {spell.resolvedAt
-                                                    ? shortDate(spell.resolvedAt)
-                                                    : 'En cours'}
-                                            </td>
-                                            <td
-                                                className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
-                                            >
-                                                {spell.injuryDescription ?? '—'}
-                                            </td>
-                                        </tr>
-                                    ))}
+                                            {spell.injuryDescription ?? '—'}
+                                        </td>
+                                    </tr>
+                                ))}
                             </tbody>
                         </table>
                     </TableShell>

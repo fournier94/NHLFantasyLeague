@@ -24,11 +24,6 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// Writes one fantasy row per (PlayerId, SeasonId) for the current
         /// season only, using the NHL regular season totals from the
         /// landing page. Used by the batch population.
-        ///
-        /// PlayerSeasonStat is the fantasy table: it does not carry league
-        /// or game type, and it holds FantasyPoints and HatTricks derived
-        /// from the player's game logs. The raw per-league history lives in
-        /// PlayerCareerStat instead.
         /// </summary>
         public async Task<int> UpsertFantasySeasonStatAsync(
             Player player,
@@ -53,9 +48,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             if (season == null)
             {
-                // Seasons are created by the career-stats sync (which runs
-                // before this) or by LeagueSetupService. Skip when missing
-                // rather than create a bare season row here.
                 return 0;
             }
 
@@ -98,11 +90,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             return 1;
         }
 
-        /// <summary>
-        /// Returns every row of a player's career history, ordered by
-        /// season (most recent first), then game type, then sequence.
-        /// This is the source for the player detail page.
-        /// </summary>
         public async Task<List<CareerStatDto>?> GetPlayerCareerStatsAsync(int nhlPlayerId)
         {
             var player = await _dbContext.Players
@@ -181,11 +168,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                     s.SeasonId == season.Id);
         }
 
-        /// <summary>
-        /// Recomputes FantasyPoints and HatTricks for one player and one
-        /// season from his game logs. PlayerSeasonStat holds one row per
-        /// (PlayerId, SeasonId), so the lookup is unambiguous.
-        /// </summary>
         public async Task UpdatePlayerSeasonStatsAsync(
             int nhlPlayerId,
             int seasonCode)
@@ -239,13 +221,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                     "G",
                     StringComparison.OrdinalIgnoreCase);
 
-            // Fantasy points are calculated from the individual game logs.
             seasonStats.FantasyPoints =
                 logs.Sum(g => g.FantasyPoints);
 
-            // Hat-tricks are calculated from game logs because
-            // NHL season totals do not provide a hat-trick count.
-            // Goalies can never receive a hat-trick bonus.
             if (!isGoalie)
             {
                 seasonStats.HatTricks =
@@ -473,5 +451,225 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
             }
         }
+
+        /// <summary>
+        /// Backfills the hat-trick count on every NHL PlayerCareerStat row
+        /// in the database. For each (player, season, game type) triple,
+        /// it fetches the NHL game log, counts the games with 3+ goals,
+        /// and writes the count onto the matching career row.
+        ///
+        /// Only NHL rows are touched: rows whose LeagueAbbreviation is not
+        /// "NHL" are ignored, and the game-log endpoint only serves NHL
+        /// games anyway.
+        ///
+        /// Multi-sequence seasons (mid-season trades) get the whole season
+        /// total on their lowest Sequence row, and 0 on the other rows, so
+        /// summing the column never double-counts.
+        ///
+        /// Rows whose HatTricksComputedAt is already set are skipped, so
+        /// the run is safe to re-run and resumes where it left off. Pass
+        /// force = true to recompute them.
+        ///
+        /// Nothing is written to PlayerGameLog: this method only fills the
+        /// HatTricks column on PlayerCareerStat.
+        /// </summary>
+        public async Task<BackfillCareerHatTricksResult> BackfillCareerHatTricksAsync(
+            int delayMsBetweenCalls = 500,
+            bool force = false,
+            CancellationToken ct = default)
+        {
+            var result = new BackfillCareerHatTricksResult();
+
+            // Load every NHL career row we might need to touch. We only
+            // need the fields required to group rows and write the result.
+            var query = _dbContext.PlayerCareerStats
+                .Where(r => r.LeagueAbbreviation == "NHL");
+
+            if (!force)
+            {
+                query = query.Where(r => r.HatTricksComputedAt == null);
+            }
+
+            var candidateRows = await query
+                .Select(r => new
+                {
+                    r.Id,
+                    r.PlayerId,
+                    r.Season,
+                    r.GameTypeId,
+                    r.Sequence
+                })
+                .ToListAsync(ct);
+
+            result.TotalRows = candidateRows.Count;
+
+            if (result.TotalRows == 0)
+            {
+                return result;
+            }
+
+            // Group rows by (player, season, game type). One API call
+            // per group, then the same value gets fanned out to every
+            // row in that group.
+            var groups = candidateRows
+                .GroupBy(r => new { r.PlayerId, r.Season, r.GameTypeId })
+                .ToList();
+
+            result.TotalGroups = groups.Count;
+
+            // Get every player's NHL id in one query, so we do not hit
+            // the DB inside the loop.
+            var playerIds = groups
+                .Select(g => g.Key.PlayerId)
+                .Distinct()
+                .ToList();
+
+            var nhlIdByPlayerId = await _dbContext.Players
+                .Where(p => playerIds.Contains(p.Id))
+                .Select(p => new { p.Id, p.NhlPlayerId })
+                .ToDictionaryAsync(
+                    p => p.Id,
+                    p => p.NhlPlayerId,
+                    ct);
+
+            var now = DateTime.UtcNow;
+
+            // Collect all row ids we touched so we can load and update
+            // them in one final SaveChangesAsync.
+            var rowsToUpdate = new List<(int RowId, int? HatTricks)>();
+
+            foreach (var group in groups)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (!nhlIdByPlayerId.TryGetValue(
+                        group.Key.PlayerId,
+                        out var nhlPlayerId) ||
+                    nhlPlayerId <= 0)
+                {
+                    result.SkippedNoNhlId++;
+                    continue;
+                }
+
+                NhlPlayerGameLogResponse? gameLog;
+
+                try
+                {
+                    gameLog = await _httpClient.GetFromJsonAsync<NhlPlayerGameLogResponse>(
+                        $"https://api-web.nhle.com/v1/player/{nhlPlayerId}/game-log/{group.Key.Season}/{group.Key.GameTypeId}",
+                        ct);
+                }
+                catch (Exception ex)
+                {
+                    result.FailedGroups++;
+                    result.Errors.Add(
+                        $"Player {nhlPlayerId} season {group.Key.Season} " +
+                        $"gameType {group.Key.GameTypeId}: " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+
+                    if (delayMsBetweenCalls > 0)
+                    {
+                        await Task.Delay(delayMsBetweenCalls, ct);
+                    }
+
+                    continue;
+                }
+
+                if (gameLog == null || gameLog.GameLog.Count == 0)
+                {
+                    // The API has no game log for this season. Leave the
+                    // column null so the UI can show a dash.
+                    result.SkippedNoGameLog++;
+
+                    if (delayMsBetweenCalls > 0)
+                    {
+                        await Task.Delay(delayMsBetweenCalls, ct);
+                    }
+
+                    continue;
+                }
+
+                var hatTricks = gameLog.GameLog.Count(g => g.Goals >= 3);
+
+                // Write the total on the lowest Sequence row of the group,
+                // 0 on the others, so a SUM over the column is correct.
+                var orderedRows = group
+                    .OrderBy(r => r.Sequence)
+                    .ToList();
+
+                for (var i = 0; i < orderedRows.Count; i++)
+                {
+                    rowsToUpdate.Add(
+                        (orderedRows[i].Id, i == 0 ? hatTricks : 0));
+                }
+
+                result.GroupsProcessed++;
+                result.TotalHatTricksFound += hatTricks;
+
+                if (delayMsBetweenCalls > 0)
+                {
+                    await Task.Delay(delayMsBetweenCalls, ct);
+                }
+            }
+
+            // Apply all updates in one pass.
+            var rowIdsToUpdate = rowsToUpdate
+                .Select(r => r.RowId)
+                .ToHashSet();
+
+            var rows = await _dbContext.PlayerCareerStats
+                .Where(r => rowIdsToUpdate.Contains(r.Id))
+                .ToListAsync(ct);
+
+            var valueByRowId = rowsToUpdate
+                .ToDictionary(r => r.RowId, r => r.HatTricks);
+
+            foreach (var row in rows)
+            {
+                if (valueByRowId.TryGetValue(row.Id, out var value))
+                {
+                    row.HatTricks = value;
+                    row.HatTricksComputedAt = now;
+                    result.RowsUpdated++;
+                }
+            }
+
+            await _dbContext.SaveChangesAsync(ct);
+
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Summary of a hat-trick backfill run for PlayerCareerStat.
+    /// </summary>
+    public class BackfillCareerHatTricksResult
+    {
+        /// <summary>NHL career rows considered (after the force filter).</summary>
+        public int TotalRows { get; set; }
+
+        /// <summary>(Player, season, game type) groups derived from the rows.</summary>
+        public int TotalGroups { get; set; }
+
+        /// <summary>Groups whose game log was fetched and counted.</summary>
+        public int GroupsProcessed { get; set; }
+
+        /// <summary>Groups skipped because the NHL API returned no game log.</summary>
+        public int SkippedNoGameLog { get; set; }
+
+        /// <summary>Groups skipped because the player had no NHL id.</summary>
+        public int SkippedNoNhlId { get; set; }
+
+        /// <summary>Groups whose fetch threw an exception.</summary>
+        public int FailedGroups { get; set; }
+
+        /// <summary>Career rows actually updated with a new HatTricks value.</summary>
+        public int RowsUpdated { get; set; }
+
+        /// <summary>Sum of hat tricks counted across every processed group.</summary>
+        public int TotalHatTricksFound { get; set; }
+
+        /// <summary>Human-readable errors, one per failed group.</summary>
+        public List<string> Errors { get; set; } = new();
     }
 }

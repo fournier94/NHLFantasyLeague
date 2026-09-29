@@ -69,5 +69,24 @@
         public int GoalsAgainst { get; set; }
 
         public decimal GoalsAgainstAverage { get; set; }
+
+        /// <summary>
+        /// Number of hat tricks (3+ goals) recorded in the game logs for
+        /// this season and game type. For a season that was split across
+        /// multiple Sequence rows (mid-season trade), the full season
+        /// total is written on the lowest Sequence row and 0 is written
+        /// on the other rows, so summing the column never double-counts.
+        ///
+        /// Null when the NHL API no longer serves the game log for this
+        /// season, or when the backfill endpoint has not run yet.
+        /// </summary>
+        public int? HatTricks { get; set; }
+
+        /// <summary>
+        /// UTC timestamp of the last successful hat-trick backfill for
+        /// this row. Null means "not computed yet"; the backfill endpoint
+        /// uses this to skip rows it has already handled.
+        /// </summary>
+        public DateTime? HatTricksComputedAt { get; set; }
     }
 }

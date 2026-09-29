@@ -172,6 +172,13 @@
         public decimal SavePercentage { get; set; }
         public int GoalsAgainst { get; set; }
         public decimal GoalsAgainstAverage { get; set; }
+
+        /// <summary>
+        /// Number of hat tricks for this season and game type, or null
+        /// when it has not been computed (older seasons the NHL API no
+        /// longer serves, or the backfill has not run yet).
+        /// </summary>
+        public int? HatTricks { get; set; }
     }
 
     /// <summary>

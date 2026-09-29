@@ -25,12 +25,17 @@ namespace NhlFantasyLeague.api.Services.NHL
             _nhlStatsService = nhlStatsService;
         }
 
+        /// <summary>
+        /// Fetches one season of NHL game logs for a player.
+        /// gameType is 2 for regular season (default) and 3 for playoffs.
+        /// </summary>
         public async Task<NhlPlayerGameLogResponse?> GetPlayerGameLogAsync(
             int nhlPlayerId,
-            int seasonCode)
+            int seasonCode,
+            int gameType = 2)
         {
             var url =
-                $"https://api-web.nhle.com/v1/player/{nhlPlayerId}/game-log/{seasonCode}/2";
+                $"https://api-web.nhle.com/v1/player/{nhlPlayerId}/game-log/{seasonCode}/{gameType}";
 
             return await _httpClient.GetFromJsonAsync<NhlPlayerGameLogResponse>(url);
         }
@@ -289,8 +294,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 SeasonCode = seasonCode
             };
 
-            // Find the season row once. If it doesn't exist, creating
-            // game logs is impossible: PlayerGameLog needs a SeasonId.
             var season = await _dbContext.Seasons
                 .FirstOrDefaultAsync(
                     s => s.NhlSeasonCode == seasonCode,
@@ -305,8 +308,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return result;
             }
 
-            // Load the list of players we need to process. Project only
-            // what we need so we do not pull the whole entity graph.
             var players = await _dbContext.Players
                 .OrderBy(p => p.Id)
                 .Select(p => new
@@ -320,8 +321,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             result.TotalPlayers = players.Count;
 
-            // Preload which players already have game logs for this
-            // season, so we can skip them cheaply.
             var playersWithLogs = (await _dbContext.PlayerGameLogs
                 .Where(g => g.SeasonId == season.Id)
                 .Select(g => g.PlayerId)
@@ -357,9 +356,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                     if (saved == 0)
                     {
-                        // The NHL API returned no games for this player
-                        // and season. That's common for players who did
-                        // not play in the NHL that year.
                         result.PlayersWithoutGames++;
                     }
                 }
@@ -390,28 +386,20 @@ namespace NhlFantasyLeague.api.Services.NHL
     {
         public int SeasonCode { get; set; }
 
-        /// <summary>Total players in the database at the start of the run.</summary>
         public int TotalPlayers { get; set; }
 
-        /// <summary>Players actually queried from the NHL API.</summary>
         public int PlayersProcessed { get; set; }
 
-        /// <summary>Players skipped because they already had game logs for this season.</summary>
         public int SkippedAlreadyBackfilled { get; set; }
 
-        /// <summary>Players skipped because they had no NHL player id.</summary>
         public int SkippedNoNhlId { get; set; }
 
-        /// <summary>Players queried but the NHL API returned no games.</summary>
         public int PlayersWithoutGames { get; set; }
 
-        /// <summary>Players whose fetch threw an exception.</summary>
         public int FailedPlayers { get; set; }
 
-        /// <summary>Sum of new PlayerGameLog rows written across all players.</summary>
         public int TotalGamesSaved { get; set; }
 
-        /// <summary>Human-readable errors, one per failed player.</summary>
         public List<string> Errors { get; set; } = new();
     }
 }

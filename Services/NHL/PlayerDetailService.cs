@@ -280,15 +280,6 @@ namespace NhlFantasyLeague.api.Services.NHL
         // Quarter helpers
         // =================================================================
 
-        /// <summary>
-        /// Splits the regular season into four calendar quarters based on
-        /// the earliest and latest regular-season game dates across the
-        /// whole league (approximated by the min/max GameDate of every
-        /// PlayerGameLog row for the current season). The player's own
-        /// current-season games are then bucketed into those four
-        /// windows. Quarters with no games are returned anyway, with
-        /// zero values, so the frontend can always show four rows.
-        /// </summary>
         private async Task<List<QuarterDto>> BuildSeasonQuartersAsync(
             int playerId,
             Season? currentSeason,
@@ -299,8 +290,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return BuildEmptyQuarters();
             }
 
-            // Earliest and latest date of ANY regular-season game
-            // played this season, across the whole league.
             var range = await _dbContext.PlayerGameLogs
                 .Where(g => g.SeasonId == currentSeason.Id)
                 .GroupBy(g => 1)
@@ -326,10 +315,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return BuildEmptyQuarters();
             }
 
-            // Four equal spans. Because DayNumber math is integer, the
-            // four boundaries may not be perfectly even; we size each
-            // quarter as (totalDays + 1) / 4 to guarantee they cover the
-            // whole range without gaps.
             var daysPerQuarter = (totalDays + 1) / 4;
 
             if (daysPerQuarter < 1)
@@ -464,7 +449,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                     ShotsAgainst = r.ShotsAgainst,
                     SavePercentage = r.SavePercentage,
                     GoalsAgainst = r.GoalsAgainst,
-                    GoalsAgainstAverage = r.GoalsAgainstAverage
+                    GoalsAgainstAverage = r.GoalsAgainstAverage,
+                    HatTricks = r.HatTricks
                 })
                 .ToList();
         }
@@ -535,7 +521,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 ShotsAgainst = shotsAgainst,
                 GoalsAgainst = regular.Sum(r => r.GoalsAgainst),
 
-                // Computed: Saves / ShotsAgainst. Zero when nothing to divide.
                 SavePercentage = shotsAgainst > 0
                     ? Math.Round((decimal)saves / shotsAgainst, 3)
                     : 0m,
