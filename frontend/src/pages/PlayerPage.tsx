@@ -25,7 +25,6 @@ import { Banknote, Ruler } from 'lucide-react';
 // Formatters
 // ---------------------------------------------------------------------
 
-/** Maps the Alpha-3 country codes stored in the DB to the Alpha-2 codes react-country-flag expects. */
 const COUNTRY_CODE_MAP: Record<string, string> = {
     CAN: 'CA',
     USA: 'US',
@@ -100,7 +99,10 @@ function teamDisplay(row: CareerRow): string {
     return '—';
 }
 
-/** Normalizes a position string: uppercase, no accents, single spaces. */
+function isNhlRow(row: CareerRow): boolean {
+    return row.leagueAbbreviation.toUpperCase() === 'NHL';
+}
+
 function normalizePosition(position: string): string {
     return position
         .trim()
@@ -110,7 +112,6 @@ function normalizePosition(position: string): string {
         .replace(/\s+/g, ' ');
 }
 
-/** Maps NHL position codes to the French abbreviations used in this league. */
 function displayPosition(position: string): string {
     switch (normalizePosition(position)) {
         case 'L':
@@ -134,9 +135,6 @@ function displayPosition(position: string): string {
     }
 }
 
-/**
- * Collapses every position string into one of "F", "D", "G", or "" (unknown).
- */
 const POSITION_GROUPS: Record<string, 'F' | 'D' | 'G'> = {
     // Forwards
     'C': 'F',
@@ -192,7 +190,74 @@ function positionGroup(
     return POSITION_GROUPS[normalizePosition(position)] ?? '';
 }
 
-/** Value over replacement threshold per position group. */
+const NHL_TEAM_ABBREVIATIONS: Record<string, string> = {
+    'Anaheim Ducks': 'ANA',
+    'Boston Bruins': 'BOS',
+    'Buffalo Sabres': 'BUF',
+    'Calgary Flames': 'CGY',
+    'Carolina Hurricanes': 'CAR',
+    'Chicago Blackhawks': 'CHI',
+    'Colorado Avalanche': 'COL',
+    'Columbus Blue Jackets': 'CBJ',
+    'Dallas Stars': 'DAL',
+    'Detroit Red Wings': 'DET',
+    'Edmonton Oilers': 'EDM',
+    'Florida Panthers': 'FLA',
+    'Los Angeles Kings': 'LAK',
+    'Minnesota Wild': 'MIN',
+    'Montréal Canadiens': 'MTL',
+    'Montreal Canadiens': 'MTL',
+    'Nashville Predators': 'NSH',
+    'New Jersey Devils': 'NJD',
+    'New York Islanders': 'NYI',
+    'New York Rangers': 'NYR',
+    'Ottawa Senators': 'OTT',
+    'Philadelphia Flyers': 'PHI',
+    'Pittsburgh Penguins': 'PIT',
+    'San Jose Sharks': 'SJS',
+    'Seattle Kraken': 'SEA',
+    'St. Louis Blues': 'STL',
+    'Tampa Bay Lightning': 'TBL',
+    'Toronto Maple Leafs': 'TOR',
+    'Utah Mammoth': 'UTA',
+    'Utah Hockey Club': 'UTA',
+    'Vancouver Canucks': 'VAN',
+    'Vegas Golden Knights': 'VGK',
+    'Washington Capitals': 'WSH',
+    'Winnipeg Jets': 'WPG',
+};
+
+function teamAbbreviation(fullName: string | null | undefined): string {
+    if (!fullName) return '';
+    return NHL_TEAM_ABBREVIATIONS[fullName.trim()] ?? fullName;
+}
+
+/**
+ * Reverse lookup: abbreviation -> full name. Built once from
+ * NHL_TEAM_ABBREVIATIONS. When an abbreviation maps to more than one
+ * full name (e.g. "UTA" can come from "Utah Mammoth" or "Utah Hockey
+ * Club", "MTL" from accented or non-accented "Montreal Canadiens"),
+ * the first-listed key wins, which is the modern name.
+ */
+const NHL_TEAM_FULL_NAMES: Record<string, string> = (() => {
+    const result: Record<string, string> = {};
+
+    for (const [fullName, abbreviation] of Object.entries(
+        NHL_TEAM_ABBREVIATIONS,
+    )) {
+        if (!result[abbreviation]) {
+            result[abbreviation] = fullName;
+        }
+    }
+
+    return result;
+})();
+
+function teamFullName(abbreviation: string | null | undefined): string {
+    if (!abbreviation) return '';
+    return NHL_TEAM_FULL_NAMES[abbreviation.trim()] ?? abbreviation;
+}
+
 function vorThreshold(group: 'F' | 'D' | 'G' | ''): number {
     switch (group) {
         case 'F': return 45;
@@ -204,6 +269,51 @@ function vorThreshold(group: 'F' | 'D' | 'G' | ''): number {
 
 function formatDecimal(value: number, digits = 2): string {
     return value.toFixed(digits);
+}
+
+function parseAtoiToSeconds(value: string | null | undefined): number | null {
+    if (!value) return null;
+
+    const parts = value.trim().split(':');
+
+    if (parts.length === 2) {
+        const minutes = Number(parts[0]);
+        const seconds = Number(parts[1]);
+
+        if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) {
+            return null;
+        }
+
+        return minutes * 60 + seconds;
+    }
+
+    if (parts.length === 3) {
+        const hours = Number(parts[0]);
+        const minutes = Number(parts[1]);
+        const seconds = Number(parts[2]);
+
+        if (
+            !Number.isFinite(hours) ||
+            !Number.isFinite(minutes) ||
+            !Number.isFinite(seconds)
+        ) {
+            return null;
+        }
+
+        return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    return null;
+}
+
+function formatAtoiFromSeconds(seconds: number | null): string | null {
+    if (seconds == null) return null;
+
+    const total = Math.round(seconds);
+    const minutes = Math.floor(total / 60);
+    const secs = total % 60;
+
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 
 function careerRowsForDisplay(
@@ -264,6 +374,164 @@ function careerRowsForDisplay(
     return withCurrent.filter((r) => r.season >= cutoff);
 }
 
+/**
+ * The synthetic current-season row inserted by careerRowsForDisplay has
+ * teamName = null, so the Team cell would show "—" until the NHL stats
+ * sync writes a real current-season row. Fill it in with the player's
+ * CURRENT NHL team (from Player.NhlTeamId via the DTO), which is
+ * correct even when the player changed teams during the offseason:
+ * PlayerCareerStat rows reflect where he played games, but
+ * Player.NhlTeamId is the live team on his profile.
+ *
+ * Only patches rows whose teamName is null, so real career rows are
+ * never touched.
+ */
+function withCurrentTeamName(
+    rows: CareerRow[],
+    currentTeamAbbreviation: string | null | undefined,
+): CareerRow[] {
+    if (!currentTeamAbbreviation) return rows;
+
+    const fullName = teamFullName(currentTeamAbbreviation);
+
+    return rows.map((row) =>
+        row.season === CURRENT_SEASON_CODE &&
+            (row.teamName == null || row.teamName === '')
+            ? { ...row, teamName: fullName }
+            : row,
+    );
+}
+
+function combineNhlSeasonRows(rows: CareerRow[]): CareerRow[] {
+    const result: CareerRow[] = [];
+
+    const nhlFullNames: Map<number, string[]> = new Map();
+    const nhlAbbrevs: Map<number, string[]> = new Map();
+
+    const totalToiSeconds: Map<number, number> = new Map();
+    const totalToiGp: Map<number, number> = new Map();
+
+    const indexByKey = new Map<string, number>();
+
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const isNhl = row.leagueAbbreviation.toUpperCase() === 'NHL';
+
+        if (!isNhl) {
+            indexByKey.set(`raw-${i}`, result.length);
+            result.push(row);
+            continue;
+        }
+
+        const key = `nhl-${row.season}-${row.gameTypeId}`;
+        const existingIndex = indexByKey.get(key);
+
+        const rowToiSeconds = parseAtoiToSeconds(row.averageTimeOnIce);
+
+        if (existingIndex == null) {
+            indexByKey.set(key, result.length);
+
+            const newIndex = result.length;
+            result.push(row);
+
+            nhlFullNames.set(
+                newIndex,
+                row.teamName ? [row.teamName] : [],
+            );
+            nhlAbbrevs.set(
+                newIndex,
+                row.teamName ? [teamAbbreviation(row.teamName)] : [],
+            );
+
+            if (rowToiSeconds != null) {
+                totalToiSeconds.set(
+                    newIndex,
+                    row.gamesPlayed * rowToiSeconds,
+                );
+                totalToiGp.set(newIndex, row.gamesPlayed);
+            }
+
+            continue;
+        }
+
+        const existing = result[existingIndex];
+
+        if (row.teamName) {
+            nhlFullNames.get(existingIndex)?.push(row.teamName);
+            nhlAbbrevs.get(existingIndex)?.push(teamAbbreviation(row.teamName));
+        }
+
+        if (rowToiSeconds != null) {
+            totalToiSeconds.set(
+                existingIndex,
+                (totalToiSeconds.get(existingIndex) ?? 0) +
+                row.gamesPlayed * rowToiSeconds,
+            );
+            totalToiGp.set(
+                existingIndex,
+                (totalToiGp.get(existingIndex) ?? 0) + row.gamesPlayed,
+            );
+        }
+
+        result[existingIndex] = {
+            ...existing,
+            gamesPlayed: existing.gamesPlayed + row.gamesPlayed,
+            goals: existing.goals + row.goals,
+            assists: existing.assists + row.assists,
+            points: existing.points + row.points,
+            penaltyMinutes: existing.penaltyMinutes + row.penaltyMinutes,
+            plusMinus: existing.plusMinus + row.plusMinus,
+            powerPlayGoals: existing.powerPlayGoals + row.powerPlayGoals,
+            powerPlayPoints: existing.powerPlayPoints + row.powerPlayPoints,
+            shorthandedGoals:
+                existing.shorthandedGoals + row.shorthandedGoals,
+            shorthandedPoints:
+                existing.shorthandedPoints + row.shorthandedPoints,
+            gameWinningGoals:
+                existing.gameWinningGoals + row.gameWinningGoals,
+            overtimeGoals: existing.overtimeGoals + row.overtimeGoals,
+            shots: existing.shots + row.shots,
+            wins: existing.wins + row.wins,
+            losses: existing.losses + row.losses,
+            overtimeLosses:
+                existing.overtimeLosses + row.overtimeLosses,
+            shutouts: existing.shutouts + row.shutouts,
+            saves: existing.saves + row.saves,
+            shotsAgainst: existing.shotsAgainst + row.shotsAgainst,
+            goalsAgainst: existing.goalsAgainst + row.goalsAgainst,
+            hatTricks:
+                existing.hatTricks == null && row.hatTricks == null
+                    ? null
+                    : (existing.hatTricks ?? 0) + (row.hatTricks ?? 0),
+        };
+    }
+
+    nhlAbbrevs.forEach((abbrevs, index) => {
+        const uniqueAbbrevs = abbrevs.filter(
+            (v, i, arr) => arr.indexOf(v) === i,
+        );
+
+        const gpForToi = totalToiGp.get(index) ?? 0;
+        const secondsForToi = totalToiSeconds.get(index) ?? 0;
+
+        const mergedAtoi =
+            gpForToi > 0
+                ? formatAtoiFromSeconds(secondsForToi / gpForToi)
+                : result[index].averageTimeOnIce ?? null;
+
+        result[index] = {
+            ...result[index],
+            teamName:
+                uniqueAbbrevs.length >= 2
+                    ? uniqueAbbrevs.join(', ')
+                    : result[index].teamName,
+            averageTimeOnIce: mergedAtoi,
+        };
+    });
+
+    return result;
+}
+
 function aggregateGameLog(rows: GameLogRow[]) {
     const gamesPlayed = rows.length;
     const goals = rows.reduce((sum, g) => sum + g.goals, 0);
@@ -285,6 +553,20 @@ function aggregateGameLog(rows: GameLogRow[]) {
     };
 }
 
+function sumHatTricks(rows: CareerRow[]): number | null {
+    if (rows.length === 0) return null;
+    const anyKnown = rows.some((r) => r.hatTricks != null);
+    if (!anyKnown) return null;
+    return rows.reduce((sum, r) => sum + (r.hatTricks ?? 0), 0);
+}
+
+function sumFantasyPoints(rows: CareerRow[]): number {
+    return rows.reduce(
+        (sum, r) => sum + r.points + (r.hatTricks ?? 0) * 2,
+        0,
+    );
+}
+
 // ---------------------------------------------------------------------
 // Table primitives
 // ---------------------------------------------------------------------
@@ -296,6 +578,16 @@ const tdBase = 'px-2 py-0.5 whitespace-nowrap';
 const tdLeft = `${tdBase} text-left`;
 const tdRight = `${tdBase} text-right`;
 
+// Season column: no right padding, so it hugs the Team column that
+// follows it.
+const thSeason = 'pl-2 pr-0 py-1 font-medium whitespace-nowrap text-left';
+const tdSeason = 'pl-2 pr-0 py-0.5 whitespace-nowrap text-left';
+
+// Team column: reduced left padding, keeping the same visual weight on
+// its right side.
+const thTeam = 'pl-1 pr-2 py-1 font-medium whitespace-nowrap text-center';
+const tdTeam = 'pl-1 pr-2 py-0.5 whitespace-nowrap text-left';
+
 function TableShell({ children }: { children: React.ReactNode }) {
     return (
         <div className='w-full overflow-x-auto rounded-lg border border-border bg-card pb-1'>
@@ -306,7 +598,7 @@ function TableShell({ children }: { children: React.ReactNode }) {
 
 function TableHead({ children }: { children: React.ReactNode }) {
     return (
-        <thead className='border-b border-border text-[0.65rem] uppercase tracking-wide text-muted-foreground'>
+        <thead className='border-b border-border text-[0.65rem] uppercase tracking-wide text-foreground'>
             {children}
         </thead>
     );
@@ -333,7 +625,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 function SubSectionTitle({ children }: { children: React.ReactNode }) {
     return (
-        <h3 className='mb-1 text-sm font-medium text-white'>
+        <h3 className='mb-1 text-center text-sm font-medium text-white'>
             {children}
         </h3>
     );
@@ -379,12 +671,179 @@ function InjuryBadge({
     );
 }
 
+interface TotalsRowProps {
+    regularSeason: boolean;
+    showFantasyPoints?: boolean;
+    /**
+     * True when the surrounding table has a VOR column. The totals
+     * row shows "—" in that column (no career VOR is computed here),
+     * but the cell must exist so column alignment is preserved.
+     */
+    showVor?: boolean;
+    careerRows: CareerRow[];
+    nhlTotals: PlayerDetail['nhlTotals'];
+    isGoalie: boolean;
+}
+
+function TotalsRow({
+    regularSeason,
+    showFantasyPoints = false,
+    showVor = false,
+    careerRows,
+    nhlTotals,
+    isGoalie,
+}: TotalsRowProps) {
+    const rowClassName =
+        'border-t border-primary/30 bg-primary/10 font-semibold';
+
+    if (isGoalie) {
+        if (regularSeason) {
+            return (
+                <tr className={rowClassName}>
+                    <td className={tdLeft}>Totals</td>
+                    <td className={tdLeft}>—</td>
+                    <td className={tdLeft}>NHL</td>
+                    <td className={cn(tdRight, 'text-[#7DD3FC]')}>
+                        {nhlTotals.gamesPlayed}
+                    </td>
+                    <td className={cn(tdRight, 'text-[#00F0FF]')}>
+                        {nhlTotals.wins}
+                    </td>
+                    <td className={tdRight}>{nhlTotals.losses}</td>
+                    <td className={tdRight}>{nhlTotals.overtimeLosses}</td>
+                    <td className={tdRight}>{nhlTotals.shutouts}</td>
+                    <td className={tdRight}>
+                        {nhlTotals.shotsAgainst > 0
+                            ? formatDecimal(nhlTotals.savePercentage, 3)
+                            : '—'}
+                    </td>
+                    <td className={tdRight}>
+                        {nhlTotals.gamesPlayed > 0
+                            ? formatDecimal(
+                                nhlTotals.goalsAgainst / nhlTotals.gamesPlayed,
+                                2,
+                            )
+                            : '—'}
+                    </td>
+                    <td className={tdRight}>{nhlTotals.saves}</td>
+                    <td className={tdRight}>{nhlTotals.shotsAgainst}</td>
+                </tr>
+            );
+        }
+
+        return (
+            <tr className={rowClassName}>
+                <td className={tdLeft}>Totals</td>
+                <td className={tdLeft}>—</td>
+                <td className={tdLeft}>NHL</td>
+                <td className={cn(tdRight, 'text-[#7DD3FC]')}>
+                    {nhlTotals.playoffGamesPlayed}
+                </td>
+                <td className={cn(tdRight, 'text-[#00F0FF]')}>
+                    {nhlTotals.playoffWins}
+                </td>
+                <td className={tdRight}>{nhlTotals.playoffLosses}</td>
+                <td className={tdRight}>{nhlTotals.playoffOvertimeLosses}</td>
+                <td className={tdRight}>{nhlTotals.playoffShutouts}</td>
+                <td className={tdRight}>—</td>
+                <td className={tdRight}>—</td>
+                <td className={tdRight}>—</td>
+                <td className={tdRight}>—</td>
+            </tr>
+        );
+    }
+
+    if (regularSeason) {
+        const fp = sumFantasyPoints(careerRows);
+        const hatTricks = sumHatTricks(careerRows);
+
+        return (
+            <tr className={rowClassName}>
+                <td className={tdLeft}>Totals</td>
+                <td className={tdLeft}>—</td>
+                <td className={tdLeft}>NHL</td>
+                <td className={cn(tdRight, 'text-[#7DD3FC]')}>
+                    {nhlTotals.gamesPlayed}
+                </td>
+                <td className={tdRight}>{nhlTotals.goals}</td>
+                <td className={tdRight}>{nhlTotals.assists}</td>
+                <td className={cn(tdRight, 'text-[#00F0FF]')}>
+                    {nhlTotals.points}
+                </td>
+                {showFantasyPoints && (
+                    <td className={cn(tdRight, 'text-[#D4AF37]')}>{fp}</td>
+                )}
+                {showVor && (
+                    // VOR is not computed on the career totals row, but
+                    // the column exists in the table so the cell must
+                    // be present for alignment.
+                    <td className={tdRight}>—</td>
+                )}
+                <td className={tdRight}>
+                    {hatTricks == null ? '—' : hatTricks}
+                </td>
+                <td className={tdRight}>{nhlTotals.penaltyMinutes}</td>
+                <td className={tdRight}>
+                    {nhlTotals.plusMinus > 0
+                        ? `+${nhlTotals.plusMinus}`
+                        : nhlTotals.plusMinus}
+                </td>
+                <td className={tdRight}>{nhlTotals.powerPlayPoints}</td>
+                <td className={tdRight}>{nhlTotals.shots}</td>
+                <td className={tdRight}>{nhlTotals.gameWinningGoals}</td>
+                <td className={tdRight}>—</td>
+            </tr>
+        );
+    }
+
+    const playoffHatTricks = sumHatTricks(careerRows);
+
+    return (
+        <tr className={rowClassName}>
+            <td className={tdLeft}>Totals</td>
+            <td className={tdLeft}>—</td>
+            <td className={tdLeft}>NHL</td>
+            <td className={cn(tdRight, 'text-[#7DD3FC]')}>
+                {nhlTotals.playoffGamesPlayed}
+            </td>
+            <td className={tdRight}>{nhlTotals.playoffGoals}</td>
+            <td className={tdRight}>{nhlTotals.playoffAssists}</td>
+            <td className={cn(tdRight, 'text-[#00F0FF]')}>
+                {nhlTotals.playoffPoints}
+            </td>
+            <td className={tdRight}>
+                {playoffHatTricks == null ? '—' : playoffHatTricks}
+            </td>
+            <td className={tdRight}>
+                {nhlTotals.playoffPenaltyMinutes}
+            </td>
+            <td className={tdRight}>—</td>
+            <td className={tdRight}>
+                {nhlTotals.playoffPowerPlayPoints}
+            </td>
+            <td className={tdRight}>{nhlTotals.playoffShots}</td>
+            <td className={tdRight}>
+                {nhlTotals.playoffGameWinningGoals}
+            </td>
+            <td className={tdRight}>—</td>
+        </tr>
+    );
+}
+
 function SkaterCareerTable({
     rows,
     showFantasyPoints = false,
+    showVor = false,
+    vor = 0,
+    highlightCurrentSeason = false,
+    totalsRow = null,
 }: {
     rows: CareerRow[];
     showFantasyPoints?: boolean;
+    showVor?: boolean;
+    vor?: number;
+    highlightCurrentSeason?: boolean;
+    totalsRow?: React.ReactNode;
 }) {
     if (rows.length === 0) {
         return (
@@ -398,20 +857,23 @@ function SkaterCareerTable({
 
     return (
         <TableShell>
-            <table className='w-full min-w-[640px] text-xs tabular-nums'>
+            <table className='w-full min-w-[640px] text-[0.65rem] tabular-nums'>
                 <TableHead>
                     <tr>
-                        <th className={thLeft}>Season</th>
-                        <th className={thLeft}>Team</th>
+                        <th className={thSeason}>Season</th>
+                        <th className={thTeam}>Team</th>
                         <th className={thLeft}>Lge</th>
-                        <th className={thRight}>GP</th>
+                        <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
                         <th className={thRight}>G</th>
                         <th className={thRight}>A</th>
-                        <th className={cn(thRight, 'font-bold text-[#D4AF37]')}>Pts</th>
-                        <th className={thRight}>3B</th>
+                        <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
                         {showFantasyPoints && (
                             <th className={cn(thRight, 'font-bold text-[#D4AF37]')}>FP</th>
                         )}
+                        {showVor && (
+                            <th className={cn(thRight, 'font-bold text-foreground')}>VOR</th>
+                        )}
+                        <th className={thRight}>3B</th>
                         <th className={thRight}>PIM</th>
                         <th className={thRight}>+/-</th>
                         <th className={thRight}>PPP</th>
@@ -424,25 +886,79 @@ function SkaterCareerTable({
                     {rows.map((row, index) => (
                         <tr
                             key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                            className={rowClass(index)}
+                            className={cn(
+                                rowClass(index),
+                                highlightCurrentSeason &&
+                                row.season === CURRENT_SEASON_CODE &&
+                                'bg-primary/10',
+                            )}
                         >
-                            <td className={tdLeft}>{row.seasonLabel}</td>
-                            <td className={tdLeft}>{teamDisplay(row)}</td>
+                            <td className={tdSeason}>{row.seasonLabel}</td>
+                            <td className={tdTeam}>{teamDisplay(row)}</td>
                             <td className={tdLeft}>{row.leagueAbbreviation}</td>
-                            <td className={tdRight}>{row.gamesPlayed}</td>
+                            <td
+                                className={cn(
+                                    tdRight,
+                                    isNhlRow(row)
+                                        ? 'text-[#7DD3FC]'
+                                        : 'text-foreground',
+                                )}
+                            >
+                                {row.gamesPlayed}
+                            </td>
                             <td className={tdRight}>{row.goals}</td>
                             <td className={tdRight}>{row.assists}</td>
-                            <td className={cn(tdRight, 'text-[#D4AF37]')}>{row.points}</td>
-                            <td className={tdRight}>
-                                {row.hatTricks == null ? '—' : row.hatTricks}
+                            <td
+                                className={cn(
+                                    tdRight,
+                                    isNhlRow(row)
+                                        ? 'text-[#00F0FF]'
+                                        : 'text-foreground',
+                                )}
+                            >
+                                {row.points}
                             </td>
                             {showFantasyPoints && (
-                                <td className={cn(tdRight, 'text-[#D4AF37]')}>
+                                <td
+                                    className={cn(
+                                        tdRight,
+                                        isNhlRow(row)
+                                            ? 'text-[#D4AF37]'
+                                            : 'text-foreground',
+                                    )}
+                                >
                                     {row.hatTricks == null
                                         ? '—'
                                         : row.points + row.hatTricks * 2}
                                 </td>
                             )}
+                            {showVor && (() => {
+                                if (row.hatTricks == null) {
+                                    return <td className={tdRight}>—</td>;
+                                }
+
+                                const fp = row.points + row.hatTricks * 2;
+                                const vorValue = fp - vor;
+
+                                return (
+                                    <td
+                                        className={cn(
+                                            tdRight,
+                                            vorValue > 0
+                                                ? 'text-emerald-400'
+                                                : vorValue < 0
+                                                    ? 'text-rose-400'
+                                                    : 'text-[#D4AF37]',
+                                        )}
+                                    >
+                                        {vorValue > 0 ? '+' : ''}
+                                        {vorValue}
+                                    </td>
+                                );
+                            })()}
+                            <td className={tdRight}>
+                                {row.hatTricks == null ? '—' : row.hatTricks}
+                            </td>
                             <td className={tdRight}>{row.penaltyMinutes}</td>
                             <td className={tdRight}>
                                 {row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus}
@@ -453,13 +969,22 @@ function SkaterCareerTable({
                             <td className={tdRight}>{row.averageTimeOnIce ?? '—'}</td>
                         </tr>
                     ))}
+                    {totalsRow}
                 </tbody>
             </table>
         </TableShell>
     );
 }
 
-function GoalieCareerTable({ rows }: { rows: CareerRow[] }) {
+function GoalieCareerTable({
+    rows,
+    highlightCurrentSeason = false,
+    totalsRow = null,
+}: {
+    rows: CareerRow[];
+    highlightCurrentSeason?: boolean;
+    totalsRow?: React.ReactNode;
+}) {
     if (rows.length === 0) {
         return (
             <TableShell>
@@ -472,14 +997,14 @@ function GoalieCareerTable({ rows }: { rows: CareerRow[] }) {
 
     return (
         <TableShell>
-            <table className='w-full min-w-[600px] text-xs tabular-nums'>
+            <table className='w-full min-w-[600px] text-[0.7rem] tabular-nums'>
                 <TableHead>
                     <tr>
-                        <th className={thLeft}>Season</th>
-                        <th className={thLeft}>Team</th>
+                        <th className={thSeason}>Season</th>
+                        <th className={thTeam}>Team</th>
                         <th className={thLeft}>Lge</th>
-                        <th className={thRight}>GP</th>
-                        <th className={thRight}>W</th>
+                        <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
+                        <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>W</th>
                         <th className={thRight}>L</th>
                         <th className={thRight}>OTL</th>
                         <th className={thRight}>SO</th>
@@ -493,13 +1018,36 @@ function GoalieCareerTable({ rows }: { rows: CareerRow[] }) {
                     {rows.map((row, index) => (
                         <tr
                             key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                            className={rowClass(index)}
+                            className={cn(
+                                rowClass(index),
+                                highlightCurrentSeason &&
+                                row.season === CURRENT_SEASON_CODE &&
+                                'bg-primary/10',
+                            )}
                         >
-                            <td className={tdLeft}>{row.seasonLabel}</td>
-                            <td className={tdLeft}>{teamDisplay(row)}</td>
+                            <td className={tdSeason}>{row.seasonLabel}</td>
+                            <td className={tdTeam}>{teamDisplay(row)}</td>
                             <td className={tdLeft}>{row.leagueAbbreviation}</td>
-                            <td className={tdRight}>{row.gamesPlayed}</td>
-                            <td className={tdRight}>{row.wins}</td>
+                            <td
+                                className={cn(
+                                    tdRight,
+                                    isNhlRow(row)
+                                        ? 'text-[#7DD3FC]'
+                                        : 'text-foreground',
+                                )}
+                            >
+                                {row.gamesPlayed}
+                            </td>
+                            <td
+                                className={cn(
+                                    tdRight,
+                                    isNhlRow(row)
+                                        ? 'text-[#00F0FF]'
+                                        : 'text-foreground',
+                                )}
+                            >
+                                {row.wins}
+                            </td>
                             <td className={tdRight}>{row.losses}</td>
                             <td className={tdRight}>{row.overtimeLosses}</td>
                             <td className={tdRight}>{row.shutouts}</td>
@@ -513,6 +1061,7 @@ function GoalieCareerTable({ rows }: { rows: CareerRow[] }) {
                             <td className={tdRight}>{row.shotsAgainst}</td>
                         </tr>
                     ))}
+                    {totalsRow}
                 </tbody>
             </table>
         </TableShell>
@@ -555,7 +1104,7 @@ function GameLogTable({
                             <>
                                 <th className={thRight}>B</th>
                                 <th className={thRight}>A</th>
-                                <th className={thRight}>Pts</th>
+                                    <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
                                 <th className={thRight}>PIM</th>
                                 <th className={thRight}>+/-</th>
                                 <th className={thRight}>SOG</th>
@@ -603,7 +1152,7 @@ function GameLogTable({
                                     <>
                                         <td className={tdRight}>{game.goals}</td>
                                         <td className={tdRight}>{game.assists}</td>
-                                        <td className={tdRight}>{game.points}</td>
+                                            <td className={cn(tdRight, 'text-[#00F0FF]')}>{game.points}</td>
                                         <td className={tdRight}>
                                             {game.penaltyMinutes}
                                         </td>
@@ -652,8 +1201,8 @@ function QuarterTable({
                         <th className={thLeft}>Dates</th>
                         {isGoalie ? (
                             <>
-                                <th className={thRight}>GP</th>
-                                <th className={thRight}>W</th>
+                                <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
+                                <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>W</th>
                                 <th className={thRight}>L</th>
                                 <th className={thRight}>OTL</th>
                                 <th className={thRight}>SO</th>
@@ -662,10 +1211,10 @@ function QuarterTable({
                             </>
                         ) : (
                             <>
-                                <th className={thRight}>GP</th>
+                                <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
                                 <th className={thRight}>B</th>
                                 <th className={thRight}>A</th>
-                                <th className={thRight}>Pts</th>
+                                    <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
                                 <th className={thRight}>PIM</th>
                                 <th className={thRight}>+/-</th>
                                 <th className={thRight}>SOG</th>
@@ -691,10 +1240,10 @@ function QuarterTable({
                                 </td>
                                 {isGoalie ? (
                                     <>
-                                        <td className={tdRight}>
+                                        <td className={cn(tdRight, 'text-[#7DD3FC]')}>
                                             {cell(q.gamesPlayed, hasGames)}
                                         </td>
-                                        <td className={tdRight}>
+                                        <td className={cn(tdRight, 'text-[#00F0FF]')}>
                                             {cell(q.wins, hasGames)}
                                         </td>
                                         <td className={tdRight}>
@@ -715,7 +1264,7 @@ function QuarterTable({
                                     </>
                                 ) : (
                                     <>
-                                        <td className={tdRight}>
+                                        <td className={cn(tdRight, 'text-[#7DD3FC]')}>
                                             {cell(q.gamesPlayed, hasGames)}
                                         </td>
                                         <td className={tdRight}>
@@ -724,7 +1273,7 @@ function QuarterTable({
                                         <td className={tdRight}>
                                             {cell(q.assists, hasGames)}
                                         </td>
-                                        <td className={tdRight}>
+                                            <td className={cn(tdRight, 'text-[#00F0FF]')}>
                                             {cell(q.points, hasGames)}
                                         </td>
                                         <td className={tdRight}>
@@ -768,14 +1317,7 @@ export default function PlayerPage() {
     const [error, setError] = useState<string | null>(null);
     const [showYouthMinor, setShowYouthMinor] = useState(false);
     const [showGameLog, setShowGameLog] = useState(false);
-    const [showAllRegularSeason, setShowAllRegularSeason] = useState(false);
-    const [showAllPlayoffs, setShowAllPlayoffs] = useState(false);
     const [showInjuryDetails, setShowInjuryDetails] = useState(false);
-
-    const regularSeasonRef = useRef<HTMLDivElement>(null);
-    const playoffsRef = useRef<HTMLDivElement>(null);
-    const regularSeasonInitialized = useRef(false);
-    const playoffsInitialized = useRef(false);
 
     const injuryPanelRef = useRef<HTMLDivElement>(null);
     const injuryScrollOnOpenRef = useRef(false);
@@ -789,9 +1331,6 @@ export default function PlayerPage() {
             | null
             | undefined;
 
-        // Nothing to do here anymore: PlayerCard records the restore
-        // position on click. Kept as a no-op so location.state changes
-        // do not surprise anything.
         void state;
     }, [location.state]);
 
@@ -829,50 +1368,6 @@ export default function PlayerPage() {
             cancelled = true;
         };
     }, [nhlPlayerId]);
-
-    useEffect(() => {
-        if (!regularSeasonInitialized.current) {
-            regularSeasonInitialized.current = true;
-            return;
-        }
-
-        if (!regularSeasonRef.current) return;
-
-        const headerHeight = parseFloat(
-            getComputedStyle(document.documentElement)
-                .getPropertyValue('--header-height') || '64',
-        );
-
-        const top =
-            regularSeasonRef.current.getBoundingClientRect().top +
-            window.scrollY -
-            headerHeight -
-            8;
-
-        window.scrollTo({ top, behavior: 'smooth' });
-    }, [showAllRegularSeason]);
-
-    useEffect(() => {
-        if (!playoffsInitialized.current) {
-            playoffsInitialized.current = true;
-            return;
-        }
-
-        if (!playoffsRef.current) return;
-
-        const headerHeight = parseFloat(
-            getComputedStyle(document.documentElement)
-                .getPropertyValue('--header-height') || '64',
-        );
-
-        const top =
-            playoffsRef.current.getBoundingClientRect().top +
-            window.scrollY -
-            headerHeight -
-            8;
-
-        window.scrollTo({ top, behavior: 'smooth' });
-    }, [showAllPlayoffs]);
 
     useEffect(() => {
         if (!showInjuryDetails) {
@@ -1313,10 +1808,10 @@ export default function PlayerPage() {
                                 <thead className='border-b border-border text-[0.6rem] uppercase tracking-wide text-foreground'>
                                     <tr>
                                         <th className='px-2 py-1 text-left font-medium'>&nbsp;</th>
-                                        <th className='px-2 py-1 text-center font-medium'>PJ</th>
+                                        <th className='px-2 py-1 text-center font-medium text-[#7DD3FC]'>PJ</th>
                                         <th className='px-2 py-1 text-center font-medium'>B</th>
                                         <th className='px-2 py-1 text-center font-medium'>A</th>
-                                        <th className='px-2 py-1 text-center font-bold text-[#D4AF37]'>PTS</th>
+                                        <th className='px-2 py-1 text-center font-bold text-[#00F0FF]'>PTS</th>
                                         <th className='px-2 py-1 text-center font-medium'>3B</th>
                                         <th className='px-2 py-1 text-center font-medium'>PPG</th>
                                         <th className='px-2 py-1 text-center font-bold text-foreground'>VOR</th>
@@ -1344,7 +1839,7 @@ export default function PlayerPage() {
                                                 <td className='px-2 py-1 text-left font-bold text-foreground'>
                                                     {row.label}
                                                 </td>
-                                                <td className='px-2 py-1 text-center'>
+                                                <td className='px-2 py-1 text-center text-[#7DD3FC]'>
                                                     {row.gamesPlayed}
                                                 </td>
                                                 <td className='px-2 py-1 text-center'>
@@ -1353,7 +1848,7 @@ export default function PlayerPage() {
                                                 <td className='px-2 py-1 text-center'>
                                                     {row.assists}
                                                 </td>
-                                                <td className='px-2 py-1 text-center text-[#D4AF37]'>
+                                                <td className='px-2 py-1 text-center text-[#00F0FF]'>
                                                     {row.points}
                                                 </td>
                                                 <td className='px-2 py-1 text-center'>
@@ -1364,14 +1859,14 @@ export default function PlayerPage() {
                                                 </td>
                                                 <td
                                                     className={`px-2 py-1 text-center ${row.label === '26-27' || row.label === 'Last 10'
-                                                            ? 'text-foreground'
-                                                            : row.valueOverReplacement == null
-                                                                ? 'text-[#D4AF37]'
-                                                                : row.valueOverReplacement > 0
-                                                                    ? 'text-emerald-400'
-                                                                    : row.valueOverReplacement < 0
-                                                                        ? 'text-rose-400'
-                                                                        : 'text-[#D4AF37]'
+                                                        ? 'text-foreground'
+                                                        : row.valueOverReplacement == null
+                                                            ? 'text-[#D4AF37]'
+                                                            : row.valueOverReplacement > 0
+                                                                ? 'text-emerald-400'
+                                                                : row.valueOverReplacement < 0
+                                                                    ? 'text-rose-400'
+                                                                    : 'text-[#D4AF37]'
                                                         }`}
                                                 >
                                                     {row.valueOverReplacement == null
@@ -1505,265 +2000,110 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                <SectionTitle>Carrière</SectionTitle>
-
-                <div className='grid grid-cols-1 gap-0 md:grid-cols-2 md:gap-x-1'>
+                <div className='grid grid-cols-1 gap-y-4 md:grid-cols-2 md:gap-x-1'>
                     <div>
-                        <div ref={regularSeasonRef}>
+                        <div>
                             <SubSectionTitle>Saison régulière</SubSectionTitle>
                             {isGoalie ? (
                                 <GoalieCareerTable
-                                    rows={careerRowsForDisplay(
-                                        player.regularSeason,
-                                        showAllRegularSeason,
-                                        true,
+                                    rows={combineNhlSeasonRows(
+                                        withCurrentTeamName(
+                                            careerRowsForDisplay(
+                                                player.regularSeason,
+                                                true,
+                                                true,
+                                            ),
+                                            player.nhlTeamAbbreviation,
+                                        ),
                                     )}
+                                    highlightCurrentSeason
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason
+                                                careerRows={player.regularSeason}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie
+                                            />
+                                        ) : null
+                                    }
                                 />
                             ) : (
-                                <SkaterCareerTable
-                                    rows={careerRowsForDisplay(
-                                        player.regularSeason,
-                                        showAllRegularSeason,
-                                        true,
-                                    )}
-                                    showFantasyPoints
+                                    <SkaterCareerTable
+                                        rows={combineNhlSeasonRows(
+                                            withCurrentTeamName(
+                                                careerRowsForDisplay(
+                                                    player.regularSeason,
+                                                    true,
+                                                    true,
+                                                ),
+                                                player.nhlTeamAbbreviation,
+                                            ),
+                                        )}
+                                        showFantasyPoints
+                                        showVor
+                                        vor={vor}
+                                        highlightCurrentSeason
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason
+                                                showFantasyPoints
+                                                showVor
+                                                careerRows={player.regularSeason}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie={false}
+                                            />
+                                        ) : null
+                                    }
                                 />
                             )}
-                        </div>
-
-                        <div className='mt-1 flex justify-center'>
-                            <button
-                                type='button'
-                                onClick={() => setShowAllRegularSeason((v) => !v)}
-                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground transition-colors hover:bg-secondary [text-shadow:0_0_8px_rgba(0,168,255,1)]'
-                            >
-                                {showAllRegularSeason
-                                    ? '▲ Afficher moins'
-                                    : '▼ Afficher plus'}
-                            </button>
                         </div>
                     </div>
 
                     <div>
-                        <div ref={playoffsRef}>
+                        <div>
                             <SubSectionTitle>Séries</SubSectionTitle>
                             {isGoalie ? (
                                 <GoalieCareerTable
                                     rows={careerRowsForDisplay(
                                         player.playoffs,
-                                        showAllPlayoffs,
+                                        true,
                                         false,
                                     )}
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason={false}
+                                                careerRows={player.playoffs}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie
+                                            />
+                                        ) : null
+                                    }
                                 />
                             ) : (
-                                <SkaterCareerTable
-                                    rows={careerRowsForDisplay(
-                                        player.playoffs,
-                                        showAllPlayoffs,
-                                        false,
-                                    )}
+                                    <SkaterCareerTable
+                                        rows={careerRowsForDisplay(
+                                            player.playoffs,
+                                            true,
+                                            false,
+                                        )}
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason={false}
+                                                careerRows={player.playoffs}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie={false}
+                                            />
+                                        ) : null
+                                    }
                                 />
                             )}
                         </div>
-
-                        <div className='mt-1 flex justify-center'>
-                            <button
-                                type='button'
-                                onClick={() => setShowAllPlayoffs((v) => !v)}
-                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground transition-colors hover:bg-secondary [text-shadow:0_0_8px_rgba(0,168,255,1)]'
-                            >
-                                {showAllPlayoffs
-                                    ? '▲ Afficher moins'
-                                    : '▼ Afficher plus'}
-                            </button>
-                        </div>
                     </div>
                 </div>
-
-                {hasNhlTotals && (
-                    <div className='mt-2'>
-                        <SubSectionTitle>NHL Totals</SubSectionTitle>
-
-                        {isGoalie ? (
-                            <TableShell>
-                                <table className='w-full min-w-[640px] text-xs tabular-nums'>
-                                    <TableHead>
-                                        <tr>
-                                            <th className={thLeft}>&nbsp;</th>
-                                            <th className={thRight}>GP</th>
-                                            <th className={thRight}>W</th>
-                                            <th className={thRight}>L</th>
-                                            <th className={thRight}>OTL</th>
-                                            <th className={thRight}>SO</th>
-                                            <th className={thRight}>SV%</th>
-                                            <th className={thRight}>SV</th>
-                                            <th className={thRight}>SA</th>
-                                            <th className={thRight}>GA</th>
-                                        </tr>
-                                    </TableHead>
-                                    <tbody className='text-foreground'>
-                                        <tr className={rowClass(0)}>
-                                            <td className={`${tdLeft} font-semibold`}>
-                                                Regular Season
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.gamesPlayed}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.wins}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.losses}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.overtimeLosses}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.shutouts}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.shotsAgainst > 0
-                                                    ? formatDecimal(
-                                                        player.nhlTotals.savePercentage,
-                                                        3,
-                                                    )
-                                                    : '—'}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.saves}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.shotsAgainst}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.goalsAgainst}
-                                            </td>
-                                        </tr>
-                                        <tr className={rowClass(1)}>
-                                            <td className={`${tdLeft} font-semibold`}>
-                                                Playoffs
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffGamesPlayed}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffWins}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffLosses}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffOvertimeLosses}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffShutouts}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                —
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                —
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                —
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                —
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </TableShell>
-                        ) : (
-                            <TableShell>
-                                <table className='w-full min-w-[640px] text-xs tabular-nums'>
-                                    <TableHead>
-                                        <tr>
-                                            <th className={thLeft}>&nbsp;</th>
-                                            <th className={thRight}>GP</th>
-                                            <th className={thRight}>G</th>
-                                            <th className={thRight}>A</th>
-                                            <th className={thRight}>Pts</th>
-                                            <th className={thRight}>PIM</th>
-                                            <th className={thRight}>+/-</th>
-                                            <th className={thRight}>PPP</th>
-                                            <th className={thRight}>SOG</th>
-                                            <th className={thRight}>GWG</th>
-                                        </tr>
-                                    </TableHead>
-                                    <tbody className='text-foreground'>
-                                        <tr className={rowClass(0)}>
-                                            <td className={`${tdLeft} font-semibold`}>
-                                                Regular Season
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.gamesPlayed}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.goals}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.assists}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.points}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.penaltyMinutes}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.plusMinus > 0
-                                                    ? `+${player.nhlTotals.plusMinus}`
-                                                    : player.nhlTotals.plusMinus}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.powerPlayPoints}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.shots}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.gameWinningGoals}
-                                            </td>
-                                        </tr>
-                                        <tr className={rowClass(1)}>
-                                            <td className={`${tdLeft} font-semibold`}>
-                                                Playoffs
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffGamesPlayed}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffGoals}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffAssists}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffPoints}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffPenaltyMinutes}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                —
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffPowerPlayPoints}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffShots}
-                                            </td>
-                                            <td className={`${tdRight} font-semibold`}>
-                                                {player.nhlTotals.playoffGameWinningGoals}
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </TableShell>
-                        )}
-                    </div>
-                )}
 
                 {player.seasonQuarters.length === 4 && (
                     <>

@@ -36,6 +36,7 @@ export const nhlLogoMap: Record<
     STL: Logos.STL,
     TBL: Logos.TBL,
     TOR: Logos.TOR,
+    UTA: Logos.UTA,
     VAN: Logos.VAN,
     VGK: Logos.VGK,
     WPG: Logos.WPG,

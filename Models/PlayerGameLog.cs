@@ -58,6 +58,19 @@
 
         public int ShotsAgainst { get; set; }
 
+        /// <summary>
+        /// Saves made in this game. Stored so career totals can be
+        /// queried from the game log without recomputing from
+        /// ShotsAgainst - GoalsAgainst.
+        /// </summary>
+        public int Saves { get; set; }
+
+        /// <summary>
+        /// Save percentage for this game. Stored as a decimal (0.912),
+        /// matching the format returned by the NHL API.
+        /// </summary>
+        public decimal SavePercentage { get; set; }
+
         public int FantasyPoints { get; set; }
     }
 }

@@ -26,15 +26,30 @@ export function Layout() {
     // browser keeps the previous page's scroll position, so opening a
     // player page from a scrolled-down Mon équipe lands mid-page.
     //
-    // When a scroll restore is pending (the user is coming back from a
-    // player page), we skip the top-scroll and let the destination page
-    // restore its own position instead.
+    // The only exception: when we are landing on Mon équipe AND a
+    // scroll restore is pending, we skip the top-scroll and let
+    // MonEquipePage restore its own position instead.
+    //
+    // Note: a pending restore that was set on the way TO the player
+    // page must NOT suppress the top-scroll here — that restore is for
+    // the trip back to Mon équipe, not for the player page itself.
+    //
+    // The scroll is deferred to the next animation frame so it runs
+    // after the browser has painted the new page. On the same tick, the
+    // new page may still be shorter than the old one and the browser
+    // would clamp the scroll, which reads as "the scroll did nothing".
     useEffect(() => {
-        if (hasPendingRestore()) {
+        const isMonEquipe = location.pathname === '/mon-equipe';
+
+        if (isMonEquipe && hasPendingRestore()) {
             return;
         }
 
-        window.scrollTo(0, 0);
+        const frame = requestAnimationFrame(() => {
+            window.scrollTo(0, 0);
+        });
+
+        return () => cancelAnimationFrame(frame);
     }, [location.pathname]);
 
     useEffect(() => {

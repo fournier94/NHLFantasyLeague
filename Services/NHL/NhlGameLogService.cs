@@ -198,6 +198,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                         Shutout = shutout,
                         GoalsAgainst = game.GoalsAgainst,
                         ShotsAgainst = game.ShotsAgainst,
+                        Saves = game.ShotsAgainst - game.GoalsAgainst,
+                        SavePercentage = game.SavePercentage,
                         FantasyPoints = fantasyPoints
                     };
 
@@ -223,6 +225,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                     existingLog.Shutout = shutout;
                     existingLog.GoalsAgainst = game.GoalsAgainst;
                     existingLog.ShotsAgainst = game.ShotsAgainst;
+                    existingLog.Saves = game.ShotsAgainst - game.GoalsAgainst;
+                    existingLog.SavePercentage = game.SavePercentage;
                     existingLog.FantasyPoints = fantasyPoints;
                 }
             }
