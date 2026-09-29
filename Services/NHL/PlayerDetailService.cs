@@ -18,6 +18,9 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// <summary>NHL season code of the current season (2026-27).</summary>
         private const int CurrentSeasonNhlCode = 20262027;
 
+        /// <summary>NHL season code of the previous season (2025-26).</summary>
+        private const int PreviousSeasonNhlCode = 20252026;
+
         /// <summary>How many recent games to include in the game log.</summary>
         private const int RecentGameCount = 10;
 
@@ -76,6 +79,19 @@ namespace NhlFantasyLeague.api.Services.NHL
                     .FirstOrDefaultAsync(s =>
                         s.PlayerId == player.Id &&
                         s.SeasonId == currentSeason.Id);
+            }
+
+            var previousSeason = await _dbContext.Seasons
+                .FirstOrDefaultAsync(s => s.NhlSeasonCode == PreviousSeasonNhlCode);
+
+            PlayerSeasonStat? lastSeasonFantasyStat = null;
+
+            if (previousSeason != null)
+            {
+                lastSeasonFantasyStat = await _dbContext.PlayerSeasonStats
+                    .FirstOrDefaultAsync(s =>
+                        s.PlayerId == player.Id &&
+                        s.SeasonId == previousSeason.Id);
             }
 
             // Every current-season game for this player, sorted oldest
@@ -166,6 +182,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                 InjuryKind = player.InjuryKind.ToString(),
                 InjuryShortDescription = player.InjuryShortDescription,
                 InjuryLongDescription = player.InjuryLongDescription,
+                InjuryType = player.InjuryType,
+                InjuryDetail = player.InjuryDetail,
+                InjurySide = player.InjurySide,
+                InjuryReturnDate = player.InjuryReturnDate,
+                InjuryFantasyStatus = player.InjuryFantasyStatus,
                 InjuryUpdatedAt = player.InjuryUpdatedAt,
                 InjuryHistory = history
                     .Select(h => new InjuryHistoryDto
@@ -208,6 +229,18 @@ namespace NhlFantasyLeague.api.Services.NHL
                         Points = fantasySeasonStat.Points,
                         HatTricks = fantasySeasonStat.HatTricks,
                         FantasyPoints = fantasySeasonStat.FantasyPoints
+                    },
+
+                LastSeasonStats = lastSeasonFantasyStat == null
+                    ? null
+                    : new CurrentSeasonStatsDto
+                    {
+                        GamesPlayed = lastSeasonFantasyStat.GamesPlayed,
+                        Goals = lastSeasonFantasyStat.Goals,
+                        Assists = lastSeasonFantasyStat.Assists,
+                        Points = lastSeasonFantasyStat.Points,
+                        HatTricks = lastSeasonFantasyStat.HatTricks,
+                        FantasyPoints = lastSeasonFantasyStat.FantasyPoints
                     },
 
                 RegularSeason = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Main),

@@ -1,6 +1,7 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { TopBar } from '@/components/layout/TopBar';
+import { hasPendingRestore } from '@/lib/scrollRestoration';
 
 /**
  * Shell shared by every page: horizontal top navigation and the current
@@ -24,7 +25,15 @@ export function Layout() {
     // Scroll to the top whenever the route changes. Without this, the
     // browser keeps the previous page's scroll position, so opening a
     // player page from a scrolled-down Mon équipe lands mid-page.
+    //
+    // When a scroll restore is pending (the user is coming back from a
+    // player page), we skip the top-scroll and let the destination page
+    // restore its own position instead.
     useEffect(() => {
+        if (hasPendingRestore()) {
+            return;
+        }
+
         window.scrollTo(0, 0);
     }, [location.pathname]);
 

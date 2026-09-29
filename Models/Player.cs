@@ -83,6 +83,12 @@ namespace NhlFantasyLeague.api.Models
         /// </summary>
         public string? InjuryLongDescription { get; set; }
 
+        public string? InjuryType { get; set; }       // "Lower Body", "Hip", "Suspension"
+        public string? InjuryDetail { get; set; }      // "Surgery", "Not Specified"
+        public string? InjurySide { get; set; }        // "Left", "Right", "Not Specified"
+        public DateOnly? InjuryReturnDate { get; set; } // projected return
+        public string? InjuryFantasyStatus { get; set; } // "OUT", "IR", "Day-To-Day"
+
         /// <summary>
         /// UTC timestamp of the last refresh that touched this player's
         /// injury fields, whether it set them or cleared them.

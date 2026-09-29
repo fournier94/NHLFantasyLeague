@@ -54,6 +54,54 @@ namespace NhlFantasyLeague.api.Models.NHL
 
         [JsonPropertyName("longComment")]
         public string? LongComment { get; set; }
+
+        [JsonPropertyName("details")]
+        public NhlInjuryDetails? Details { get; set; }
+
+        [JsonPropertyName("type")]
+        public NhlInjuryType? Type { get; set; }
+
+        [JsonPropertyName("date")]
+        public DateTime? Date { get; set; }
+    }
+
+    public class NhlInjuryDetails
+    {
+        [JsonPropertyName("fantasyStatus")]
+        public NhlInjuryFantasyStatus? FantasyStatus { get; set; }
+
+        [JsonPropertyName("type")]
+        public string? Type { get; set; }
+
+        [JsonPropertyName("detail")]
+        public string? Detail { get; set; }
+
+        [JsonPropertyName("side")]
+        public string? Side { get; set; }
+
+        [JsonPropertyName("returnDate")]
+        public DateOnly? ReturnDate { get; set; }
+    }
+
+    public class NhlInjuryFantasyStatus
+    {
+        [JsonPropertyName("description")]
+        public string? Description { get; set; }
+
+        [JsonPropertyName("abbreviation")]
+        public string? Abbreviation { get; set; }
+    }
+
+    public class NhlInjuryType
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("description")]
+        public string? Description { get; set; }
+
+        [JsonPropertyName("abbreviation")]
+        public string? Abbreviation { get; set; }
     }
 
     public class NhlInjuryAthlete

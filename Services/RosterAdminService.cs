@@ -625,7 +625,12 @@ namespace NhlFantasyLeague.api.Services
                         InjuryStatus = p.InjuryStatus,
                         InjuryKind = p.InjuryKind.ToString(),
                         InjuryShortDescription = p.InjuryShortDescription,
-                        InjuryLongDescription = p.InjuryLongDescription
+                        InjuryLongDescription = p.InjuryLongDescription,
+                        InjuryType = p.InjuryType,
+                        InjuryDetail = p.InjuryDetail,
+                        InjurySide = p.InjurySide,
+                        InjuryReturnDate = p.InjuryReturnDate,
+                        InjuryFantasyStatus = p.InjuryFantasyStatus
                     };
                 })
                 .ToList();
@@ -702,6 +707,11 @@ namespace NhlFantasyLeague.api.Services
                 InjuryKind = entry.Player?.InjuryKind.ToString() ?? "None",
                 InjuryShortDescription = entry.Player?.InjuryShortDescription,
                 InjuryLongDescription = entry.Player?.InjuryLongDescription,
+                InjuryType = entry.Player?.InjuryType,
+                InjuryDetail = entry.Player?.InjuryDetail,
+                InjurySide = entry.Player?.InjurySide,
+                InjuryReturnDate = entry.Player?.InjuryReturnDate,
+                InjuryFantasyStatus = entry.Player?.InjuryFantasyStatus,
 
                 TwoSeasonsAgo = twoSeasonsAgo,
                 LastSeason = lastSeason,

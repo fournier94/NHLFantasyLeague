@@ -102,6 +102,16 @@ export interface RosterEntry {
     injuryShortDescription: string | null;
     /** Long injury note, used on the injuries page and player page. */
     injuryLongDescription: string | null;
+    /** Body part or "Suspension" (e.g. "Lower Body", "Hip"). */
+    injuryType: string | null;
+    /** Extra detail from ESPN (e.g. "Surgery", "Not Specified"). */
+    injuryDetail: string | null;
+    /** Side of the injury ("Left", "Right", "Not Specified"). */
+    injurySide: string | null;
+    /** Projected return date, ISO format YYYY-MM-DD, or null. */
+    injuryReturnDate: string | null;
+    /** ESPN fantasy status ("OUT", "IR", "Day-To-Day"). */
+    injuryFantasyStatus: string | null;
 }
 
 /** Full roster of one fantasy team for one season. */
@@ -150,6 +160,17 @@ export interface PlayerSearchResult {
     rosterEntryId?: number | null;
     /** "Active", "Bench" or "Prospect" for the current season, or null when free agent. */
     rosterStatus?: string | null;
+    /** Injury fields (populated by the search endpoint). */
+    isInjured?: boolean;
+    injuryStatus?: string | null;
+    injuryKind?: 'None' | 'Injury' | 'Suspension';
+    injuryShortDescription?: string | null;
+    injuryLongDescription?: string | null;
+    injuryType?: string | null;
+    injuryDetail?: string | null;
+    injurySide?: string | null;
+    injuryReturnDate?: string | null;
+    injuryFantasyStatus?: string | null;
 }
 
 /** Request body of POST /api/Roster/assign (the salary is derived server-side). */
@@ -438,6 +459,11 @@ export interface PlayerDetail {
     injuryKind: 'None' | 'Injury' | 'Suspension';
     injuryShortDescription: string | null;
     injuryLongDescription: string | null;
+    injuryType: string | null;
+    injuryDetail: string | null;
+    injurySide: string | null;
+    injuryReturnDate: string | null;
+    injuryFantasyStatus: string | null;
     injuryUpdatedAt: string | null;
     injuryHistory: InjuryHistoryRow[];
 
@@ -452,6 +478,7 @@ export interface PlayerDetail {
     seasonFantasyPoints: number | null;
     seasonHatTricks: number | null;
     currentSeasonStats: CurrentSeasonStats | null;
+    lastSeasonStats: CurrentSeasonStats | null;
 
     regularSeason: CareerRow[];
     playoffs: CareerRow[];

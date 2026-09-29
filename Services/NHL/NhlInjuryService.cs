@@ -83,6 +83,7 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             // --- Load every player once, indexed by NHL team --------------
             var allPlayers = await _dbContext.Players
+                .Include(p => p.NhlTeam)
                 .Where(p =>
                     !string.IsNullOrWhiteSpace(p.FirstName) &&
                     !string.IsNullOrWhiteSpace(p.LastName))
@@ -187,7 +188,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                         continue;
                     }
 
-                    ApplyInjury(match, row, now);
+                    await ApplyInjuryAsync(match, row, now);
                     matched++;
                 }
             }
@@ -209,9 +210,12 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 var stillSameSpell =
                     player.IsInjured &&
-                    player.InjuryStatus == spell.InjuryStatus &&
                     string.Equals(
-                        player.NhlTeam?.Abbreviation,
+                        player.InjuryStatus?.Trim(),
+                        spell.InjuryStatus.Trim(),
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        GetTeamAbbreviation(player),
                         spell.TeamAbbreviation,
                         StringComparison.OrdinalIgnoreCase);
 
@@ -284,7 +288,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             return strong && clearLead ? best.Player : null;
         }
 
-        private void ApplyInjury(Player player, NhlInjuryPlayer row, DateTime now)
+        private async Task ApplyInjuryAsync(Player player, NhlInjuryPlayer row, DateTime now)
         {
             player.IsInjured = true;
             player.InjuryStatus = row.Status;
@@ -292,31 +296,55 @@ namespace NhlFantasyLeague.api.Services.NHL
             player.InjuryShortDescription = row.ShortComment;
             player.InjuryLongDescription = row.LongComment;
             player.InjuryUpdatedAt = now;
+            player.InjuryType = row.Details?.Type;
+            player.InjuryDetail = row.Details?.Detail;
+            player.InjurySide = row.Details?.Side;
+            player.InjuryReturnDate = row.Details?.ReturnDate;
+            player.InjuryFantasyStatus = row.Details?.FantasyStatus?.Description;
 
             // History upsert: find the open spell for (player, status, team),
             // update LastSeenAt, or open a new one.
-            var teamAbbrev = player.NhlTeam?.Abbreviation
-                ?? _dbContext.NhlTeams
-                    .Where(t => t.NhlTeamId == player.NhlTeamId)
-                    .Select(t => t.Abbreviation)
-                    .FirstOrDefault()
-                ?? string.Empty;
+            var teamAbbrev = GetTeamAbbreviation(player);
+            var status = (row.Status ?? string.Empty).Trim();
 
+            // Look in the local (tracked) set first, then in the database.
+            // Both lookups are trimmed and case-insensitive so cosmetic
+            // ESPN changes never open a brand new spell.
+            // 1. Try the local (tracked) set first. This catches rows that
+            //    were opened earlier in this same refresh cycle.
             var open = _dbContext.PlayerInjuryHistories.Local
                 .FirstOrDefault(h =>
                     h.PlayerId == player.Id &&
                     h.ResolvedAt == null &&
-                    h.InjuryStatus == row.Status &&
-                    h.TeamAbbreviation == teamAbbrev);
+                    string.Equals(
+                        h.InjuryStatus.Trim(),
+                        status,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        h.TeamAbbreviation,
+                        teamAbbrev,
+                        StringComparison.OrdinalIgnoreCase));
 
+            // 2. Fall back to the database. Load the player's open spells
+            //    once and compare in memory: EF Core cannot translate the
+            //    StringComparison overload.
             if (open == null)
             {
-                open = _dbContext.PlayerInjuryHistories
-                    .FirstOrDefault(h =>
+                var openSpellsForPlayer = await _dbContext.PlayerInjuryHistories
+                    .Where(h =>
                         h.PlayerId == player.Id &&
-                        h.ResolvedAt == null &&
-                        h.InjuryStatus == row.Status &&
-                        h.TeamAbbreviation == teamAbbrev);
+                        h.ResolvedAt == null)
+                    .ToListAsync();
+
+                open = openSpellsForPlayer.FirstOrDefault(h =>
+                    string.Equals(
+                        h.InjuryStatus.Trim(),
+                        status,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        h.TeamAbbreviation,
+                        teamAbbrev,
+                        StringComparison.OrdinalIgnoreCase));
             }
 
             if (open != null)
@@ -328,13 +356,38 @@ namespace NhlFantasyLeague.api.Services.NHL
             _dbContext.PlayerInjuryHistories.Add(new PlayerInjuryHistory
             {
                 PlayerId = player.Id,
-                InjuryStatus = row.Status ?? string.Empty,
+                InjuryStatus = status,
                 InjuryDescription = row.ShortComment ?? row.LongComment,
                 TeamAbbreviation = teamAbbrev,
                 FirstSeenAt = now,
                 LastSeenAt = now,
                 ResolvedAt = null
             });
+        }
+
+        /// <summary>
+        /// Returns the NHL team abbreviation for the player, reading it
+        /// from the loaded navigation property first, and falling back to
+        /// a database lookup. Returns an empty string when the player has
+        /// no NHL team (free agent, unsigned, ...).
+        /// </summary>
+        private string GetTeamAbbreviation(Player player)
+        {
+            if (!string.IsNullOrWhiteSpace(player.NhlTeam?.Abbreviation))
+            {
+                return player.NhlTeam!.Abbreviation;
+            }
+
+            if (player.NhlTeamId == null)
+            {
+                return string.Empty;
+            }
+
+            return _dbContext.NhlTeams
+                .Where(t => t.NhlTeamId == player.NhlTeamId)
+                .Select(t => t.Abbreviation)
+                .FirstOrDefault()
+                ?? string.Empty;
         }
 
         /// <summary>

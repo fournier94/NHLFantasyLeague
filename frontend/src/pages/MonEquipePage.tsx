@@ -10,7 +10,7 @@ import {
     auraRangeFor,
     isAuraOff,
 } from '@/lib/auraConfig';
-import { consumePendingCardId } from '@/lib/scrollRestoration';
+import { consumePendingRestore } from '@/lib/scrollRestoration';
 
 const TEMPORARY_TEAM_ID = 5;
 
@@ -77,28 +77,41 @@ export default function MonEquipePage() {
     }, [teamId]);
 
     // Restore scroll position when coming back from a player page.
-    // Runs after the roster has rendered so the card element exists in
-    // the DOM. Uses requestAnimationFrame so the browser has painted
+    // Runs after the roster has rendered so the page has its full
+    // height. Uses requestAnimationFrame so the browser has painted
     // before we measure / scroll.
+    //
+    // Prefers the exact scroll Y the user was at when they left. Falls
+    // back to the card id only when no scroll Y is available.
     useEffect(() => {
         if (!roster) {
             return;
         }
 
-        const pendingId = consumePendingCardId();
+        const pending = consumePendingRestore();
 
-        if (!pendingId) {
+        if (!pending) {
             return;
         }
 
         const frame = requestAnimationFrame(() => {
-            const element = document.getElementById(pendingId);
-
-            if (element) {
-                element.scrollIntoView({
-                    block: 'start',
+            if (pending.scrollY > 0) {
+                window.scrollTo({
+                    top: pending.scrollY,
                     behavior: 'auto',
                 });
+                return;
+            }
+
+            if (pending.cardId) {
+                const element = document.getElementById(pending.cardId);
+
+                if (element) {
+                    element.scrollIntoView({
+                        block: 'start',
+                        behavior: 'auto',
+                    });
+                }
             }
         });
 

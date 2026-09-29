@@ -57,6 +57,11 @@
         public string? InjuryKind { get; set; }
         public string? InjuryShortDescription { get; set; }
         public string? InjuryLongDescription { get; set; }
+        public string? InjuryType { get; set; }       // "Lower Body", "Hip", "Suspension"
+        public string? InjuryDetail { get; set; }      // "Surgery", "Not Specified"
+        public string? InjurySide { get; set; }        // "Left", "Right", "Not Specified"
+        public DateOnly? InjuryReturnDate { get; set; } // projected return
+        public string? InjuryFantasyStatus { get; set; } // "OUT", "IR", "Day-To-Day"
         public DateTime? InjuryUpdatedAt { get; set; }
         public List<InjuryHistoryDto> InjuryHistory { get; set; } = new();
 
@@ -88,6 +93,13 @@
         /// PlayerSeasonStat row exists yet for the current season.
         /// </summary>
         public CurrentSeasonStatsDto? CurrentSeasonStats { get; set; }
+
+        /// <summary>
+        /// Regular-season totals for the previous season (2025-26),
+        /// used by the "Last yr" row on the player page. Null when no
+        /// PlayerSeasonStat row exists for the previous season.
+        /// </summary>
+        public CurrentSeasonStatsDto? LastSeasonStats { get; set; }
 
         // --- Career stats -----------------------------------------------
         public List<CareerRowDto> RegularSeason { get; set; } = new();

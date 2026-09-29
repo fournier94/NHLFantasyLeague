@@ -17,7 +17,6 @@ import {
     isAuraOff,
 } from '@/lib/auraConfig';
 import { getNhlTeamColor } from '@/lib/nhlTeamColors';
-import { setPendingCardId } from '@/lib/scrollRestoration';
 import ReactCountryFlag from 'react-country-flag';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { Banknote, Ruler } from 'lucide-react';
@@ -146,6 +145,8 @@ const POSITION_GROUPS: Record<string, 'F' | 'D' | 'G'> = {
     'C': 'F',
     'CENTER': 'F',
     'CENTRE': 'F',
+    'L': 'F',
+    'R': 'F',
     'LW': 'F',
     'RW': 'F',
     'W': 'F',
@@ -766,11 +767,15 @@ export default function PlayerPage() {
     const [showGameLog, setShowGameLog] = useState(false);
     const [showAllRegularSeason, setShowAllRegularSeason] = useState(false);
     const [showAllPlayoffs, setShowAllPlayoffs] = useState(false);
+    const [showInjuryDetails, setShowInjuryDetails] = useState(false);
 
     const regularSeasonRef = useRef<HTMLDivElement>(null);
     const playoffsRef = useRef<HTMLDivElement>(null);
     const regularSeasonInitialized = useRef(false);
     const playoffsInitialized = useRef(false);
+
+    const injuryPanelRef = useRef<HTMLDivElement>(null);
+    const injuryScrollOnOpenRef = useRef(false);
 
     // Close button aura channel.
     const closeAura = useAura('playerPageCloseButton');
@@ -778,18 +783,6 @@ export default function PlayerPage() {
     // Player page team logo aura channel. Has its own admin slider,
     // independent of the player-card logo slider.
     const pageTeamLogoAura = useAura('playerPageTeamLogo');
-
-    // Remember where we came from so Mon équipe can scroll back to the
-    // exact card the user clicked. This runs on mount so it covers both
-    // the Fermer button and the browser back button.
-    useEffect(() => {
-        const state = location.state as
-            | { fromCardId?: string }
-            | null
-            | undefined;
-
-        setPendingCardId(state?.fromCardId ?? null);
-    }, [location.state]);
 
     useEffect(() => {
         if (!nhlPlayerId) {
@@ -873,6 +866,40 @@ export default function PlayerPage() {
 
         window.scrollTo({ top, behavior: 'smooth' });
     }, [showAllPlayoffs]);
+
+    // When the injury panel is expanded, scroll so the bottom of the
+    // panel sits at the bottom of the viewport (with a small gap). Only
+    // fires on open, never on close. requestAnimationFrame lets the
+    // browser lay out the newly rendered rows before we measure.
+    useEffect(() => {
+        if (!showInjuryDetails) {
+            injuryScrollOnOpenRef.current = false;
+            return;
+        }
+
+        if (!injuryScrollOnOpenRef.current) {
+            // Flag was not set, meaning this opening was not triggered
+            // by the user's click on the injury button. Skip.
+            return;
+        }
+
+        injuryScrollOnOpenRef.current = false;
+
+        const frame = requestAnimationFrame(() => {
+            const el = injuryPanelRef.current;
+
+            if (!el) return;
+
+            const rect = el.getBoundingClientRect();
+            const bottomGap = 16;
+            const top =
+                rect.bottom + window.scrollY - window.innerHeight + bottomGap;
+
+            window.scrollTo({ top, behavior: 'smooth' });
+        });
+
+        return () => cancelAnimationFrame(frame);
+    }, [showInjuryDetails]);
 
     // Close button: go back to wherever the user came from. If there is
     // no history, fall back to /joueurs so we never leave the user stuck.
@@ -1037,6 +1064,7 @@ export default function PlayerPage() {
     const vor = vorThreshold(positionGrp);
 
     const currentSeasonStats = player.currentSeasonStats ?? null;
+    const lastSeasonStats = player.lastSeasonStats ?? null;
 
     const seasonTotals = currentSeasonStats
         ? {
@@ -1049,9 +1077,31 @@ export default function PlayerPage() {
         }
         : aggregateGameLog(player.recentGames);
 
+    const lastSeasonTotals = lastSeasonStats
+        ? {
+            gamesPlayed: lastSeasonStats.gamesPlayed,
+            goals: lastSeasonStats.goals,
+            assists: lastSeasonStats.assists,
+            points: lastSeasonStats.points,
+            hatTricks: lastSeasonStats.hatTricks ?? 0,
+            totalFantasyPoints: lastSeasonStats.fantasyPoints ?? 0,
+        }
+        : {
+            gamesPlayed: 0,
+            goals: 0,
+            assists: 0,
+            points: 0,
+            hatTricks: 0,
+            totalFantasyPoints: 0,
+        };
+
     const last10Totals = aggregateGameLog(player.recentGames.slice(0, 10));
 
-    function buildRow(label: string, totals: typeof seasonTotals) {
+    function buildRow(
+        label: string,
+        totals: typeof seasonTotals,
+        computeVor: boolean,
+    ) {
         const ppg =
             totals.gamesPlayed > 0
                 ? totals.points / totals.gamesPlayed
@@ -1062,7 +1112,11 @@ export default function PlayerPage() {
                 ? currentContract.salary / totals.totalFantasyPoints
                 : null;
 
-        const vorValue = totals.points - vor;
+        // VOR needs a full-season sample, so only the 25-26 row
+        // (which uses last season's final totals) passes computeVor.
+        const vorValue = computeVor
+            ? totals.totalFantasyPoints - vor
+            : null;
 
         return {
             label,
@@ -1079,8 +1133,9 @@ export default function PlayerPage() {
     }
 
     const fantasyStatRows = [
-        buildRow('Total', seasonTotals),
-        buildRow('Last 10', last10Totals),
+        buildRow('26-27', seasonTotals, false),
+        buildRow('Last 10', last10Totals, false),
+        buildRow('25-26', lastSeasonTotals, true),
     ];
 
     return (
@@ -1270,72 +1325,77 @@ export default function PlayerPage() {
 
                         <div className='mt-2 w-full rounded-md border border-border bg-card pb-1'>
                             <table className='w-full table-auto text-[0.7rem] tabular-nums'>
-                                <thead className='border-b border-border text-[0.6rem] uppercase tracking-wide text-muted-foreground'>
+                                <thead className='border-b border-border text-[0.6rem] uppercase tracking-wide text-foreground'>
                                     <tr>
                                         <th className='px-2 py-1 text-left font-medium'>&nbsp;</th>
                                         <th className='px-2 py-1 text-center font-medium'>PJ</th>
                                         <th className='px-2 py-1 text-center font-medium'>B</th>
                                         <th className='px-2 py-1 text-center font-medium'>A</th>
-                                        <th className='px-2 py-1 text-center font-medium'>PTS</th>
+                                        <th className='px-2 py-1 text-center font-bold text-[#D4AF37]'>PTS</th>
                                         <th className='px-2 py-1 text-center font-medium'>3B</th>
                                         <th className='px-2 py-1 text-center font-medium'>PPG</th>
-                                        <th className='px-2 py-1 text-center font-medium'>$/pt</th>
-                                        <th className='px-2 py-1 text-center font-medium'>VOR</th>
-                                        <th className='px-2 py-1 text-center font-medium'>FP</th>
+                                        <th className='px-2 py-1 text-center font-bold text-foreground'>VOR</th>
+                                        <th className='px-2 py-1 text-center font-bold text-[#D4AF37]'>FP</th>
                                     </tr>
                                 </thead>
                                 <tbody className='text-foreground'>
-                                    {fantasyStatRows.map((row, i) => (
-                                        <tr
-                                            key={row.label}
-                                            className={
-                                                i % 2 === 0
-                                                    ? 'bg-transparent'
-                                                    : 'bg-secondary/20'
-                                            }
-                                        >
-                                            <td className='px-2 py-1 text-left'>
-                                                {row.label}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.gamesPlayed}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.goals}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.assists}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.points}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.hatTricks}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.pointsPerGame.toFixed(2)}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.dollarPerPoint != null
-                                                    ? `${(row.dollarPerPoint / 1_000_000).toFixed(2)}M`
-                                                    : '—'}
-                                            </td>
-                                            <td
-                                                className={`px-2 py-1 text-center ${row.valueOverReplacement > 0
-                                                    ? 'text-emerald-400'
-                                                    : row.valueOverReplacement < 0
-                                                        ? 'text-rose-400'
-                                                        : ''
-                                                    }`}
+                                    {fantasyStatRows.map((row, i) => {
+                                        const isLastYear = row.label === '25-26';
+
+                                        return (
+                                            <tr
+                                                key={row.label}
+                                                className={
+                                                    isLastYear
+                                                        ? 'border-t border-primary/30 bg-primary/10'
+                                                        : i % 2 === 0
+                                                            ? 'bg-transparent'
+                                                            : 'bg-secondary/20'
+                                                }
                                             >
-                                                {row.valueOverReplacement > 0 ? '+' : ''}
-                                                {row.valueOverReplacement}
-                                            </td>
-                                            <td className='px-2 py-1 text-center'>
-                                                {row.totalFantasyPoints}
-                                            </td>
-                                        </tr>
-                                    ))}
+                                                <td className='px-2 py-1 text-left font-bold text-foreground'>
+                                                    {row.label}
+                                                </td>
+                                                <td className='px-2 py-1 text-center'>
+                                                    {row.gamesPlayed}
+                                                </td>
+                                                <td className='px-2 py-1 text-center'>
+                                                    {row.goals}
+                                                </td>
+                                                <td className='px-2 py-1 text-center'>
+                                                    {row.assists}
+                                                </td>
+                                                <td className='px-2 py-1 text-center text-[#D4AF37]'>
+                                                    {row.points}
+                                                </td>
+                                                <td className='px-2 py-1 text-center'>
+                                                    {row.hatTricks}
+                                                </td>
+                                                <td className='px-2 py-1 text-center'>
+                                                    {row.pointsPerGame.toFixed(2)}
+                                                </td>
+                                                <td
+                                                    className={`px-2 py-1 text-center ${row.label === 'Total' || row.label === 'Last 10'
+                                                            ? 'text-foreground'
+                                                            : row.valueOverReplacement == null
+                                                                ? 'text-[#D4AF37]'
+                                                                : row.valueOverReplacement > 0
+                                                                    ? 'text-emerald-400'
+                                                                    : row.valueOverReplacement < 0
+                                                                        ? 'text-rose-400'
+                                                                        : 'text-[#D4AF37]'
+                                                        }`}
+                                                >
+                                                    {row.valueOverReplacement == null
+                                                        ? '—'
+                                                        : `${row.valueOverReplacement > 0 ? '+' : ''}${row.valueOverReplacement}`}
+                                                </td>
+                                                <td className='px-2 py-1 text-center text-[#D4AF37]'>
+                                                    {row.totalFantasyPoints}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>
@@ -1353,30 +1413,108 @@ export default function PlayerPage() {
 
                 {/* Current injury panel */}
                 {player.isInjured && (
-                    <div className='rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm'>
-                        <p className='font-semibold text-destructive'>
-                            {player.injuryKind === 'Suspension'
-                                ? 'Suspension'
-                                : 'Blessé'}{' '}
-                            — {player.injuryStatus ?? 'Statut inconnu'}
-                        </p>
+                    <div
+                        ref={injuryPanelRef}
+                        className='rounded-lg border border-destructive/40 bg-destructive/10 text-sm'
+                    >
+                        <button
+                            type='button'
+                            onClick={() => {
+                                setShowInjuryDetails((v) => {
+                                    const next = !v;
+                                    injuryScrollOnOpenRef.current = next;
+                                    return next;
+                                });
+                            }}
+                            aria-expanded={showInjuryDetails}
+                            className='relative flex w-full cursor-pointer flex-col items-center gap-y-1 rounded-lg px-8 py-2 text-center font-semibold text-foreground transition-colors hover:bg-destructive/10'
+                        >
+                            <div className='flex flex-wrap items-center justify-center gap-x-2'>
+                                <span>
+                                    {player.injuryKind === 'Suspension'
+                                        ? 'Suspension'
+                                        : 'Blessé'}
+                                </span>
 
-                        {player.injuryShortDescription && (
-                            <p className='mt-1 text-foreground'>
-                                {player.injuryShortDescription}
-                            </p>
+                                <span className='font-normal text-muted-foreground'>•</span>
+
+                                <span>
+                                    {player.injuryStatus ?? 'Statut inconnu'}
+                                </span>
+                            </div>
+
+                            {player.injuryReturnDate && (
+                                <div className='flex w-full items-center justify-center'>
+                                    <span>
+                                        Retour prévu :{' '}
+                                        <span className='font-normal'>
+                                            {shortDate(player.injuryReturnDate)}
+                                        </span>
+                                    </span>
+                                </div>
+                            )}
+
+                            <span
+                                aria-hidden='true'
+                                className='absolute right-3 top-1/2 -translate-y-1/2 text-xs font-normal'
+                            >
+                                {showInjuryDetails ? '▲' : '▼'}
+                            </span>
+                        </button>
+
+                        {showInjuryDetails && (
+                            <div className='px-3 pb-3'>
+                                {(player.injuryType ||
+                                    player.injurySide ||
+                                    player.injuryDetail) && (
+                                        <p className='mt-1 text-foreground'>
+                                            {player.injuryType}
+                                            {player.injurySide &&
+                                                player.injurySide !== 'Not Specified' &&
+                                                ` (${player.injurySide})`}
+                                            {player.injuryDetail &&
+                                                player.injuryDetail !== 'Not Specified' &&
+                                                ` — ${player.injuryDetail}`}
+                                        </p>
+                                    )}
+
+                                {player.injuryFantasyStatus &&
+                                    player.injuryFantasyStatus.trim().toLowerCase() !==
+                                    (player.injuryStatus ?? '')
+                                        .trim()
+                                        .toLowerCase() && (
+                                        <p className='mt-1 text-foreground'>
+                                            Statut fantaisie :{' '}
+                                            {player.injuryFantasyStatus}
+                                        </p>
+                                    )}
+
+                                {player.injuryShortDescription && (
+                                    <p className='mt-1 text-foreground'>
+                                        {player.injuryShortDescription}
+                                    </p>
+                                )}
+
+                                {player.injuryLongDescription &&
+                                    player.injuryLongDescription
+                                        .trim()
+                                        .toLowerCase() !==
+                                    (
+                                        player.injuryShortDescription ?? ''
+                                    )
+                                        .trim()
+                                        .toLowerCase() && (
+                                        <p className='mt-1 text-muted-foreground'>
+                                            {player.injuryLongDescription}
+                                        </p>
+                                    )}
+
+                                <p className='mt-1 text-xs text-muted-foreground'>
+                                    Dernière mise à jour :{' '}
+                                    {shortDate(player.injuryUpdatedAt)}
+                                </p>
+                            </div>
                         )}
-
-                        {player.injuryLongDescription && (
-                            <p className='mt-1 text-muted-foreground'>
-                                {player.injuryLongDescription}
-                            </p>
-                        )}
-
-                        <p className='mt-1 text-xs text-muted-foreground'>
-                            Dernière mise à jour :{' '}
-                            {shortDate(player.injuryUpdatedAt)}
-                        </p>
                     </div>
                 )}
 
@@ -1706,7 +1844,7 @@ export default function PlayerPage() {
                 {/* Injury history */}
                 <SectionTitle>Historique des blessures</SectionTitle>
 
-                {player.injuryHistory.length === 0 ? (
+                {player.injuryHistory.filter((s) => s.resolvedAt === null).length === 0 ? (
                     <p className='text-sm text-muted-foreground'>
                         Aucune blessure enregistrée.
                     </p>
@@ -1726,35 +1864,37 @@ export default function PlayerPage() {
                                 </tr>
                             </TableHead>
                             <tbody className='text-foreground'>
-                                {player.injuryHistory.map((spell, index) => (
-                                    <tr
-                                        key={`${spell.firstSeenAt}-${index}`}
-                                        className={rowClass(index)}
-                                    >
-                                        <td className={tdLeft}>
-                                            {spell.injuryStatus}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {spell.teamAbbreviation}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {shortDate(spell.firstSeenAt)}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {shortDate(spell.lastSeenAt)}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {spell.resolvedAt
-                                                ? shortDate(spell.resolvedAt)
-                                                : 'En cours'}
-                                        </td>
-                                        <td
-                                            className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
+                                {player.injuryHistory
+                                    .filter((s) => s.resolvedAt === null)
+                                    .map((spell, index) => (
+                                        <tr
+                                            key={`${spell.firstSeenAt}-${index}`}
+                                            className={rowClass(index)}
                                         >
-                                            {spell.injuryDescription ?? '—'}
-                                        </td>
-                                    </tr>
-                                ))}
+                                            <td className={tdLeft}>
+                                                {spell.injuryStatus}
+                                            </td>
+                                            <td className={tdLeft}>
+                                                {spell.teamAbbreviation}
+                                            </td>
+                                            <td className={tdLeft}>
+                                                {shortDate(spell.firstSeenAt)}
+                                            </td>
+                                            <td className={tdLeft}>
+                                                {shortDate(spell.lastSeenAt)}
+                                            </td>
+                                            <td className={tdLeft}>
+                                                {spell.resolvedAt
+                                                    ? shortDate(spell.resolvedAt)
+                                                    : 'En cours'}
+                                            </td>
+                                            <td
+                                                className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
+                                            >
+                                                {spell.injuryDescription ?? '—'}
+                                            </td>
+                                        </tr>
+                                    ))}
                             </tbody>
                         </table>
                     </TableShell>

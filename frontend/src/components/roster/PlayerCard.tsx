@@ -16,6 +16,7 @@ import {
     auraRangeFor,
     isAuraOff,
 } from '@/lib/auraConfig';
+import { setPendingRestore } from '@/lib/scrollRestoration';
 import { Link } from 'react-router-dom';
 
 // Goalies show PJ/V/D/DP; skaters show PJ/B/A/PTS.
@@ -306,6 +307,12 @@ export function PlayerCard({
         <Link
             to={`/joueurs/${entry.nhlPlayerId}`}
             state={{ fromCardId: `player-card-${entry.nhlPlayerId}` }}
+            onClick={() => {
+                setPendingRestore(
+                    `player-card-${entry.nhlPlayerId}`,
+                    window.scrollY,
+                );
+            }}
             id={`player-card-${entry.nhlPlayerId}`}
             className='block scroll-mt-[calc(var(--header-height,4rem)+0.5rem)] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded-lg'
         >
