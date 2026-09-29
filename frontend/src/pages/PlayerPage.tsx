@@ -532,27 +532,6 @@ function combineNhlSeasonRows(rows: CareerRow[]): CareerRow[] {
     return result;
 }
 
-function aggregateGameLog(rows: GameLogRow[]) {
-    const gamesPlayed = rows.length;
-    const goals = rows.reduce((sum, g) => sum + g.goals, 0);
-    const assists = rows.reduce((sum, g) => sum + g.assists, 0);
-    const points = goals + assists;
-    const hatTricks = rows.filter((g) => g.goals >= 3).length;
-    const totalFantasyPoints = rows.reduce(
-        (sum, g) => sum + g.fantasyPoints,
-        0,
-    );
-
-    return {
-        gamesPlayed,
-        goals,
-        assists,
-        points,
-        hatTricks,
-        totalFantasyPoints,
-    };
-}
-
 function sumHatTricks(rows: CareerRow[]): number | null {
     if (rows.length === 0) return null;
     const anyKnown = rows.some((r) => r.hatTricks != null);
@@ -609,6 +588,40 @@ function rowClass(index: number): string {
         'border-b border-border/40 last:border-b-0',
         index % 2 === 0 ? 'bg-transparent' : 'bg-secondary/20',
     );
+}
+
+/**
+ * Leagues that get the pale cyan tint. These are the "top" non-NHL
+ * leagues the league cares about, so they're highlighted differently
+ * from the long tail of junior/European/minor leagues.
+ */
+const CYAN_TINT_LEAGUES = new Set([
+    'AHL',
+    'KHL',
+    'LIIGA',
+    'SHL',
+]);
+
+/**
+ * Row background for career tables:
+ *
+ *   - NHL rows         -> alternating pattern (bg-transparent / bg-secondary/20)
+ *   - Current season   -> handled separately via highlightCurrentSeason
+ *   - AHL/KHL/Liiga/SHL -> pale cyan tint
+ *   - Any other league -> pale green tint
+ */
+function careerRowClass(row: CareerRow, index: number): string {
+    if (isNhlRow(row)) {
+        return rowClass(index);
+    }
+
+    const league = row.leagueAbbreviation.toUpperCase();
+
+    if (CYAN_TINT_LEAGUES.has(league)) {
+        return 'border-b border-border/40 last:border-b-0 bg-[#7DF9FF]/15';
+    }
+
+    return 'border-b border-border/40 last:border-b-0 bg-[#D8BFD8]/15';
 }
 
 // ---------------------------------------------------------------------
@@ -694,7 +707,7 @@ function TotalsRow({
     isGoalie,
 }: TotalsRowProps) {
     const rowClassName =
-        'border-t border-primary/30 bg-primary/10 font-semibold';
+        'border-t border-[#7DF9FF]/30 bg-[#7DF9FF]/30 font-semibold';
 
     if (isGoalie) {
         if (regularSeason) {
@@ -754,7 +767,6 @@ function TotalsRow({
     }
 
     if (regularSeason) {
-        const fp = sumFantasyPoints(careerRows);
         const hatTricks = sumHatTricks(careerRows);
 
         return (
@@ -771,7 +783,10 @@ function TotalsRow({
                     {nhlTotals.points}
                 </td>
                 {showFantasyPoints && (
-                    <td className={cn(tdRight, 'text-[#D4AF37]')}>{fp}</td>
+                    // FP is not computed on the career totals row, but
+                    // the column exists in the table so the cell must
+                    // be present for alignment.
+                    <td className={tdRight}>—</td>
                 )}
                 {showVor && (
                     // VOR is not computed on the career totals row, but
@@ -835,15 +850,20 @@ function SkaterCareerTable({
     showFantasyPoints = false,
     showVor = false,
     vor = 0,
-    highlightCurrentSeason = false,
     totalsRow = null,
+    plainRows = false,
 }: {
     rows: CareerRow[];
     showFantasyPoints?: boolean;
     showVor?: boolean;
     vor?: number;
-    highlightCurrentSeason?: boolean;
     totalsRow?: React.ReactNode;
+    /**
+     * When true, every row uses the default alternating background
+     * regardless of league. Used by Tournois, where the league-based
+     * tint does not apply.
+     */
+    plainRows?: boolean;
 }) {
     if (rows.length === 0) {
         return (
@@ -886,12 +906,11 @@ function SkaterCareerTable({
                     {rows.map((row, index) => (
                         <tr
                             key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                            className={cn(
-                                rowClass(index),
-                                highlightCurrentSeason &&
-                                row.season === CURRENT_SEASON_CODE &&
-                                'bg-primary/10',
-                            )}
+                            className={
+                                plainRows
+                                    ? rowClass(index)
+                                    : careerRowClass(row, index)
+                            }
                         >
                             <td className={tdSeason}>{row.seasonLabel}</td>
                             <td className={tdTeam}>{teamDisplay(row)}</td>
@@ -978,12 +997,17 @@ function SkaterCareerTable({
 
 function GoalieCareerTable({
     rows,
-    highlightCurrentSeason = false,
     totalsRow = null,
+    plainRows = false,
 }: {
     rows: CareerRow[];
-    highlightCurrentSeason?: boolean;
     totalsRow?: React.ReactNode;
+    /**
+     * When true, every row uses the default alternating background
+     * regardless of league. Used by Tournois, where the league-based
+     * tint does not apply.
+     */
+    plainRows?: boolean;
 }) {
     if (rows.length === 0) {
         return (
@@ -1018,12 +1042,11 @@ function GoalieCareerTable({
                     {rows.map((row, index) => (
                         <tr
                             key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                            className={cn(
-                                rowClass(index),
-                                highlightCurrentSeason &&
-                                row.season === CURRENT_SEASON_CODE &&
-                                'bg-primary/10',
-                            )}
+                            className={
+                                plainRows
+                                    ? rowClass(index)
+                                    : careerRowClass(row, index)
+                            }
                         >
                             <td className={tdSeason}>{row.seasonLabel}</td>
                             <td className={tdTeam}>{teamDisplay(row)}</td>
@@ -1547,79 +1570,6 @@ export default function PlayerPage() {
     const positionGrp = positionGroup(player.position);
     const vor = vorThreshold(positionGrp);
 
-    const currentSeasonStats = player.currentSeasonStats ?? null;
-    const lastSeasonStats = player.lastSeasonStats ?? null;
-
-    const seasonTotals = currentSeasonStats
-        ? {
-            gamesPlayed: currentSeasonStats.gamesPlayed,
-            goals: currentSeasonStats.goals,
-            assists: currentSeasonStats.assists,
-            points: currentSeasonStats.points,
-            hatTricks: currentSeasonStats.hatTricks ?? 0,
-            totalFantasyPoints: currentSeasonStats.fantasyPoints ?? 0,
-        }
-        : aggregateGameLog(player.recentGames);
-
-    const lastSeasonTotals = lastSeasonStats
-        ? {
-            gamesPlayed: lastSeasonStats.gamesPlayed,
-            goals: lastSeasonStats.goals,
-            assists: lastSeasonStats.assists,
-            points: lastSeasonStats.points,
-            hatTricks: lastSeasonStats.hatTricks ?? 0,
-            totalFantasyPoints: lastSeasonStats.fantasyPoints ?? 0,
-        }
-        : {
-            gamesPlayed: 0,
-            goals: 0,
-            assists: 0,
-            points: 0,
-            hatTricks: 0,
-            totalFantasyPoints: 0,
-        };
-
-    const last10Totals = aggregateGameLog(player.recentGames.slice(0, 10));
-
-    function buildRow(
-        label: string,
-        totals: typeof seasonTotals,
-        computeVor: boolean,
-    ) {
-        const ppg =
-            totals.gamesPlayed > 0
-                ? totals.points / totals.gamesPlayed
-                : 0;
-
-        const dollarPerPoint =
-            totals.totalFantasyPoints > 0 && currentContract
-                ? currentContract.salary / totals.totalFantasyPoints
-                : null;
-
-        const vorValue = computeVor
-            ? totals.totalFantasyPoints - vor
-            : null;
-
-        return {
-            label,
-            gamesPlayed: totals.gamesPlayed,
-            goals: totals.goals,
-            assists: totals.assists,
-            points: totals.points,
-            hatTricks: totals.hatTricks,
-            pointsPerGame: ppg,
-            dollarPerPoint,
-            valueOverReplacement: vorValue,
-            totalFantasyPoints: totals.totalFantasyPoints,
-        };
-    }
-
-    const fantasyStatRows = [
-        buildRow('26-27', seasonTotals, false),
-        buildRow('Last 10', last10Totals, false),
-        buildRow('25-26', lastSeasonTotals, true),
-    ];
-
     return (
         <>
             <CloseButtonLayer />
@@ -1802,86 +1752,6 @@ export default function PlayerPage() {
                                 </span>
                             </p>
                         )}
-
-                        <div className='mt-2 w-full rounded-md border border-border bg-card pb-1'>
-                            <table className='w-full table-auto text-[0.7rem] tabular-nums'>
-                                <thead className='border-b border-border text-[0.6rem] uppercase tracking-wide text-foreground'>
-                                    <tr>
-                                        <th className='px-2 py-1 text-left font-medium'>&nbsp;</th>
-                                        <th className='px-2 py-1 text-center font-medium text-[#7DD3FC]'>PJ</th>
-                                        <th className='px-2 py-1 text-center font-medium'>B</th>
-                                        <th className='px-2 py-1 text-center font-medium'>A</th>
-                                        <th className='px-2 py-1 text-center font-bold text-[#00F0FF]'>PTS</th>
-                                        <th className='px-2 py-1 text-center font-medium'>3B</th>
-                                        <th className='px-2 py-1 text-center font-medium'>PPG</th>
-                                        <th className='px-2 py-1 text-center font-bold text-foreground'>VOR</th>
-                                        <th className='px-2 py-1 text-center font-bold text-[#D4AF37]'>FP</th>
-                                    </tr>
-                                </thead>
-                                <tbody className='text-foreground'>
-                                    {fantasyStatRows.map((row, i) => {
-                                        const isLastYear = row.label === '25-26';
-                                        const isCurrentYear = row.label === '26-27';
-
-                                        return (
-                                            <tr
-                                                key={row.label}
-                                                className={
-                                                    isCurrentYear
-                                                        ? 'bg-primary/10'
-                                                        : isLastYear
-                                                            ? 'border-t border-primary/30 bg-transparent'
-                                                            : i % 2 === 0
-                                                                ? 'bg-transparent'
-                                                                : 'bg-secondary/20'
-                                                }
-                                            >
-                                                <td className='px-2 py-1 text-left font-bold text-foreground'>
-                                                    {row.label}
-                                                </td>
-                                                <td className='px-2 py-1 text-center text-[#7DD3FC]'>
-                                                    {row.gamesPlayed}
-                                                </td>
-                                                <td className='px-2 py-1 text-center'>
-                                                    {row.goals}
-                                                </td>
-                                                <td className='px-2 py-1 text-center'>
-                                                    {row.assists}
-                                                </td>
-                                                <td className='px-2 py-1 text-center text-[#00F0FF]'>
-                                                    {row.points}
-                                                </td>
-                                                <td className='px-2 py-1 text-center'>
-                                                    {row.hatTricks}
-                                                </td>
-                                                <td className='px-2 py-1 text-center'>
-                                                    {row.pointsPerGame.toFixed(2)}
-                                                </td>
-                                                <td
-                                                    className={`px-2 py-1 text-center ${row.label === '26-27' || row.label === 'Last 10'
-                                                        ? 'text-foreground'
-                                                        : row.valueOverReplacement == null
-                                                            ? 'text-[#D4AF37]'
-                                                            : row.valueOverReplacement > 0
-                                                                ? 'text-emerald-400'
-                                                                : row.valueOverReplacement < 0
-                                                                    ? 'text-rose-400'
-                                                                    : 'text-[#D4AF37]'
-                                                        }`}
-                                                >
-                                                    {row.valueOverReplacement == null
-                                                        ? '—'
-                                                        : `${row.valueOverReplacement > 0 ? '+' : ''}${row.valueOverReplacement}`}
-                                                </td>
-                                                <td className='px-2 py-1 text-center text-[#D4AF37]'>
-                                                    {row.totalFantasyPoints}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
                     </div>
 
                     {player.headshotUrl && (
@@ -2016,7 +1886,6 @@ export default function PlayerPage() {
                                             player.nhlTeamAbbreviation,
                                         ),
                                     )}
-                                    highlightCurrentSeason
                                     totalsRow={
                                         hasNhlTotals ? (
                                             <TotalsRow
@@ -2043,7 +1912,6 @@ export default function PlayerPage() {
                                         showFantasyPoints
                                         showVor
                                         vor={vor}
-                                        highlightCurrentSeason
                                     totalsRow={
                                         hasNhlTotals ? (
                                             <TotalsRow
@@ -2138,9 +2006,9 @@ export default function PlayerPage() {
 
                 <SectionTitle>Tournois</SectionTitle>
                 {isGoalie ? (
-                    <GoalieCareerTable rows={player.tournaments} />
+                    <GoalieCareerTable rows={player.tournaments} plainRows />
                 ) : (
-                    <SkaterCareerTable rows={player.tournaments} />
+                    <SkaterCareerTable rows={player.tournaments} plainRows />
                 )}
 
                 <div className='mt-6'>
