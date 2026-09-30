@@ -294,13 +294,45 @@ function teamFullName(abbreviation: string | null | undefined): string {
     return NHL_TEAM_FULL_NAMES[abbreviation.trim()] ?? abbreviation;
 }
 
-function vorThreshold(group: 'F' | 'D' | 'G' | ''): number {
-    switch (group) {
-        case 'F': return 45;
-        case 'D': return 25;
-        case 'G': return 65;
-        default: return 0;
+/**
+ * VOR (Value Over Replacement) reference thresholds.
+ *
+ * The default values apply to every season. A handful of shortened
+ * NHL seasons (lockouts, COVID) get their own values, because a
+ * replacement-level player produces fewer points when the season is
+ * shorter, so the "above replacement" threshold has to be lower too.
+ *
+ * To add a season: drop a new entry in SEASON_VOR_OVERRIDES. Any
+ * season not listed falls back to the default block below.
+ */
+const DEFAULT_VOR: Record<'F' | 'D' | 'G', number> = {
+    F: 45,
+    D: 25,
+    G: 65,
+};
+
+const SEASON_VOR_OVERRIDES: Record<number, Record<'F' | 'D' | 'G', number>> = {
+    20122013: { F: 22, D: 13, G: 38 },
+    20192020: { F: 36, D: 22, G: 55 },
+    20202021: { F: 28, D: 17, G: 44 },
+};
+
+function vorThreshold(
+    group: 'F' | 'D' | 'G' | '',
+    season?: number,
+): number {
+    if (group !== 'F' && group !== 'D' && group !== 'G') {
+        return 0;
     }
+
+    const seasonOverride =
+        season != null ? SEASON_VOR_OVERRIDES[season] : undefined;
+
+    if (seasonOverride) {
+        return seasonOverride[group];
+    }
+
+    return DEFAULT_VOR[group];
 }
 
 function formatDecimal(value: number, digits = 2): string {
@@ -576,10 +608,10 @@ const DRAFT_LINE_GLOW =
 // Table primitives
 // ---------------------------------------------------------------------
 
-const thBase = 'px-1 py-1 font-medium whitespace-nowrap';
+const thBase = 'px-1 py-1 font-medium whitespace-nowrap min-w-[1.75rem]';
 const thLeft = `${thBase} text-center`;
 const thRight = `${thBase} text-center`;
-const tdBase = 'px-1 py-0.5 whitespace-nowrap';
+const tdBase = 'px-1 py-0.5 whitespace-nowrap min-w-[1.75rem]';
 const tdLeft = `${tdBase} text-center`;
 const tdRight = `${tdBase} text-center`;
 
@@ -731,36 +763,36 @@ function CurrentSeasonStrip({
                 key: 'w',
                 label: 'W',
                 value: s.wins,
-                color: '#22C55E',
-                icon: 'net',
+                color: '#00F0FF',
+                icon: 'trophy',
             },
             {
                 key: 'l',
                 label: 'L',
                 value: s.losses,
                 color: '#A855F7',
-                icon: 'stick',
+                icon: 'x-circle',
             },
             {
                 key: 'otl',
                 label: 'OTL',
                 value: s.overtimeLosses,
-                color: '#EAB308',
-                icon: 'star',
+                color: '#22C55E',
+                icon: 'clock',
             },
             {
                 key: 'so',
                 label: 'SO',
                 value: s.shutouts,
-                color: '#F59E0B',
-                icon: 'puck',
+                color: '#EC4899',
+                icon: 'shield-check',
             },
             {
                 key: 'fp',
                 label: 'FP',
                 value: s.fantasyPoints,
                 color: '#F59E0B',
-                icon: 'tophat',
+                icon: 'star',
             },
         ]
         : [
@@ -790,7 +822,7 @@ function CurrentSeasonStrip({
                 label: 'PTS',
                 value: s.points,
                 color: '#00F0FF',
-                icon: 'star',
+                icon: 'puck',
             },
             {
                 key: 'ht',
@@ -804,7 +836,7 @@ function CurrentSeasonStrip({
                 label: 'FP',
                 value: s.fantasyPoints,
                 color: '#F59E0B',
-                icon: 'puck',
+                icon: 'star',
             },
         ];
 
@@ -923,6 +955,42 @@ function StatIcon({
                 </svg>
             );
 
+        case 'trophy':
+            return (
+                <svg {...common}>
+                    <path d='M8 4h8v5a4 4 0 0 1-8 0z' />
+                    <path d='M8 5H5v2a3 3 0 0 0 3 3' />
+                    <path d='M16 5h3v2a3 3 0 0 1-3 3' />
+                    <path d='M12 13v4' />
+                    <path d='M9 20h6' />
+                    <path d='M10 17h4' />
+                </svg>
+            );
+
+        case 'x-circle':
+            return (
+                <svg {...common}>
+                    <circle cx='12' cy='12' r='9' />
+                    <path d='M8.5 8.5l7 7M15.5 8.5l-7 7' />
+                </svg>
+            );
+
+        case 'clock':
+            return (
+                <svg {...common}>
+                    <circle cx='12' cy='12' r='9' />
+                    <path d='M12 7v5l3.5 2' />
+                </svg>
+            );
+
+        case 'shield-check':
+            return (
+                <svg {...common}>
+                    <path d='M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z' />
+                    <path d='M9 12.5l2 2 4-4' />
+                </svg>
+            );
+
         default:
             return null;
     }
@@ -1004,6 +1072,7 @@ function TotalsRow({
                     <td className={tdRight}>{nhlTotals.losses}</td>
                     <td className={tdRight}>{nhlTotals.overtimeLosses}</td>
                     <td className={tdRight}>{nhlTotals.shutouts}</td>
+                    <td className={tdRight}>—</td>
                     <td className={tdRight}>
                         {nhlTotals.shotsAgainst > 0
                             ? formatDecimal(nhlTotals.savePercentage, 3)
@@ -1037,6 +1106,7 @@ function TotalsRow({
                 <td className={tdRight}>{nhlTotals.playoffLosses}</td>
                 <td className={tdRight}>{nhlTotals.playoffOvertimeLosses}</td>
                 <td className={tdRight}>{nhlTotals.playoffShutouts}</td>
+                <td className={tdRight}>—</td>
                 <td className={tdRight}>—</td>
                 <td className={tdRight}>—</td>
                 <td className={tdRight}>—</td>
@@ -1122,7 +1192,7 @@ function SkaterCareerTable({
     rows,
     showFantasyPoints = false,
     showVor = false,
-    vor = 0,
+    positionGroup: positionGrp = '',
     totalsRow = null,
     plainRows = false,
     variant = 'default',
@@ -1131,7 +1201,7 @@ function SkaterCareerTable({
     rows: CareerRow[];
     showFantasyPoints?: boolean;
     showVor?: boolean;
-    vor?: number;
+    positionGroup?: 'F' | 'D' | 'G' | '';
     totalsRow?: React.ReactNode;
     plainRows?: boolean;
     variant?: 'default' | 'youthMinor';
@@ -1221,31 +1291,31 @@ function SkaterCareerTable({
                                         : undefined
                                 }
                             >
-                            <td className={tdSeason}>{row.seasonLabel}</td>
-                            <td className={tdTeam}>{teamDisplay(row)}</td>
-                            <td className={tdLge}>{row.leagueAbbreviation}</td>
-                            <td
-                                className={cn(
-                                    tdRight,
-                                    isNhlRow(row)
-                                        ? 'text-[#7DD3FC]'
-                                        : 'text-foreground',
-                                )}
-                            >
-                                {row.gamesPlayed}
-                            </td>
-                            <td className={tdRight}>{row.goals}</td>
-                            <td className={tdRight}>{row.assists}</td>
-                            <td
-                                className={cn(
-                                    tdRight,
-                                    isNhlRow(row)
-                                        ? 'text-[#00F0FF]'
-                                        : 'text-foreground',
-                                )}
-                            >
-                                {row.points}
-                            </td>
+                                <td className={tdSeason}>{row.seasonLabel}</td>
+                                <td className={tdTeam}>{teamDisplay(row)}</td>
+                                <td className={tdLge}>{row.leagueAbbreviation}</td>
+                                <td
+                                    className={cn(
+                                        tdRight,
+                                        isNhlRow(row)
+                                            ? 'text-[#7DD3FC]'
+                                            : 'text-foreground',
+                                    )}
+                                >
+                                    {row.gamesPlayed}
+                                </td>
+                                <td className={tdRight}>{row.goals}</td>
+                                <td className={tdRight}>{row.assists}</td>
+                                <td
+                                    className={cn(
+                                        tdRight,
+                                        isNhlRow(row)
+                                            ? 'text-[#00F0FF]'
+                                            : 'text-foreground',
+                                    )}
+                                >
+                                    {row.points}
+                                </td>
                                 {!isYouthMinor && showFantasyPoints && (
                                     <td
                                         className={cn(
@@ -1260,47 +1330,56 @@ function SkaterCareerTable({
                                             : row.points + row.hatTricks * 2}
                                     </td>
                                 )}
-                            {!isYouthMinor && showVor && (() => {
-                                if (row.hatTricks == null) {
-                                    return <td className={tdRight}>—</td>;
-                                }
+                                {!isYouthMinor && showVor && (() => {
+                                    if (row.hatTricks == null) {
+                                        return <td className={tdRight}>—</td>;
+                                    }
 
-                                const fp = row.points + row.hatTricks * 2;
-                                const vorValue = fp - vor;
+                                    const fp = row.points + row.hatTricks * 2;
 
-                                return (
-                                    <td
-                                        className={cn(
-                                            tdRight,
-                                            vorValue > 0
-                                                ? 'text-emerald-400'
-                                                : vorValue < 0
-                                                    ? 'text-rose-400'
-                                                    : 'text-[#D4AF37]',
-                                        )}
-                                    >
-                                        {vorValue > 0 ? '+' : ''}
-                                        {vorValue}
+                                    // Per-season VOR threshold so shortened
+                                    // seasons (lockouts, COVID) use their own
+                                    // replacement-level values.
+                                    const seasonVor = vorThreshold(
+                                        positionGrp,
+                                        row.season,
+                                    );
+
+                                    const vorValue = fp - seasonVor;
+
+                                    return (
+                                        <td
+                                            className={cn(
+                                                tdRight,
+                                                vorValue > 0
+                                                    ? 'text-emerald-400'
+                                                    : vorValue < 0
+                                                        ? 'text-rose-400'
+                                                        : 'text-[#D4AF37]',
+                                            )}
+                                        >
+                                            {vorValue > 0 ? '+' : ''}
+                                            {vorValue}
+                                        </td>
+                                    );
+                                })()}
+                                {!isYouthMinor && (
+                                    <td className={tdRight}>
+                                        {row.hatTricks == null ? '—' : row.hatTricks}
                                     </td>
-                                );
-                            })()}
-                            {!isYouthMinor && (
+                                )}
+                                <td className={tdRight}>{row.penaltyMinutes}</td>
                                 <td className={tdRight}>
-                                    {row.hatTricks == null ? '—' : row.hatTricks}
+                                    {row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus}
                                 </td>
-                            )}
-                            <td className={tdRight}>{row.penaltyMinutes}</td>
-                            <td className={tdRight}>
-                                {row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus}
-                            </td>
-                            <td className={tdRight}>{row.averageTimeOnIce ?? '—'}</td>
-                            {!isYouthMinor && (
-                                <>
-                                    <td className={tdRight}>{row.powerPlayPoints}</td>
-                                    <td className={tdRight}>{row.shots}</td>
-                                    <td className={tdRight}>{row.gameWinningGoals}</td>
-                                </>
-                            )}
+                                <td className={tdRight}>{row.averageTimeOnIce ?? '—'}</td>
+                                {!isYouthMinor && (
+                                    <>
+                                        <td className={tdRight}>{row.powerPlayPoints}</td>
+                                        <td className={tdRight}>{row.shots}</td>
+                                        <td className={tdRight}>{row.gameWinningGoals}</td>
+                                    </>
+                                )}
                             </tr>
                         );
                     })}
@@ -1313,12 +1392,14 @@ function SkaterCareerTable({
 
 function GoalieCareerTable({
     rows,
+    showFantasyPoints = false,
     totalsRow = null,
     plainRows = false,
     variant = 'default',
     draftBoundarySeason = null,
 }: {
     rows: CareerRow[];
+    showFantasyPoints?: boolean;
     totalsRow?: React.ReactNode;
     plainRows?: boolean;
     variant?: 'default' | 'youthMinor';
@@ -1351,6 +1432,9 @@ function GoalieCareerTable({
                                 <th className={thRight}>L</th>
                                 <th className={thRight}>OTL</th>
                                 <th className={thRight}>SO</th>
+                                {showFantasyPoints && (
+                                    <th className={cn(thRight, 'font-bold text-[#F59E0B]')}>FP</th>
+                                )}
                                 <th className={thRight}>SV%</th>
                                 <th className={thRight}>GAA</th>
                                 <th className={thRight}>SV</th>
@@ -1386,44 +1470,67 @@ function GoalieCareerTable({
                                         : undefined
                                 }
                             >
-                            <td className={tdSeason}>{row.seasonLabel}</td>
-                            <td className={tdTeam}>{teamDisplay(row)}</td>
-                            <td className={tdLge}>{row.leagueAbbreviation}</td>
-                            <td
-                                className={cn(
-                                    tdRight,
-                                    isNhlRow(row)
-                                        ? 'text-[#7DD3FC]'
-                                        : 'text-foreground',
-                                )}
-                            >
-                                {row.gamesPlayed}
-                            </td>
-                            {!isYouthMinor && (
-                                <>
-                                    <td
-                                        className={cn(
-                                            tdRight,
-                                            isNhlRow(row)
-                                                ? 'text-[#00F0FF]'
-                                                : 'text-foreground',
+                                <td className={tdSeason}>{row.seasonLabel}</td>
+                                <td className={tdTeam}>{teamDisplay(row)}</td>
+                                <td className={tdLge}>{row.leagueAbbreviation}</td>
+                                <td
+                                    className={cn(
+                                        tdRight,
+                                        isNhlRow(row)
+                                            ? 'text-[#7DD3FC]'
+                                            : 'text-foreground',
+                                    )}
+                                >
+                                    {row.gamesPlayed}
+                                </td>
+                                {!isYouthMinor && (
+                                    <>
+                                        <td
+                                            className={cn(
+                                                tdRight,
+                                                isNhlRow(row)
+                                                    ? 'text-[#00F0FF]'
+                                                    : 'text-foreground',
+                                            )}
+                                        >
+                                            {row.wins}
+                                        </td>
+                                        <td className={tdRight}>{row.losses}</td>
+                                        <td className={tdRight}>{row.overtimeLosses}</td>
+                                        <td className={tdRight}>{row.shutouts}</td>
+                                        {showFantasyPoints && (
+                                            <td
+                                                className={cn(
+                                                    tdRight,
+                                                    isNhlRow(row)
+                                                        ? 'text-[#F59E0B]'
+                                                        : 'text-foreground',
+                                                )}
+                                            >
+                                                {
+                                                    // Goalie fantasy points
+                                                    // per league rules:
+                                                    //   goals + assists
+                                                    //   + 2 per win
+                                                    //   + 1 per OTL
+                                                    //   + 1 per shutout
+                                                    row.points +
+                                                    row.wins * 2 +
+                                                    row.overtimeLosses +
+                                                    row.shutouts
+                                                }
+                                            </td>
                                         )}
-                                    >
-                                        {row.wins}
-                                    </td>
-                                    <td className={tdRight}>{row.losses}</td>
-                                    <td className={tdRight}>{row.overtimeLosses}</td>
-                                    <td className={tdRight}>{row.shutouts}</td>
-                                    <td className={tdRight}>
-                                        {formatDecimal(row.savePercentage, 3)}
-                                    </td>
-                                    <td className={tdRight}>
-                                        {formatDecimal(row.goalsAgainstAverage, 2)}
-                                    </td>
-                                    <td className={tdRight}>{row.saves}</td>
-                                    <td className={tdRight}>{row.shotsAgainst}</td>
-                                </>
-                            )}
+                                        <td className={tdRight}>
+                                            {formatDecimal(row.savePercentage, 3)}
+                                        </td>
+                                        <td className={tdRight}>
+                                            {formatDecimal(row.goalsAgainstAverage, 2)}
+                                        </td>
+                                        <td className={tdRight}>{row.saves}</td>
+                                        <td className={tdRight}>{row.shotsAgainst}</td>
+                                    </>
+                                )}
                             </tr>
                         );
                     })}
@@ -1558,11 +1665,10 @@ function MonthTable({
 
     return (
         <TableShell>
-            <table className='w-full min-w-[480px] text-xs tabular-nums'>
+            <table className='w-full min-w-[360px] text-[0.65rem] tabular-nums'>
                 <TableHead>
                     <tr>
                         <th className={thLeft}>Mois</th>
-                        <th className={thLeft}>Dates</th>
                         {isGoalie ? (
                             <>
                                 <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
@@ -1591,17 +1697,9 @@ function MonthTable({
                     {months.map((m, index) => {
                         const hasGames = m.gamesPlayed > 0;
 
-                        const dates =
-                            m.startDate && m.endDate
-                                ? `${shortGameDate(m.startDate)} – ${shortGameDate(m.endDate)}`
-                                : '—';
-
                         return (
                             <tr key={`${m.label}-${index}`} className={rowClass(index)}>
                                 <td className={tdLeft}>{m.label}</td>
-                                <td className={`${tdLeft} text-muted-foreground`}>
-                                    {dates}
-                                </td>
                                 {isGoalie ? (
                                     <>
                                         <td className={cn(tdRight, 'text-[#7DD3FC]')}>
@@ -1908,7 +2006,6 @@ export default function PlayerPage() {
         player.nhlTotals.playoffGamesPlayed > 0;
 
     const positionGrp = positionGroup(player.position);
-    const vor = vorThreshold(positionGrp);
 
     // Draft boundary: the season code right below which we draw the
     // magenta line on the career tables. For a drafted player, that's
@@ -2235,130 +2332,132 @@ export default function PlayerPage() {
                     <div>
                         <div>
                             <SubSectionTitle>Saison régulière</SubSectionTitle>
-                                    {isGoalie ? (
-                                        <GoalieCareerTable
-                                            rows={combineNhlSeasonRows(
-                                                withCurrentTeamName(
-                                                    careerRowsForDisplay(
-                                                        player.regularSeason,
-                                                        true,
-                                                        true,
-                                                    ),
-                                                    player.nhlTeamAbbreviation,
-                                                ),
-                                            )}
-                                            draftBoundarySeason={draftBoundarySeason}
-                                            totalsRow={
-                                                hasNhlTotals ? (
-                                                    <TotalsRow
-                                                        regularSeason
-                                                        careerRows={player.regularSeason}
-                                                        nhlTotals={player.nhlTotals}
-                                                        isGoalie
-                                                    />
-                                                ) : null
-                                            }
-                                        />
-                                    ) : (
-                                        <SkaterCareerTable
-                                            rows={combineNhlSeasonRows(
-                                                withCurrentTeamName(
-                                                    careerRowsForDisplay(
-                                                        player.regularSeason,
-                                                        true,
-                                                        true,
-                                                    ),
-                                                    player.nhlTeamAbbreviation,
-                                                ),
-                                            )}
-                                            draftBoundarySeason={draftBoundarySeason}
-                                            showFantasyPoints
-                                            showVor
-                                            vor={vor}
-                                            totalsRow={
-                                                hasNhlTotals ? (
-                                                    <TotalsRow
-                                                        regularSeason
-                                                        showFantasyPoints
-                                                        showVor
-                                                        careerRows={player.regularSeason}
-                                                        nhlTotals={player.nhlTotals}
-                                                        isGoalie={false}
-                                                    />
-                                                ) : null
-                                            }
-                                        />
-                                    )}
-                                </div>
-                            </div>
-
-                            <div>
-                                <div>
-                                    <SubSectionTitle>Séries</SubSectionTitle>
-                                    {isGoalie ? (
-                                        <GoalieCareerTable
-                                            rows={careerRowsForDisplay(
-                                                player.playoffs,
-                                                true,
-                                                false,
-                                            )}
-                                            draftBoundarySeason={draftBoundarySeason}
-                                            totalsRow={
-                                                hasNhlTotals ? (
-                                                    <TotalsRow
-                                                        regularSeason={false}
-                                                        careerRows={player.playoffs}
-                                                        nhlTotals={player.nhlTotals}
-                                                        isGoalie
-                                                    />
-                                                ) : null
-                                            }
-                                        />
-                                    ) : (
-                                        <SkaterCareerTable
-                                            rows={careerRowsForDisplay(
-                                                player.playoffs,
-                                                true,
-                                                false,
-                                            )}
-                                            draftBoundarySeason={draftBoundarySeason}
-                                            totalsRow={
-                                                hasNhlTotals ? (
-                                                    <TotalsRow
-                                                        regularSeason={false}
-                                                        careerRows={player.playoffs}
-                                                        nhlTotals={player.nhlTotals}
-                                                        isGoalie={false}
-                                                    />
-                                                ) : null
-                                            }
-                                        />
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-
-                        <SubSectionTitle>Tournois</SubSectionTitle>
-                        {isGoalie ? (
-                            <GoalieCareerTable rows={player.tournaments} plainRows />
-                        ) : (
-                            <SkaterCareerTable rows={player.tournaments} plainRows />
-                        )}
-
-                        <div className='mt-6'>
-                            <SubSectionTitle>Youth / Minor</SubSectionTitle>
                             {isGoalie ? (
                                 <GoalieCareerTable
-                                    rows={player.youthMinor}
-                                    variant='youthMinor'
+                                    rows={combineNhlSeasonRows(
+                                        withCurrentTeamName(
+                                            careerRowsForDisplay(
+                                                player.regularSeason,
+                                                true,
+                                                true,
+                                            ),
+                                            player.nhlTeamAbbreviation,
+                                        ),
+                                    )}
+                                    draftBoundarySeason={draftBoundarySeason}
+                                    showFantasyPoints
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason
+                                                careerRows={player.regularSeason}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie
+                                            />
+                                        ) : null
+                                    }
                                 />
                             ) : (
                                 <SkaterCareerTable
-                                    rows={player.youthMinor}
-                                    variant='youthMinor'
+                                    rows={combineNhlSeasonRows(
+                                        withCurrentTeamName(
+                                            careerRowsForDisplay(
+                                                player.regularSeason,
+                                                true,
+                                                true,
+                                            ),
+                                            player.nhlTeamAbbreviation,
+                                        ),
+                                    )}
+                                    draftBoundarySeason={draftBoundarySeason}
+                                    showFantasyPoints
+                                    showVor
+                                    positionGroup={positionGrp}
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason
+                                                showFantasyPoints
+                                                showVor
+                                                careerRows={player.regularSeason}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie={false}
+                                            />
+                                        ) : null
+                                    }
                                 />
                             )}
                         </div>
+                    </div>
+
+                    <div>
+                        <div>
+                            <SubSectionTitle>Séries</SubSectionTitle>
+                            {isGoalie ? (
+                                <GoalieCareerTable
+                                    rows={careerRowsForDisplay(
+                                        player.playoffs,
+                                        true,
+                                        false,
+                                    )}
+                                    draftBoundarySeason={draftBoundarySeason}
+                                    showFantasyPoints
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason={false}
+                                                careerRows={player.playoffs}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie
+                                            />
+                                        ) : null
+                                    }
+                                />
+                            ) : (
+                                <SkaterCareerTable
+                                    rows={careerRowsForDisplay(
+                                        player.playoffs,
+                                        true,
+                                        false,
+                                    )}
+                                    draftBoundarySeason={draftBoundarySeason}
+                                    totalsRow={
+                                        hasNhlTotals ? (
+                                            <TotalsRow
+                                                regularSeason={false}
+                                                careerRows={player.playoffs}
+                                                nhlTotals={player.nhlTotals}
+                                                isGoalie={false}
+                                            />
+                                        ) : null
+                                    }
+                                />
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <SubSectionTitle>Tournois</SubSectionTitle>
+                {isGoalie ? (
+                    <GoalieCareerTable rows={player.tournaments} plainRows />
+                ) : (
+                    <SkaterCareerTable rows={player.tournaments} plainRows />
+                )}
+
+                <div className='mt-6'>
+                    <SubSectionTitle>Youth / Minor</SubSectionTitle>
+                    {isGoalie ? (
+                        <GoalieCareerTable
+                            rows={player.youthMinor}
+                            variant='youthMinor'
+                        />
+                    ) : (
+                        <SkaterCareerTable
+                            rows={player.youthMinor}
+                            variant='youthMinor'
+                        />
+                    )}
+                </div>
 
                 {player.seasonMonths.length > 0 && (
                     <>

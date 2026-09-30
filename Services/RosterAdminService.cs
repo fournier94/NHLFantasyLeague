@@ -557,8 +557,8 @@ namespace NhlFantasyLeague.api.Services
         }
 
         public async Task<List<PlayerSearchResultDto>> SearchPlayersAsync(
-            string? search,
-            int limit = 20)
+         string? search,
+         int limit = 20)
         {
             if (string.IsNullOrWhiteSpace(search))
             {
@@ -566,13 +566,34 @@ namespace NhlFantasyLeague.api.Services
             }
 
             var take = Math.Clamp(limit, 1, 50);
-            var pattern = $"%{search.Trim()}%";
 
-            var players = await _dbContext.Players
+            // Split the input on whitespace so a query like
+            // "Connor McDavid" becomes ["Connor", "McDavid"]. Every
+            // token must match EITHER the first name OR the last name,
+            // which lets "connor mc" find Connor McDavid and also lets
+            // "mcdavid connor" find him even though the order is
+            // reversed.
+            var tokens = search
+                .Trim()
+                .Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries);
+
+            var playersQuery = _dbContext.Players
                 .Include(p => p.NhlTeam)
-                .Where(p =>
+                .AsQueryable();
+
+            foreach (var token in tokens)
+            {
+                var pattern = $"%{token}%";
+
+                playersQuery = playersQuery.Where(p =>
                     EF.Functions.ILike(p.FirstName, pattern) ||
-                    EF.Functions.ILike(p.LastName, pattern))
+                    EF.Functions.ILike(p.LastName, pattern));
+            }
+
+            var players = await playersQuery
                 .OrderBy(p => p.LastName)
                 .ThenBy(p => p.FirstName)
                 .Take(take)

@@ -13,6 +13,7 @@ import {
 } from '@/api/client';
 import { useAuraAll } from '@/lib/auraContext';
 import { AURA_CHANNELS } from '@/lib/auraConfig';
+import { AuraButton } from '@/components/ui/AuraButton';
 
 const ROSTER_STATUSES = [
     { value: 'Active', label: 'Actif' },
@@ -55,6 +56,8 @@ export default function AdminPage() {
     const [teamRoster, setTeamRoster] = useState<TeamRoster | null>(null);
     const [rosterLoading, setRosterLoading] = useState(false);
     const [rosterError, setRosterError] = useState<string | null>(null);
+
+    const [showAppearance, setShowAppearance] = useState(false);
 
     const { intensities, setIntensity, reset } = useAuraAll();
 
@@ -313,80 +316,6 @@ export default function AdminPage() {
                     Recherchez un joueur, puis ajoutez-le à une équipe, transférez-le,
                     changez son statut ou libérez-le.
                 </p>
-            </div>
-
-            {/* Appearance settings */}
-            <div className='max-w-2xl space-y-3'>
-                <div className='flex items-center justify-between'>
-                    <h3 className='text-lg font-semibold text-foreground'>
-                        Apparence
-                    </h3>
-
-                    <button
-                        type='button'
-                        onClick={reset}
-                        className={secondaryButtonClass}
-                    >
-                        Réinitialiser
-                    </button>
-                </div>
-
-                <div className='space-y-6'>
-                    {Object.entries(
-                        AURA_CHANNELS.reduce<
-                            Record<string, typeof AURA_CHANNELS>
-                        >((groups, channel) => {
-                            (groups[channel.group] ??= []).push(channel);
-                            return groups;
-                        }, {}),
-                    ).map(([groupName, channels]) => (
-                        <div key={groupName} className='space-y-3'>
-                            <h4 className='text-sm font-semibold uppercase tracking-wide text-muted-foreground'>
-                                {groupName}
-                            </h4>
-
-                            <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
-                                {channels.map(({ key, label }) => (
-                                    <div
-                                        key={key}
-                                        className='rounded-lg border border-border bg-card p-3'
-                                    >
-                                        <div className='flex items-center justify-between'>
-                                            <label
-                                                htmlFor={`aura-${key}`}
-                                                className='text-sm font-medium text-foreground'
-                                            >
-                                                {label}
-                                            </label>
-
-                                            <span className='text-sm font-semibold text-primary'>
-                                                {intensities[key]}/10
-                                            </span>
-                                        </div>
-
-                                        <input
-                                            id={`aura-${key}`}
-                                            type='range'
-                                            min='0'
-                                            max='10'
-                                            step='1'
-                                            value={intensities[key]}
-                                            onChange={(event) =>
-                                                setIntensity(key, Number(event.target.value))
-                                            }
-                                            className='mt-2 w-full cursor-pointer'
-                                        />
-
-                                        <div className='mt-1 flex justify-between text-[0.65rem] text-muted-foreground'>
-                                            <span>Off</span>
-                                            <span>Max</span>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    ))}
-                </div>
             </div>
 
             {success && (
@@ -649,6 +578,87 @@ export default function AdminPage() {
                             </li>
                         ))}
                     </ul>
+                )}
+            </div>
+
+            {/* Appearance settings (hidden behind a toggle) */}
+            <div className='max-w-2xl space-y-3'>
+                <AuraButton
+                    active={showAppearance}
+                    onClick={() => setShowAppearance((v) => !v)}
+                >
+                    {showAppearance ? '▼ Masquer l\'apparence' : '▶ Apparence'}
+                </AuraButton>
+
+                {showAppearance && (
+                    <div className='space-y-3'>
+                        <div className='flex items-center justify-end'>
+                            <button
+                                type='button'
+                                onClick={reset}
+                                className={secondaryButtonClass}
+                            >
+                                Réinitialiser
+                            </button>
+                        </div>
+
+                        <div className='space-y-6'>
+                            {Object.entries(
+                                AURA_CHANNELS.reduce<
+                                    Record<string, typeof AURA_CHANNELS>
+                                >((groups, channel) => {
+                                    (groups[channel.group] ??= []).push(channel);
+                                    return groups;
+                                }, {}),
+                            ).map(([groupName, channels]) => (
+                                <div key={groupName} className='space-y-3'>
+                                    <h4 className='text-sm font-semibold uppercase tracking-wide text-muted-foreground'>
+                                        {groupName}
+                                    </h4>
+
+                                    <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
+                                        {channels.map(({ key, label }) => (
+                                            <div
+                                                key={key}
+                                                className='rounded-lg border border-border bg-card p-3'
+                                            >
+                                                <div className='flex items-center justify-between'>
+                                                    <label
+                                                        htmlFor={`aura-${key}`}
+                                                        className='text-sm font-medium text-foreground'
+                                                    >
+                                                        {label}
+                                                    </label>
+
+                                                    <span className='text-sm font-semibold text-primary'>
+                                                        {intensities[key]}/10
+                                                    </span>
+                                                </div>
+
+                                                <input
+                                                    id={`aura-${key}`}
+                                                    type='range'
+                                                    min='0'
+                                                    max='10'
+                                                    step='1'
+                                                    value={intensities[key]}
+                                                    onChange={(event) =>
+                                                        setIntensity(key, Number(event.target.value))
+                                                    }
+                                                    className='mt-2 w-full cursor-pointer'
+                                                />
+
+                                                <div className='mt-1 flex justify-between text-[0.65rem] text-muted-foreground'>
+                                                    <span>Off</span>
+                                                    <span>Max</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 )}
             </div>
         </section>

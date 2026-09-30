@@ -314,6 +314,10 @@ export interface CurrentSeasonStats {
     points: number;
     hatTricks: number;
     fantasyPoints: number;
+    wins: number;
+    losses: number;
+    overtimeLosses: number;
+    shutouts: number;
 }
 
 /** NHL totals block at the bottom of the career table. */

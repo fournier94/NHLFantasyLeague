@@ -229,7 +229,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                         Assists = fantasySeasonStat.Assists,
                         Points = fantasySeasonStat.Points,
                         HatTricks = fantasySeasonStat.HatTricks,
-                        FantasyPoints = fantasySeasonStat.FantasyPoints
+                        FantasyPoints = fantasySeasonStat.FantasyPoints,
+                        Wins = fantasySeasonStat.Wins,
+                        Losses = fantasySeasonStat.Losses,
+                        OvertimeLosses = fantasySeasonStat.OvertimeLosses,
+                        Shutouts = fantasySeasonStat.Shutouts
                     },
 
                 LastSeasonStats = lastSeasonFantasyStat == null
@@ -241,7 +245,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                         Assists = lastSeasonFantasyStat.Assists,
                         Points = lastSeasonFantasyStat.Points,
                         HatTricks = lastSeasonFantasyStat.HatTricks,
-                        FantasyPoints = lastSeasonFantasyStat.FantasyPoints
+                        FantasyPoints = lastSeasonFantasyStat.FantasyPoints,
+                        Wins = lastSeasonFantasyStat.Wins,
+                        Losses = lastSeasonFantasyStat.Losses,
+                        OvertimeLosses = lastSeasonFantasyStat.OvertimeLosses,
+                        Shutouts = lastSeasonFantasyStat.Shutouts
                     },
 
                 RegularSeason = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Main),
@@ -352,7 +360,7 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 months.Add(new MonthDto
                 {
-                    Label = $"{monthLabels[cursor.Month]} {cursor.Year}",
+                    Label = monthLabels[cursor.Month],
                     StartDate = effectiveStart,
                     EndDate = effectiveEnd,
                     GamesPlayed = games.Count,

@@ -303,6 +303,12 @@
         public int Points { get; set; }
         public int HatTricks { get; set; }
         public int FantasyPoints { get; set; }
+
+        // Goalie fields. Zero for skaters.
+        public int Wins { get; set; }
+        public int Losses { get; set; }
+        public int OvertimeLosses { get; set; }
+        public int Shutouts { get; set; }
     }
 
     /// <summary>
