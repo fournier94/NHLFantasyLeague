@@ -42,7 +42,8 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         public async Task<int> SavePlayerGameLogsAsync(
             int nhlPlayerId,
-            int seasonCode)
+            int seasonCode,
+            int gameType = 2)
         {
             var playerResponse = await _playerService.GetPlayerAsync(nhlPlayerId);
 
@@ -73,7 +74,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var gameLogResponse =
-                await GetPlayerGameLogAsync(nhlPlayerId, seasonCode);
+                await GetPlayerGameLogAsync(nhlPlayerId, seasonCode, gameType);
 
             if (gameLogResponse == null)
             {
@@ -381,6 +382,119 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             return result;
         }
+
+        /// <summary>
+        /// Refreshes the current season's regular-season game logs for
+        /// every player in the database, then recomputes each player's
+        /// PlayerSeasonStat for that season.
+        ///
+        /// For each player:
+        ///   1. Call SavePlayerAsync — this hits the NHL landing page,
+        ///      updates the Player row, syncs PlayerCareerStat, and
+        ///      writes the landing-owned columns on PlayerSeasonStat
+        ///      for the current season (GP, G, A, Pts, +/-, PIM, PPG,
+        ///      PPP, GWG, SOG, SH%, W, L, OTL, SO, SV, SA, SV%, GA, GAA).
+        ///   2. Call SavePlayerGameLogsAsync for gameType = 2, which
+        ///      upserts one PlayerGameLog per game (idempotent on
+        ///      NhlGameId) and then calls UpdatePlayerSeasonStatsAsync
+        ///      to fill FantasyPoints and HatTricks from the logs.
+        ///
+        /// Safe to call repeatedly during the season: existing game logs
+        /// are refreshed, new games are appended, and no rows are
+        /// duplicated. Other seasons are not touched.
+        /// </summary>
+        public async Task<RefreshSeasonGameLogsResult> RefreshCurrentSeasonForAllPlayersAsync(
+            int seasonCode,
+            int delayMsBetweenPlayers = 500,
+            CancellationToken ct = default)
+        {
+            var result = new RefreshSeasonGameLogsResult
+            {
+                SeasonCode = seasonCode
+            };
+
+            var season = await _dbContext.Seasons
+                .FirstOrDefaultAsync(
+                    s => s.NhlSeasonCode == seasonCode,
+                    ct);
+
+            if (season == null)
+            {
+                result.Errors.Add(
+                    $"Season {seasonCode} does not exist in the database. " +
+                    "Create it first (League setup or a stats sync).");
+
+                return result;
+            }
+
+            var players = await _dbContext.Players
+                .OrderBy(p => p.Id)
+                .Select(p => new
+                {
+                    p.Id,
+                    p.NhlPlayerId,
+                    p.FirstName,
+                    p.LastName
+                })
+                .ToListAsync(ct);
+
+            result.TotalPlayers = players.Count;
+
+            foreach (var player in players)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (player.NhlPlayerId <= 0)
+                {
+                    result.SkippedNoNhlId++;
+                    continue;
+                }
+
+                try
+                {
+                    // 1. Landing page → Player + PlayerCareerStat +
+                    //    landing-owned columns on PlayerSeasonStat.
+                    await _playerService.SavePlayerAsync(player.NhlPlayerId);
+
+                    // 2. Regular-season game logs → PlayerGameLog rows
+                    //    + FantasyPoints / HatTricks on PlayerSeasonStat.
+                    var saved =
+                        await SavePlayerGameLogsAsync(
+                            player.NhlPlayerId,
+                            seasonCode,
+                            2);
+
+                    result.PlayersProcessed++;
+                    result.TotalGamesSaved += saved;
+
+                    var totalInDb =
+                        await CountPlayerGameLogsAsync(
+                            player.NhlPlayerId,
+                            seasonCode);
+
+                    if (totalInDb == 0)
+                    {
+                        result.PlayersWithoutGames++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    result.FailedPlayers++;
+
+                    result.Errors.Add(
+                        $"{player.NhlPlayerId} " +
+                        $"({player.FirstName} {player.LastName}): " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+                }
+
+                if (delayMsBetweenPlayers > 0)
+                {
+                    await Task.Delay(delayMsBetweenPlayers, ct);
+                }
+            }
+
+            return result;
+        }
     }
 
     /// <summary>
@@ -404,6 +518,21 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         public int TotalGamesSaved { get; set; }
 
+        public List<string> Errors { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Summary of a current-season game-log refresh run.
+    /// </summary>
+    public class RefreshSeasonGameLogsResult
+    {
+        public int SeasonCode { get; set; }
+        public int TotalPlayers { get; set; }
+        public int PlayersProcessed { get; set; }
+        public int SkippedNoNhlId { get; set; }
+        public int PlayersWithoutGames { get; set; }
+        public int FailedPlayers { get; set; }
+        public int TotalGamesSaved { get; set; }
         public List<string> Errors { get; set; } = new();
     }
 }

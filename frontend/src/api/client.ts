@@ -375,13 +375,13 @@ export interface GameLogRow {
     saves: number;
 }
 
-/** One quarter of the regular season, computed from the league schedule. */
-export interface Quarter {
-    /** "Q1", "Q2", "Q3" or "Q4". */
+/** One calendar month of the regular season, computed from the league schedule. */
+export interface Month {
+    /** Ready-to-display label, e.g. "Oct. 2026". */
     label: string;
-    /** First day of the quarter, ISO date. */
+    /** First day of the month, ISO date. */
     startDate: string;
-    /** Last day of the quarter, ISO date (inclusive). */
+    /** Last day of the month, ISO date (inclusive). */
     endDate: string;
 
     gamesPlayed: number;
@@ -491,8 +491,8 @@ export interface PlayerDetail {
     youthMinor: CareerRow[];
 
     recentGames: GameLogRow[];
-    /** Four rows, one per calendar quarter of the regular season. */
-    seasonQuarters: Quarter[];
+    /** One row per calendar month of the regular season. */
+    seasonMonths: Month[];
 }
 
 /** Fetches everything the player detail page needs, by NHL player id. */

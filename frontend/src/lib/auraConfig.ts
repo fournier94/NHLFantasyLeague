@@ -43,7 +43,8 @@ export type AuraChannel =
     | 'playerCardText'
     | 'capBarTrack'
     | 'playerPageCloseButton'
-    | 'playerPageTeamLogo';
+    | 'playerPageTeamLogo'
+    | 'playerPageTabButton';
 
 /**
  * Multiplies the (max - min) gap of every channel by this factor.
@@ -66,6 +67,7 @@ export const AURA_DEFAULTS: Record<AuraChannel, number> = {
     capBarTrack: 3,
     playerPageCloseButton: 7,
     playerPageTeamLogo: 2,
+    playerPageTabButton: 3,
 };
 
 /**
@@ -110,6 +112,7 @@ export const AURA_CHANNELS: {
 
         { key: 'playerPageCloseButton', label: 'Bouton Fermer', group: 'Page joueur' },
         { key: 'playerPageTeamLogo', label: 'Logo équipe LNH', group: 'Page joueur' },
+        { key: 'playerPageTabButton', label: 'Onglets Carrière / Journal', group: 'Page joueur' },
     ];
 
 export interface AuraLayerRange {
@@ -241,6 +244,18 @@ export const AURA_RANGES: Record<AuraChannel, AuraChannelRanges> = {
             { min: 1, max: 3 },
             { min: 3, max: 6 },
             { min: 5, max: 14 },
+        ],
+    },
+
+    // Tab buttons (Carrière / Journal des matchs) on the player page.
+    // Blue text-shadow chain, deliberately small so the two buttons do
+    // not overpower the page. Slider 1 is barely visible, slider 10 is
+    // a clear neon glow.
+    playerPageTabButton: {
+        layers: [
+            { min: 1, max: 2 },
+            { min: 2, max: 5 },
+            { min: 4, max: 10 },
         ],
     },
 };

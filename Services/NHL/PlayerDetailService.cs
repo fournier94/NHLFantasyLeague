@@ -117,9 +117,10 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .Take(RecentGameCount)
                 .ToList();
 
-            // Quarter boundaries: earliest and latest regular-season game
-            // dates across EVERY player in the league this season.
-            var seasonQuarters = await BuildSeasonQuartersAsync(
+            // Month boundaries: earliest and latest regular-season game
+            // dates across EVERY player in the league this season, then
+            // one row per calendar month that contains at least one game.
+            var seasonMonths = await BuildSeasonMonthsAsync(
                 player.Id,
                 currentSeason,
                 currentSeasonGames);
@@ -272,24 +273,27 @@ namespace NhlFantasyLeague.api.Services.NHL
                     })
                     .ToList(),
 
-                SeasonQuarters = seasonQuarters
+                SeasonMonths = seasonMonths
             };
         }
 
         // =================================================================
-        // Quarter helpers
+        // Months helpers
         // =================================================================
 
-        private async Task<List<QuarterDto>> BuildSeasonQuartersAsync(
-            int playerId,
-            Season? currentSeason,
-            List<PlayerGameLog> playerGames)
+        private async Task<List<MonthDto>> BuildSeasonMonthsAsync(
+    int playerId,
+    Season? currentSeason,
+    List<PlayerGameLog> playerGames)
         {
             if (currentSeason == null)
             {
-                return BuildEmptyQuarters();
+                return new List<MonthDto>();
             }
 
+            // Whole-league range: earliest and latest game date this
+            // season across every player, so all players' monthly rows
+            // line up on the same calendar months.
             var range = await _dbContext.PlayerGameLogs
                 .Where(g => g.SeasonId == currentSeason.Id)
                 .GroupBy(g => 1)
@@ -302,47 +306,55 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             if (range == null)
             {
-                return BuildEmptyQuarters();
+                return new List<MonthDto>();
             }
 
             var firstDate = range.First;
             var lastDate = range.Last;
 
-            var totalDays = lastDate.DayNumber - firstDate.DayNumber;
-
-            if (totalDays < 0)
+            if (lastDate < firstDate)
             {
-                return BuildEmptyQuarters();
+                return new List<MonthDto>();
             }
 
-            var daysPerQuarter = (totalDays + 1) / 4;
-
-            if (daysPerQuarter < 1)
+            // French month abbreviations, indexed 1..12. Used as the row
+            // label so the frontend gets a ready-to-display string.
+            var monthLabels = new[]
             {
-                daysPerQuarter = 1;
-            }
+                "", "Janv.", "Févr.", "Mars", "Avr.", "Mai", "Juin",
+                "Juil.", "Août", "Sept.", "Oct.", "Nov.", "Déc."
+            };
 
-            var quarters = new List<QuarterDto>();
+            var months = new List<MonthDto>();
 
-            for (var q = 0; q < 4; q++)
+            // Start at the first day of the first month, walk forward one
+            // calendar month at a time until we pass the last game date.
+            var cursor = new DateOnly(firstDate.Year, firstDate.Month, 1);
+
+            while (cursor <= lastDate)
             {
-                var startOffset = q * daysPerQuarter;
-                var endOffset = (q == 3)
-                    ? totalDays
-                    : Math.Min(totalDays, startOffset + daysPerQuarter - 1);
+                var monthStart = cursor;
+                var monthEnd = cursor.AddMonths(1).AddDays(-1);
 
-                var qStart = firstDate.AddDays(startOffset);
-                var qEnd = firstDate.AddDays(endOffset);
+                // Clip to the actual season range so the first and last
+                // months do not extend before/after any game was played.
+                var effectiveStart =
+                    monthStart < firstDate ? firstDate : monthStart;
+
+                var effectiveEnd =
+                    monthEnd > lastDate ? lastDate : monthEnd;
 
                 var games = playerGames
-                    .Where(g => g.GameDate >= qStart && g.GameDate <= qEnd)
+                    .Where(g =>
+                        g.GameDate >= effectiveStart &&
+                        g.GameDate <= effectiveEnd)
                     .ToList();
 
-                quarters.Add(new QuarterDto
+                months.Add(new MonthDto
                 {
-                    Label = $"Q{q + 1}",
-                    StartDate = qStart,
-                    EndDate = qEnd,
+                    Label = $"{monthLabels[cursor.Month]} {cursor.Year}",
+                    StartDate = effectiveStart,
+                    EndDate = effectiveEnd,
                     GamesPlayed = games.Count,
                     Goals = games.Sum(g => g.Goals),
                     Assists = games.Sum(g => g.Assists),
@@ -362,20 +374,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                     GoalsAgainst = games.Sum(g => g.GoalsAgainst),
                     FantasyPoints = games.Sum(g => g.FantasyPoints)
                 });
+
+                cursor = cursor.AddMonths(1);
             }
 
-            return quarters;
-        }
-
-        private static List<QuarterDto> BuildEmptyQuarters()
-        {
-            return new List<QuarterDto>
-            {
-                new() { Label = "Q1" },
-                new() { Label = "Q2" },
-                new() { Label = "Q3" },
-                new() { Label = "Q4" }
-            };
+            return months;
         }
 
         // =================================================================
@@ -417,6 +420,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                     r.GameTypeId == gameType &&
                     Classify(r.LeagueAbbreviation) == category)
                 .OrderByDescending(r => r.Season)
+                // Within the same season, put NHL rows on top, then the
+                // remaining leagues alphabetically.
+                .ThenByDescending(r => r.LeagueAbbreviation == "NHL")
                 .ThenBy(r => r.LeagueAbbreviation)
                 .Select(r => new CareerRowDto
                 {

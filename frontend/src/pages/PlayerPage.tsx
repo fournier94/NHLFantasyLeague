@@ -4,8 +4,8 @@ import {
     getPlayerDetail,
     type CareerRow,
     type GameLogRow,
+    type Month,
     type PlayerDetail,
-    type Quarter,
 } from '@/api/client';
 import { cn } from '@/lib/utils';
 import { useAura } from '@/lib/auraContext';
@@ -232,13 +232,6 @@ function teamAbbreviation(fullName: string | null | undefined): string {
     return NHL_TEAM_ABBREVIATIONS[fullName.trim()] ?? fullName;
 }
 
-/**
- * Reverse lookup: abbreviation -> full name. Built once from
- * NHL_TEAM_ABBREVIATIONS. When an abbreviation maps to more than one
- * full name (e.g. "UTA" can come from "Utah Mammoth" or "Utah Hockey
- * Club", "MTL" from accented or non-accented "Montreal Canadiens"),
- * the first-listed key wins, which is the modern name.
- */
 const NHL_TEAM_FULL_NAMES: Record<string, string> = (() => {
     const result: Record<string, string> = {};
 
@@ -374,18 +367,6 @@ function careerRowsForDisplay(
     return withCurrent.filter((r) => r.season >= cutoff);
 }
 
-/**
- * The synthetic current-season row inserted by careerRowsForDisplay has
- * teamName = null, so the Team cell would show "—" until the NHL stats
- * sync writes a real current-season row. Fill it in with the player's
- * CURRENT NHL team (from Player.NhlTeamId via the DTO), which is
- * correct even when the player changed teams during the offseason:
- * PlayerCareerStat rows reflect where he played games, but
- * Player.NhlTeamId is the live team on his profile.
- *
- * Only patches rows whose teamName is null, so real career rows are
- * never touched.
- */
 function withCurrentTeamName(
     rows: CareerRow[],
     currentTeamAbbreviation: string | null | undefined,
@@ -539,33 +520,25 @@ function sumHatTricks(rows: CareerRow[]): number | null {
     return rows.reduce((sum, r) => sum + (r.hatTricks ?? 0), 0);
 }
 
-function sumFantasyPoints(rows: CareerRow[]): number {
-    return rows.reduce(
-        (sum, r) => sum + r.points + (r.hatTricks ?? 0) * 2,
-        0,
-    );
-}
-
 // ---------------------------------------------------------------------
 // Table primitives
 // ---------------------------------------------------------------------
 
-const thBase = 'px-2 py-1 font-medium whitespace-nowrap';
-const thLeft = `${thBase} text-left`;
-const thRight = `${thBase} text-right`;
-const tdBase = 'px-2 py-0.5 whitespace-nowrap';
-const tdLeft = `${tdBase} text-left`;
-const tdRight = `${tdBase} text-right`;
+const thBase = 'px-1 py-1 font-medium whitespace-nowrap';
+const thLeft = `${thBase} text-center`;
+const thRight = `${thBase} text-center`;
+const tdBase = 'px-1 py-0.5 whitespace-nowrap';
+const tdLeft = `${tdBase} text-center`;
+const tdRight = `${tdBase} text-center`;
 
-// Season column: no right padding, so it hugs the Team column that
-// follows it.
-const thSeason = 'pl-2 pr-0 py-1 font-medium whitespace-nowrap text-left';
-const tdSeason = 'pl-2 pr-0 py-0.5 whitespace-nowrap text-left';
+const thSeason = 'pl-1 pr-0 py-1 font-medium whitespace-nowrap text-center';
+const tdSeason = 'pl-1 pr-0 py-0.5 whitespace-nowrap text-center';
 
-// Team column: reduced left padding, keeping the same visual weight on
-// its right side.
-const thTeam = 'pl-1 pr-2 py-1 font-medium whitespace-nowrap text-center';
-const tdTeam = 'pl-1 pr-2 py-0.5 whitespace-nowrap text-left';
+const thTeam = 'pl-0 pr-0 py-1 font-medium whitespace-nowrap text-center';
+const tdTeam = 'pl-0 pr-0 py-0.5 whitespace-nowrap text-center';
+
+const thLge = 'pl-0 pr-1 py-1 font-medium whitespace-nowrap text-center';
+const tdLge = 'pl-0 pr-1 py-0.5 whitespace-nowrap text-center';
 
 function TableShell({ children }: { children: React.ReactNode }) {
     return (
@@ -590,11 +563,6 @@ function rowClass(index: number): string {
     );
 }
 
-/**
- * Leagues that get the pale cyan tint. These are the "top" non-NHL
- * leagues the league cares about, so they're highlighted differently
- * from the long tail of junior/European/minor leagues.
- */
 const CYAN_TINT_LEAGUES = new Set([
     'AHL',
     'KHL',
@@ -602,14 +570,6 @@ const CYAN_TINT_LEAGUES = new Set([
     'SHL',
 ]);
 
-/**
- * Row background for career tables:
- *
- *   - NHL rows         -> alternating pattern (bg-transparent / bg-secondary/20)
- *   - Current season   -> handled separately via highlightCurrentSeason
- *   - AHL/KHL/Liiga/SHL -> pale cyan tint
- *   - Any other league -> pale green tint
- */
 function careerRowClass(row: CareerRow, index: number): string {
     if (isNhlRow(row)) {
         return rowClass(index);
@@ -638,7 +598,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 function SubSectionTitle({ children }: { children: React.ReactNode }) {
     return (
-        <h3 className='mb-1 text-center text-sm font-medium text-white'>
+        <h3 className='mb-1 text-center text-base font-medium text-white'>
             {children}
         </h3>
     );
@@ -687,11 +647,6 @@ function InjuryBadge({
 interface TotalsRowProps {
     regularSeason: boolean;
     showFantasyPoints?: boolean;
-    /**
-     * True when the surrounding table has a VOR column. The totals
-     * row shows "—" in that column (no career VOR is computed here),
-     * but the cell must exist so column alignment is preserved.
-     */
     showVor?: boolean;
     careerRows: CareerRow[];
     nhlTotals: PlayerDetail['nhlTotals'];
@@ -783,15 +738,9 @@ function TotalsRow({
                     {nhlTotals.points}
                 </td>
                 {showFantasyPoints && (
-                    // FP is not computed on the career totals row, but
-                    // the column exists in the table so the cell must
-                    // be present for alignment.
                     <td className={tdRight}>—</td>
                 )}
                 {showVor && (
-                    // VOR is not computed on the career totals row, but
-                    // the column exists in the table so the cell must
-                    // be present for alignment.
                     <td className={tdRight}>—</td>
                 )}
                 <td className={tdRight}>
@@ -852,18 +801,15 @@ function SkaterCareerTable({
     vor = 0,
     totalsRow = null,
     plainRows = false,
+    variant = 'default',
 }: {
     rows: CareerRow[];
     showFantasyPoints?: boolean;
     showVor?: boolean;
     vor?: number;
     totalsRow?: React.ReactNode;
-    /**
-     * When true, every row uses the default alternating background
-     * regardless of league. Used by Tournois, where the league-based
-     * tint does not apply.
-     */
     plainRows?: boolean;
+    variant?: 'default' | 'youthMinor';
 }) {
     if (rows.length === 0) {
         return (
@@ -875,31 +821,39 @@ function SkaterCareerTable({
         );
     }
 
+    const isYouthMinor = variant === 'youthMinor';
+
     return (
         <TableShell>
-            <table className='w-full min-w-[640px] text-[0.65rem] tabular-nums'>
+            <table className='w-full min-w-[620px] text-[0.65rem] tabular-nums'>
                 <TableHead>
                     <tr>
-                        <th className={thSeason}>Season</th>
+                        <th className={cn(thSeason, 'text-[0.5rem]')}>Season</th>
                         <th className={thTeam}>Team</th>
-                        <th className={thLeft}>Lge</th>
+                        <th className={thLge}>Lge</th>
                         <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
                         <th className={thRight}>G</th>
                         <th className={thRight}>A</th>
                         <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
-                        {showFantasyPoints && (
+                        {!isYouthMinor && showFantasyPoints && (
                             <th className={cn(thRight, 'font-bold text-[#D4AF37]')}>FP</th>
                         )}
-                        {showVor && (
+                        {!isYouthMinor && showVor && (
                             <th className={cn(thRight, 'font-bold text-foreground')}>VOR</th>
                         )}
-                        <th className={thRight}>3B</th>
+                        {!isYouthMinor && (
+                            <th className={thRight}>3B</th>
+                        )}
                         <th className={thRight}>PIM</th>
                         <th className={thRight}>+/-</th>
-                        <th className={thRight}>PPP</th>
-                        <th className={thRight}>SOG</th>
-                        <th className={thRight}>GWG</th>
                         <th className={thRight}>ATOI</th>
+                        {!isYouthMinor && (
+                            <>
+                                <th className={thRight}>PPP</th>
+                                <th className={thRight}>SOG</th>
+                                <th className={thRight}>GWG</th>
+                            </>
+                        )}
                     </tr>
                 </TableHead>
                 <tbody className='text-foreground'>
@@ -914,7 +868,7 @@ function SkaterCareerTable({
                         >
                             <td className={tdSeason}>{row.seasonLabel}</td>
                             <td className={tdTeam}>{teamDisplay(row)}</td>
-                            <td className={tdLeft}>{row.leagueAbbreviation}</td>
+                            <td className={tdLge}>{row.leagueAbbreviation}</td>
                             <td
                                 className={cn(
                                     tdRight,
@@ -937,7 +891,7 @@ function SkaterCareerTable({
                             >
                                 {row.points}
                             </td>
-                            {showFantasyPoints && (
+                            {!isYouthMinor && showFantasyPoints && (
                                 <td
                                     className={cn(
                                         tdRight,
@@ -951,7 +905,7 @@ function SkaterCareerTable({
                                         : row.points + row.hatTricks * 2}
                                 </td>
                             )}
-                            {showVor && (() => {
+                            {!isYouthMinor && showVor && (() => {
                                 if (row.hatTricks == null) {
                                     return <td className={tdRight}>—</td>;
                                 }
@@ -975,17 +929,23 @@ function SkaterCareerTable({
                                     </td>
                                 );
                             })()}
-                            <td className={tdRight}>
-                                {row.hatTricks == null ? '—' : row.hatTricks}
-                            </td>
+                            {!isYouthMinor && (
+                                <td className={tdRight}>
+                                    {row.hatTricks == null ? '—' : row.hatTricks}
+                                </td>
+                            )}
                             <td className={tdRight}>{row.penaltyMinutes}</td>
                             <td className={tdRight}>
                                 {row.plusMinus > 0 ? `+${row.plusMinus}` : row.plusMinus}
                             </td>
-                            <td className={tdRight}>{row.powerPlayPoints}</td>
-                            <td className={tdRight}>{row.shots}</td>
-                            <td className={tdRight}>{row.gameWinningGoals}</td>
                             <td className={tdRight}>{row.averageTimeOnIce ?? '—'}</td>
+                            {!isYouthMinor && (
+                                <>
+                                    <td className={tdRight}>{row.powerPlayPoints}</td>
+                                    <td className={tdRight}>{row.shots}</td>
+                                    <td className={tdRight}>{row.gameWinningGoals}</td>
+                                </>
+                            )}
                         </tr>
                     ))}
                     {totalsRow}
@@ -999,15 +959,12 @@ function GoalieCareerTable({
     rows,
     totalsRow = null,
     plainRows = false,
+    variant = 'default',
 }: {
     rows: CareerRow[];
     totalsRow?: React.ReactNode;
-    /**
-     * When true, every row uses the default alternating background
-     * regardless of league. Used by Tournois, where the league-based
-     * tint does not apply.
-     */
     plainRows?: boolean;
+    variant?: 'default' | 'youthMinor';
 }) {
     if (rows.length === 0) {
         return (
@@ -1019,6 +976,8 @@ function GoalieCareerTable({
         );
     }
 
+    const isYouthMinor = variant === 'youthMinor';
+
     return (
         <TableShell>
             <table className='w-full min-w-[600px] text-[0.7rem] tabular-nums'>
@@ -1026,16 +985,20 @@ function GoalieCareerTable({
                     <tr>
                         <th className={thSeason}>Season</th>
                         <th className={thTeam}>Team</th>
-                        <th className={thLeft}>Lge</th>
+                        <th className={thLge}>Lge</th>
                         <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
-                        <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>W</th>
-                        <th className={thRight}>L</th>
-                        <th className={thRight}>OTL</th>
-                        <th className={thRight}>SO</th>
-                        <th className={thRight}>SV%</th>
-                        <th className={thRight}>GAA</th>
-                        <th className={thRight}>SV</th>
-                        <th className={thRight}>SA</th>
+                        {!isYouthMinor && (
+                            <>
+                                <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>W</th>
+                                <th className={thRight}>L</th>
+                                <th className={thRight}>OTL</th>
+                                <th className={thRight}>SO</th>
+                                <th className={thRight}>SV%</th>
+                                <th className={thRight}>GAA</th>
+                                <th className={thRight}>SV</th>
+                                <th className={thRight}>SA</th>
+                            </>
+                        )}
                     </tr>
                 </TableHead>
                 <tbody className='text-foreground'>
@@ -1050,7 +1013,7 @@ function GoalieCareerTable({
                         >
                             <td className={tdSeason}>{row.seasonLabel}</td>
                             <td className={tdTeam}>{teamDisplay(row)}</td>
-                            <td className={tdLeft}>{row.leagueAbbreviation}</td>
+                            <td className={tdLge}>{row.leagueAbbreviation}</td>
                             <td
                                 className={cn(
                                     tdRight,
@@ -1061,27 +1024,31 @@ function GoalieCareerTable({
                             >
                                 {row.gamesPlayed}
                             </td>
-                            <td
-                                className={cn(
-                                    tdRight,
-                                    isNhlRow(row)
-                                        ? 'text-[#00F0FF]'
-                                        : 'text-foreground',
-                                )}
-                            >
-                                {row.wins}
-                            </td>
-                            <td className={tdRight}>{row.losses}</td>
-                            <td className={tdRight}>{row.overtimeLosses}</td>
-                            <td className={tdRight}>{row.shutouts}</td>
-                            <td className={tdRight}>
-                                {formatDecimal(row.savePercentage, 3)}
-                            </td>
-                            <td className={tdRight}>
-                                {formatDecimal(row.goalsAgainstAverage, 2)}
-                            </td>
-                            <td className={tdRight}>{row.saves}</td>
-                            <td className={tdRight}>{row.shotsAgainst}</td>
+                            {!isYouthMinor && (
+                                <>
+                                    <td
+                                        className={cn(
+                                            tdRight,
+                                            isNhlRow(row)
+                                                ? 'text-[#00F0FF]'
+                                                : 'text-foreground',
+                                        )}
+                                    >
+                                        {row.wins}
+                                    </td>
+                                    <td className={tdRight}>{row.losses}</td>
+                                    <td className={tdRight}>{row.overtimeLosses}</td>
+                                    <td className={tdRight}>{row.shutouts}</td>
+                                    <td className={tdRight}>
+                                        {formatDecimal(row.savePercentage, 3)}
+                                    </td>
+                                    <td className={tdRight}>
+                                        {formatDecimal(row.goalsAgainstAverage, 2)}
+                                    </td>
+                                    <td className={tdRight}>{row.saves}</td>
+                                    <td className={tdRight}>{row.shotsAgainst}</td>
+                                </>
+                            )}
                         </tr>
                     ))}
                     {totalsRow}
@@ -1127,7 +1094,7 @@ function GameLogTable({
                             <>
                                 <th className={thRight}>B</th>
                                 <th className={thRight}>A</th>
-                                    <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
+                                <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
                                 <th className={thRight}>PIM</th>
                                 <th className={thRight}>+/-</th>
                                 <th className={thRight}>SOG</th>
@@ -1175,7 +1142,7 @@ function GameLogTable({
                                     <>
                                         <td className={tdRight}>{game.goals}</td>
                                         <td className={tdRight}>{game.assists}</td>
-                                            <td className={cn(tdRight, 'text-[#00F0FF]')}>{game.points}</td>
+                                        <td className={cn(tdRight, 'text-[#00F0FF]')}>{game.points}</td>
                                         <td className={tdRight}>
                                             {game.penaltyMinutes}
                                         </td>
@@ -1199,16 +1166,14 @@ function GameLogTable({
     );
 }
 
-function QuarterTable({
-    quarters,
+function MonthTable({
+    months,
     isGoalie,
 }: {
-    quarters: Quarter[];
+    months: Month[];
     isGoalie: boolean;
 }) {
-    const rows = quarters.length === 4 ? quarters : [];
-
-    if (rows.length === 0) {
+    if (months.length === 0) {
         return null;
     }
 
@@ -1220,7 +1185,7 @@ function QuarterTable({
             <table className='w-full min-w-[480px] text-xs tabular-nums'>
                 <TableHead>
                     <tr>
-                        <th className={thLeft}>Quart</th>
+                        <th className={thLeft}>Mois</th>
                         <th className={thLeft}>Dates</th>
                         {isGoalie ? (
                             <>
@@ -1237,7 +1202,7 @@ function QuarterTable({
                                 <th className={cn(thRight, 'text-[#7DD3FC]')}>GP</th>
                                 <th className={thRight}>B</th>
                                 <th className={thRight}>A</th>
-                                    <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
+                                <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
                                 <th className={thRight}>PIM</th>
                                 <th className={thRight}>+/-</th>
                                 <th className={thRight}>SOG</th>
@@ -1247,73 +1212,73 @@ function QuarterTable({
                     </tr>
                 </TableHead>
                 <tbody className='text-foreground'>
-                    {rows.map((q, index) => {
-                        const hasGames = q.gamesPlayed > 0;
+                    {months.map((m, index) => {
+                        const hasGames = m.gamesPlayed > 0;
 
                         const dates =
-                            q.startDate && q.endDate
-                                ? `${shortGameDate(q.startDate)} – ${shortGameDate(q.endDate)}`
+                            m.startDate && m.endDate
+                                ? `${shortGameDate(m.startDate)} – ${shortGameDate(m.endDate)}`
                                 : '—';
 
                         return (
-                            <tr key={q.label} className={rowClass(index)}>
-                                <td className={tdLeft}>{q.label}</td>
+                            <tr key={`${m.label}-${index}`} className={rowClass(index)}>
+                                <td className={tdLeft}>{m.label}</td>
                                 <td className={`${tdLeft} text-muted-foreground`}>
                                     {dates}
                                 </td>
                                 {isGoalie ? (
                                     <>
                                         <td className={cn(tdRight, 'text-[#7DD3FC]')}>
-                                            {cell(q.gamesPlayed, hasGames)}
+                                            {cell(m.gamesPlayed, hasGames)}
                                         </td>
                                         <td className={cn(tdRight, 'text-[#00F0FF]')}>
-                                            {cell(q.wins, hasGames)}
+                                            {cell(m.wins, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.losses, hasGames)}
+                                            {cell(m.losses, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.overtimeLosses, hasGames)}
+                                            {cell(m.overtimeLosses, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.shutouts, hasGames)}
+                                            {cell(m.shutouts, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.saves, hasGames)}
+                                            {cell(m.saves, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.fantasyPoints, hasGames)}
+                                            {cell(m.fantasyPoints, hasGames)}
                                         </td>
                                     </>
                                 ) : (
                                     <>
                                         <td className={cn(tdRight, 'text-[#7DD3FC]')}>
-                                            {cell(q.gamesPlayed, hasGames)}
+                                            {cell(m.gamesPlayed, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.goals, hasGames)}
+                                            {cell(m.goals, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.assists, hasGames)}
+                                            {cell(m.assists, hasGames)}
                                         </td>
-                                            <td className={cn(tdRight, 'text-[#00F0FF]')}>
-                                            {cell(q.points, hasGames)}
+                                        <td className={cn(tdRight, 'text-[#00F0FF]')}>
+                                            {cell(m.points, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.penaltyMinutes, hasGames)}
+                                            {cell(m.penaltyMinutes, hasGames)}
                                         </td>
                                         <td className={tdRight}>
                                             {hasGames
-                                                ? q.plusMinus > 0
-                                                    ? `+${q.plusMinus}`
-                                                    : q.plusMinus
+                                                ? m.plusMinus > 0
+                                                    ? `+${m.plusMinus}`
+                                                    : m.plusMinus
                                                 : '—'}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.shots, hasGames)}
+                                            {cell(m.shots, hasGames)}
                                         </td>
                                         <td className={tdRight}>
-                                            {cell(q.fantasyPoints, hasGames)}
+                                            {cell(m.fantasyPoints, hasGames)}
                                         </td>
                                     </>
                                 )}
@@ -1338,15 +1303,16 @@ export default function PlayerPage() {
     const [player, setPlayer] = useState<PlayerDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [showYouthMinor, setShowYouthMinor] = useState(false);
     const [showGameLog, setShowGameLog] = useState(false);
     const [showInjuryDetails, setShowInjuryDetails] = useState(false);
+    const [activeTab, setActiveTab] = useState<'career' | 'journal'>('career');
 
     const injuryPanelRef = useRef<HTMLDivElement>(null);
     const injuryScrollOnOpenRef = useRef(false);
 
     const closeAura = useAura('playerPageCloseButton');
     const pageTeamLogoAura = useAura('playerPageTeamLogo');
+    const tabAura = useAura('playerPageTabButton');
 
     useEffect(() => {
         const state = location.state as
@@ -1442,6 +1408,21 @@ export default function PlayerPage() {
         `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 3).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
     ].join(', ');
 
+    // Tab button aura: a small blue text-shadow chain applied to both
+    // tab buttons so their labels get a subtle neon glow. The two
+    // endpoints are close, giving the pulse a gentle breathing motion.
+    const tabRest = [
+        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 0).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
+        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 1).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
+        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 2).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
+    ].join(', ');
+
+    const tabPeak = [
+        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 0).toFixed(2)}px rgba(0, 168, 255, 1)`,
+        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 1).toFixed(2)}px rgba(0, 168, 255, 0.75)`,
+        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 2).toFixed(2)}px rgba(0, 168, 255, 0.45)`,
+    ].join(', ');
+
     const pageTeamLogoColor = getNhlTeamColor(
         player?.nhlTeamAbbreviation ?? undefined,
     );
@@ -1468,6 +1449,17 @@ export default function PlayerPage() {
             ? auraPulseStyle(closeRest, closePeak)
             : {}),
     } as React.CSSProperties;
+
+    // Both tab buttons share the same glow class/style. The aura is a
+    // text-shadow on the button's text content, so it does not affect
+    // the border/background box.
+    const tabButtonAuraClass =
+        !isAuraOff(tabAura) ? auraPulseClass('text') : '';
+
+    const tabButtonAuraStyle =
+        !isAuraOff(tabAura)
+            ? auraPulseStyle(tabRest, tabPeak)
+            : undefined;
 
     function CloseButtonLayer() {
         return (
@@ -1870,222 +1862,272 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                <div className='grid grid-cols-1 gap-y-4 md:grid-cols-2 md:gap-x-1'>
-                    <div>
-                        <div>
-                            <SubSectionTitle>Saison régulière</SubSectionTitle>
-                            {isGoalie ? (
-                                <GoalieCareerTable
-                                    rows={combineNhlSeasonRows(
-                                        withCurrentTeamName(
-                                            careerRowsForDisplay(
-                                                player.regularSeason,
-                                                true,
-                                                true,
-                                            ),
-                                            player.nhlTeamAbbreviation,
-                                        ),
-                                    )}
-                                    totalsRow={
-                                        hasNhlTotals ? (
-                                            <TotalsRow
-                                                regularSeason
-                                                careerRows={player.regularSeason}
-                                                nhlTotals={player.nhlTotals}
-                                                isGoalie
-                                            />
-                                        ) : null
-                                    }
-                                />
-                            ) : (
-                                    <SkaterCareerTable
-                                        rows={combineNhlSeasonRows(
-                                            withCurrentTeamName(
-                                                careerRowsForDisplay(
-                                                    player.regularSeason,
-                                                    true,
-                                                    true,
-                                                ),
-                                                player.nhlTeamAbbreviation,
-                                            ),
-                                        )}
-                                        showFantasyPoints
-                                        showVor
-                                        vor={vor}
-                                    totalsRow={
-                                        hasNhlTotals ? (
-                                            <TotalsRow
-                                                regularSeason
-                                                showFantasyPoints
-                                                showVor
-                                                careerRows={player.regularSeason}
-                                                nhlTotals={player.nhlTotals}
-                                                isGoalie={false}
-                                            />
-                                        ) : null
-                                    }
-                                />
-                            )}
-                        </div>
-                    </div>
+                <div className='mt-6 flex justify-center gap-3'>
+                    <button
+                        type='button'
+                        onClick={() => setActiveTab('career')}
+                        className={cn(
+                            'cursor-pointer rounded-md px-5 py-2 text-base font-semibold transition-colors duration-200 focus:outline-none focus-visible:outline-none focus-visible:ring-0',
+                            activeTab === 'career' && !isAuraOff(tabAura)
+                                ? tabButtonAuraClass
+                                : '[text-shadow:none]',
+                            activeTab === 'career'
+                                ? isAuraOff(tabAura)
+                                    ? 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-none'
+                                    : 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-[0_0_6px_rgba(255,255,255,0.9),0_0_12px_rgba(0,168,255,0.9),0_0_24px_rgba(0,168,255,0.55),0_0_48px_rgba(0,168,255,0.3),inset_0_0_8px_rgba(0,168,255,0.25)]'
+                                : 'border border-border bg-transparent text-muted-foreground shadow-none hover:border-[#00A8FF]/60 hover:text-[#F2F5FA]',
+                        )}
+                        style={
+                            activeTab === 'career' && !isAuraOff(tabAura)
+                                ? tabButtonAuraStyle
+                                : undefined
+                        }
+                    >
+                        Carrière
+                    </button>
 
-                    <div>
-                        <div>
-                            <SubSectionTitle>Séries</SubSectionTitle>
-                            {isGoalie ? (
-                                <GoalieCareerTable
-                                    rows={careerRowsForDisplay(
-                                        player.playoffs,
-                                        true,
-                                        false,
-                                    )}
-                                    totalsRow={
-                                        hasNhlTotals ? (
-                                            <TotalsRow
-                                                regularSeason={false}
-                                                careerRows={player.playoffs}
-                                                nhlTotals={player.nhlTotals}
-                                                isGoalie
-                                            />
-                                        ) : null
-                                    }
-                                />
-                            ) : (
-                                    <SkaterCareerTable
-                                        rows={careerRowsForDisplay(
-                                            player.playoffs,
-                                            true,
-                                            false,
-                                        )}
-                                    totalsRow={
-                                        hasNhlTotals ? (
-                                            <TotalsRow
-                                                regularSeason={false}
-                                                careerRows={player.playoffs}
-                                                nhlTotals={player.nhlTotals}
-                                                isGoalie={false}
-                                            />
-                                        ) : null
-                                    }
-                                />
-                            )}
-                        </div>
-                    </div>
+                    <button
+                        type='button'
+                        onClick={() => setActiveTab('journal')}
+                        className={cn(
+                            'cursor-pointer rounded-md px-5 py-2 text-base font-semibold transition-colors duration-200 focus:outline-none focus-visible:outline-none focus-visible:ring-0',
+                            activeTab === 'journal' && !isAuraOff(tabAura)
+                                ? tabButtonAuraClass
+                                : '[text-shadow:none]',
+                            activeTab === 'journal'
+                                ? isAuraOff(tabAura)
+                                    ? 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-none'
+                                    : 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-[0_0_6px_rgba(255,255,255,0.9),0_0_12px_rgba(0,168,255,0.9),0_0_24px_rgba(0,168,255,0.55),0_0_48px_rgba(0,168,255,0.3),inset_0_0_8px_rgba(0,168,255,0.25)]'
+                                : 'border border-border bg-transparent text-muted-foreground shadow-none hover:border-[#00A8FF]/60 hover:text-[#F2F5FA]',
+                        )}
+                        style={
+                            activeTab === 'journal' && !isAuraOff(tabAura)
+                                ? tabButtonAuraStyle
+                                : undefined
+                        }
+                    >
+                        Game logs
+                    </button>
                 </div>
 
-                {player.seasonQuarters.length === 4 && (
+                {activeTab === 'career' && (
                     <>
-                        <SectionTitle>
-                            Par quart (saison courante)
-                        </SectionTitle>
-                        <QuarterTable
-                            quarters={player.seasonQuarters}
-                            isGoalie={isGoalie}
-                        />
+                        <div className='grid grid-cols-1 gap-y-4 md:grid-cols-2 md:gap-x-1'>
+                            <div>
+                                <div>
+                                    <SubSectionTitle>Saison régulière</SubSectionTitle>
+                                    {isGoalie ? (
+                                        <GoalieCareerTable
+                                            rows={combineNhlSeasonRows(
+                                                withCurrentTeamName(
+                                                    careerRowsForDisplay(
+                                                        player.regularSeason,
+                                                        true,
+                                                        true,
+                                                    ),
+                                                    player.nhlTeamAbbreviation,
+                                                ),
+                                            )}
+                                            totalsRow={
+                                                hasNhlTotals ? (
+                                                    <TotalsRow
+                                                        regularSeason
+                                                        careerRows={player.regularSeason}
+                                                        nhlTotals={player.nhlTotals}
+                                                        isGoalie
+                                                    />
+                                                ) : null
+                                            }
+                                        />
+                                    ) : (
+                                        <SkaterCareerTable
+                                            rows={combineNhlSeasonRows(
+                                                withCurrentTeamName(
+                                                    careerRowsForDisplay(
+                                                        player.regularSeason,
+                                                        true,
+                                                        true,
+                                                    ),
+                                                    player.nhlTeamAbbreviation,
+                                                ),
+                                            )}
+                                            showFantasyPoints
+                                            showVor
+                                            vor={vor}
+                                            totalsRow={
+                                                hasNhlTotals ? (
+                                                    <TotalsRow
+                                                        regularSeason
+                                                        showFantasyPoints
+                                                        showVor
+                                                        careerRows={player.regularSeason}
+                                                        nhlTotals={player.nhlTotals}
+                                                        isGoalie={false}
+                                                    />
+                                                ) : null
+                                            }
+                                        />
+                                    )}
+                                </div>
+                            </div>
+
+                            <div>
+                                <div>
+                                    <SubSectionTitle>Séries</SubSectionTitle>
+                                    {isGoalie ? (
+                                        <GoalieCareerTable
+                                            rows={careerRowsForDisplay(
+                                                player.playoffs,
+                                                true,
+                                                false,
+                                            )}
+                                            totalsRow={
+                                                hasNhlTotals ? (
+                                                    <TotalsRow
+                                                        regularSeason={false}
+                                                        careerRows={player.playoffs}
+                                                        nhlTotals={player.nhlTotals}
+                                                        isGoalie
+                                                    />
+                                                ) : null
+                                            }
+                                        />
+                                    ) : (
+                                        <SkaterCareerTable
+                                            rows={careerRowsForDisplay(
+                                                player.playoffs,
+                                                true,
+                                                false,
+                                            )}
+                                            totalsRow={
+                                                hasNhlTotals ? (
+                                                    <TotalsRow
+                                                        regularSeason={false}
+                                                        careerRows={player.playoffs}
+                                                        nhlTotals={player.nhlTotals}
+                                                        isGoalie={false}
+                                                    />
+                                                ) : null
+                                            }
+                                        />
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <SubSectionTitle>Tournois</SubSectionTitle>
+                        {isGoalie ? (
+                            <GoalieCareerTable rows={player.tournaments} plainRows />
+                        ) : (
+                            <SkaterCareerTable rows={player.tournaments} plainRows />
+                        )}
+
+                        <div className='mt-6'>
+                            <SubSectionTitle>Youth / Minor</SubSectionTitle>
+                            {isGoalie ? (
+                                <GoalieCareerTable
+                                    rows={player.youthMinor}
+                                    variant='youthMinor'
+                                />
+                            ) : (
+                                <SkaterCareerTable
+                                    rows={player.youthMinor}
+                                    variant='youthMinor'
+                                />
+                            )}
+                        </div>
+
+                        <SectionTitle>Historique des blessures</SectionTitle>
+
+                        {player.injuryHistory.length === 0 ? (
+                            <p className='text-sm text-muted-foreground'>
+                                Aucune blessure enregistrée.
+                            </p>
+                        ) : (
+                            <TableShell>
+                                <table className='w-full min-w-[640px] text-xs tabular-nums'>
+                                    <TableHead>
+                                        <tr>
+                                            <th className={thLeft}>Statut</th>
+                                            <th className={thLeft}>Équipe</th>
+                                            <th className={thLeft}>Vue le</th>
+                                            <th className={thLeft}>
+                                                Dernière vue
+                                            </th>
+                                            <th className={thLeft}>Résolue le</th>
+                                            <th className={thLeft}>Note</th>
+                                        </tr>
+                                    </TableHead>
+                                    <tbody className='text-foreground'>
+                                        {player.injuryHistory.map((spell, index) => (
+                                            <tr
+                                                key={`${spell.firstSeenAt}-${index}`}
+                                                className={rowClass(index)}
+                                            >
+                                                <td className={tdLeft}>
+                                                    {spell.injuryStatus}
+                                                </td>
+                                                <td className={tdLeft}>
+                                                    {spell.teamAbbreviation}
+                                                </td>
+                                                <td className={tdLeft}>
+                                                    {shortDate(spell.firstSeenAt)}
+                                                </td>
+                                                <td className={tdLeft}>
+                                                    {shortDate(spell.lastSeenAt)}
+                                                </td>
+                                                <td className={tdLeft}>
+                                                    {spell.resolvedAt
+                                                        ? shortDate(spell.resolvedAt)
+                                                        : 'En cours'}
+                                                </td>
+                                                <td
+                                                    className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
+                                                >
+                                                    {spell.injuryDescription ?? '—'}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </TableShell>
+                        )}
                     </>
                 )}
 
-                <SectionTitle>Fiches de match</SectionTitle>
-                <button
-                    type='button'
-                    onClick={() => setShowGameLog((v) => !v)}
-                    className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
-                >
-                    {showGameLog ? '▼ Masquer' : '▶ Afficher'} les fiches
-                    de match
-                </button>
+                {activeTab === 'journal' && (
+                    <>
+                        {player.seasonMonths.length > 0 && (
+                            <>
+                                <SectionTitle>
+                                    Par mois (saison courante)
+                                </SectionTitle>
+                                <MonthTable
+                                    months={player.seasonMonths}
+                                    isGoalie={isGoalie}
+                                />
+                            </>
+                        )}
 
-                {showGameLog && (
-                    <div className='mt-3'>
-                        <GameLogTable
-                            rows={player.recentGames}
-                            isGoalie={isGoalie}
-                        />
-                    </div>
-                )}
+                        <SectionTitle>Fiches de match</SectionTitle>
+                        <button
+                            type='button'
+                            onClick={() => setShowGameLog((v) => !v)}
+                            className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
+                        >
+                            {showGameLog ? '▼ Masquer' : '▶ Afficher'} les fiches
+                            de match
+                        </button>
 
-                <SectionTitle>Tournois</SectionTitle>
-                {isGoalie ? (
-                    <GoalieCareerTable rows={player.tournaments} plainRows />
-                ) : (
-                    <SkaterCareerTable rows={player.tournaments} plainRows />
-                )}
-
-                <div className='mt-6'>
-                    <button
-                        type='button'
-                        onClick={() => setShowYouthMinor((v) => !v)}
-                        className='cursor-pointer text-sm font-semibold text-primary hover:underline'
-                    >
-                        {showYouthMinor ? '▼' : '▶'} Youth / Minor (
-                        {player.youthMinor.length})
-                    </button>
-
-                    {showYouthMinor && (
-                        <div className='mt-2'>
-                            {isGoalie ? (
-                                <GoalieCareerTable rows={player.youthMinor} />
-                            ) : (
-                                <SkaterCareerTable rows={player.youthMinor} />
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                <SectionTitle>Historique des blessures</SectionTitle>
-
-                {player.injuryHistory.length === 0 ? (
-                    <p className='text-sm text-muted-foreground'>
-                        Aucune blessure enregistrée.
-                    </p>
-                ) : (
-                    <TableShell>
-                        <table className='w-full min-w-[640px] text-xs tabular-nums'>
-                            <TableHead>
-                                <tr>
-                                    <th className={thLeft}>Statut</th>
-                                    <th className={thLeft}>Équipe</th>
-                                    <th className={thLeft}>Vue le</th>
-                                    <th className={thLeft}>
-                                        Dernière vue
-                                    </th>
-                                    <th className={thLeft}>Résolue le</th>
-                                    <th className={thLeft}>Note</th>
-                                </tr>
-                            </TableHead>
-                            <tbody className='text-foreground'>
-                                {player.injuryHistory.map((spell, index) => (
-                                    <tr
-                                        key={`${spell.firstSeenAt}-${index}`}
-                                        className={rowClass(index)}
-                                    >
-                                        <td className={tdLeft}>
-                                            {spell.injuryStatus}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {spell.teamAbbreviation}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {shortDate(spell.firstSeenAt)}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {shortDate(spell.lastSeenAt)}
-                                        </td>
-                                        <td className={tdLeft}>
-                                            {spell.resolvedAt
-                                                ? shortDate(spell.resolvedAt)
-                                                : 'En cours'}
-                                        </td>
-                                        <td
-                                            className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
-                                        >
-                                            {spell.injuryDescription ?? '—'}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </TableShell>
+                        {showGameLog && (
+                            <div className='mt-3'>
+                                <GameLogTable
+                                    rows={player.recentGames}
+                                    isGoalie={isGoalie}
+                                />
+                            </div>
+                        )}
+                    </>
                 )}
             </section>
         </>

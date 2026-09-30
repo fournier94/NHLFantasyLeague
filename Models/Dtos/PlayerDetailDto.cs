@@ -123,12 +123,12 @@
         public List<GameLogRowDto> RecentGames { get; set; } = new();
 
         /// <summary>
-        /// Four rows, one per calendar quarter of the regular season.
-        /// The quarter boundaries are computed from the earliest and
-        /// latest regular-season game dates across the whole league.
-        /// Quarters with no games are still returned, with zeros.
+        /// One row per calendar month of the regular season. The months
+        /// are derived from the earliest and latest regular-season game
+        /// dates across the whole league, so every player's monthly rows
+        /// line up on the same calendar months.
         /// </summary>
-        public List<QuarterDto> SeasonQuarters { get; set; } = new();
+        public List<MonthDto> SeasonMonths { get; set; } = new();
     }
 
     /// <summary>
@@ -227,21 +227,22 @@
     }
 
     /// <summary>
-    /// Aggregated stats for one quarter of the regular season. Carries
-    /// both skater and goalie fields; the frontend picks which to show.
+    /// Aggregated stats for one calendar month of the regular season.
+    /// Carries both skater and goalie fields; the frontend picks which
+    /// to show.
     /// </summary>
-    public class QuarterDto
+    public class MonthDto
     {
-        /// <summary>"Q1" / "Q2" / "Q3" / "Q4".</summary>
+        /// <summary>Short month label, e.g. "Oct.", "Nov.", "Févr.".</summary>
         public string Label { get; set; } = string.Empty;
 
-        /// <summary>First day of the quarter.</summary>
+        /// <summary>First day of the month.</summary>
         public DateOnly StartDate { get; set; }
 
-        /// <summary>Last day of the quarter (inclusive).</summary>
+        /// <summary>Last day of the month (inclusive).</summary>
         public DateOnly EndDate { get; set; }
 
-        /// <summary>Games the player played in this quarter.</summary>
+        /// <summary>Games the player played in this month.</summary>
         public int GamesPlayed { get; set; }
 
         // Skater fields
@@ -258,15 +259,11 @@
         public int OvertimeLosses { get; set; }
         public int Shutouts { get; set; }
         public int Saves { get; set; }
-        /// <summary>
-        /// Save percentage across all NHL regular-season games, computed
-        /// as Saves / ShotsAgainst. Zero when ShotsAgainst is zero.
-        /// </summary>
         public decimal SavePercentage { get; set; }
         public int ShotsAgainst { get; set; }
         public int GoalsAgainst { get; set; }
 
-        /// <summary>Fantasy points scored in this quarter.</summary>
+        /// <summary>Fantasy points scored in this month.</summary>
         public int FantasyPoints { get; set; }
     }
 

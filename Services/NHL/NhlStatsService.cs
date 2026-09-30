@@ -26,8 +26,8 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// landing page. Used by the batch population.
         /// </summary>
         public async Task<int> UpsertFantasySeasonStatAsync(
-            Player player,
-            NhlPlayerResponse nhlPlayer)
+    Player player,
+    NhlPlayerResponse nhlPlayer)
         {
             var featured = nhlPlayer.FeaturedStats;
 
@@ -77,13 +77,34 @@ namespace NhlFantasyLeague.api.Services.NHL
                 _dbContext.PlayerSeasonStats.Add(existing);
             }
 
+            // Regular-season totals, sourced from the landing page.
             existing.GamesPlayed = stats.GamesPlayed;
             existing.Goals = stats.Goals;
             existing.Assists = stats.Assists;
             existing.Points = points;
+            existing.PlusMinus = stats.PlusMinus;
+            existing.PenaltyMinutes = stats.PenaltyMinutes;
+            existing.PowerPlayGoals = stats.PowerPlayGoals;
+            existing.PowerPlayPoints = stats.PowerPlayPoints;
+            existing.GameWinningGoals = stats.GameWinningGoals;
+            existing.Shots = stats.Shots;
+            existing.ShootingPercentage = stats.ShootingPercentage;
+
+            // Goalie totals.
             existing.Wins = stats.Wins;
+            existing.Losses = stats.Losses;
             existing.OvertimeLosses = stats.OvertimeLosses;
             existing.Shutouts = stats.Shutouts;
+            existing.Saves = stats.Saves;
+            existing.ShotsAgainst = stats.ShotsAgainst;
+            existing.SavePercentage = stats.SavePercentage;
+            existing.GoalsAgainst = stats.GoalsAgainst;
+            existing.GoalsAgainstAverage = stats.GoalsAgainstAverage;
+
+            // FantasyPoints and HatTricks are NOT written here. They are
+            // owned by UpdatePlayerSeasonStatsAsync, which computes them
+            // from PlayerGameLog rows. Keeping the writers separated means
+            // re-running either one never clobbers the other.
 
             await _dbContext.SaveChangesAsync();
 

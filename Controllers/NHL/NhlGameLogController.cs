@@ -104,6 +104,41 @@ int season)
         }
 
         /// <summary>
+        /// Refreshes the current season's regular-season game logs for
+        /// every player in the database and recomputes their
+        /// PlayerSeasonStat row for that season.
+        ///
+        /// Idempotent: re-running this never creates duplicate game logs
+        /// (the upsert is keyed on NhlGameId) and never creates duplicate
+        /// season-stat rows (keyed on PlayerId + SeasonId).
+        ///
+        /// Call it as often as you want during the season. Existing games
+        /// are refreshed, new games are appended, and the season totals
+        /// are recomputed from the full set of logs.
+        ///
+        /// Default delay: 500 ms between players.
+        /// </summary>
+        [HttpPost("season/{season}/refresh-all")]
+        public async Task<IActionResult> RefreshCurrentSeasonForAllPlayers(
+            int season,
+            [FromQuery] int delayMsBetweenPlayers = 500,
+            CancellationToken ct = default)
+        {
+            if (delayMsBetweenPlayers < 0)
+            {
+                delayMsBetweenPlayers = 0;
+            }
+
+            var result =
+                await _nhlGameLogService.RefreshCurrentSeasonForAllPlayersAsync(
+                    season,
+                    delayMsBetweenPlayers,
+                    ct);
+
+            return Ok(result);
+        }
+
+        /// <summary>
         /// Backfills the hat-trick count on every NHL PlayerCareerStat row
         /// in the database, by fetching the NHL game log for each
         /// (player, season, game type) triple and counting the games with
