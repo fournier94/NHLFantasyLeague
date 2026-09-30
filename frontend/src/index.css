@@ -191,15 +191,15 @@
 }
 
 .aura-pulse-text {
-    animation: aura-pulse-text 2.5s ease-in-out infinite alternate;
+    animation: aura-pulse-text 3.9s ease-in-out infinite alternate;
 }
 
 .aura-pulse-filter {
-    animation: aura-pulse-filter 2.5s ease-in-out infinite alternate;
+    animation: aura-pulse-filter 3.9s ease-in-out infinite alternate;
 }
 
 .aura-pulse-box {
-    animation: aura-pulse-box 2.5s ease-in-out infinite alternate;
+    animation: aura-pulse-box 3.9s ease-in-out infinite alternate;
 }
 
 /* Mobile page title font only; the glow comes from JS. */

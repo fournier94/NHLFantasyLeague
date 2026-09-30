@@ -15,6 +15,8 @@ import {
     auraPulseStyle,
     auraRangeFor,
     isAuraOff,
+    AURA_STRIP_PULSE_REST_SCALE,
+    AURA_STRIP_PULSE_PEAK_SCALE,
 } from '@/lib/auraConfig';
 import { getNhlTeamColor } from '@/lib/nhlTeamColors';
 import ReactCountryFlag from 'react-country-flag';
@@ -133,6 +135,47 @@ function displayPosition(position: string): string {
         default:
             return position;
     }
+}
+
+/**
+ * Given a player's draft year (e.g. 2019), returns the season code of
+ * the boundary below which the draft line should be drawn.
+ *
+ * If the player was drafted in 2019, the line goes between the 2019-20
+ * season and the 2018-19 season, i.e. right below the 2018-19 row and
+ * right above the 2019-20 row. We return the 2019-20 season code, and
+ * every row whose season is STRICTLY LOWER than it goes below the line.
+ */
+function draftedBoundarySeason(draftYear: number): number {
+    // The season that starts the year he was drafted: 2019 -> 20192020
+    return draftYear * 10000 + (draftYear + 1);
+}
+
+/**
+ * Best-effort lookup of a player's first draft-eligible year when the
+ * NHL never drafted him. The NHL draft cutoff is Sept 15, so:
+ *   - Born on or before Sep 15 of year Y  -> first eligible in year Y+18
+ *   - Born after Sep 15 of year Y         -> first eligible in year Y+19
+ *
+ * If we don't have a birth date, we return null and the table simply
+ * skips the line for that player.
+ */
+function firstEligibleDraftYear(
+    birthDate: string | null | undefined,
+): number | null {
+    if (!birthDate) return null;
+
+    const d = new Date(birthDate);
+    if (Number.isNaN(d.getTime())) return null;
+
+    const year = d.getUTCFullYear();
+    const month = d.getUTCMonth() + 1; // 1..12
+    const day = d.getUTCDate();
+
+    const bornAfterCutoff =
+        month > 9 || (month === 9 && day > 15);
+
+    return bornAfterCutoff ? year + 19 : year + 18;
 }
 
 const POSITION_GROUPS: Record<string, 'F' | 'D' | 'G'> = {
@@ -520,6 +563,15 @@ function sumHatTricks(rows: CareerRow[]): number | null {
     return rows.reduce((sum, r) => sum + (r.hatTricks ?? 0), 0);
 }
 
+/**
+ * Soft jade glow applied to the draft-boundary row in the career
+ * tables. Offset downward only so the glow does not visually bleed
+ * onto the row above. Not driven by the aura system because it is a
+ * one-off decoration, not a user-tunable channel.
+ */
+const DRAFT_LINE_GLOW =
+    '0 2px 3px -1px rgba(0, 168, 107, 0.5), 0 3px 6px -2px rgba(0, 168, 107, 0.28)';
+
 // ---------------------------------------------------------------------
 // Table primitives
 // ---------------------------------------------------------------------
@@ -602,6 +654,278 @@ function SubSectionTitle({ children }: { children: React.ReactNode }) {
             {children}
         </h3>
     );
+}
+
+/**
+ * Compact current-season stat strip shown at the top of the player
+ * page (where the tab buttons used to be). Each cell is: colored
+ * icon, uppercase label, big value, and a colored underline.
+ *
+ * Skater order:   GP, G, A, PTS, Hat tricks, FP
+ * Goalie order:   GP, W, L, OTL, SO, FP
+ */
+function CurrentSeasonStrip({
+    stats,
+    isGoalie,
+}: {
+    stats: {
+        gamesPlayed: number;
+        goals: number;
+        assists: number;
+        points: number;
+        hatTricks: number;
+        fantasyPoints: number;
+        wins?: number;
+        losses?: number;
+        overtimeLosses?: number;
+        shutouts?: number;
+    } | null;
+    isGoalie: boolean;
+}) {
+    const s = {
+        gamesPlayed: stats?.gamesPlayed ?? 0,
+        goals: stats?.goals ?? 0,
+        assists: stats?.assists ?? 0,
+        points: stats?.points ?? 0,
+        hatTricks: stats?.hatTricks ?? 0,
+        fantasyPoints: stats?.fantasyPoints ?? 0,
+        wins: stats?.wins ?? 0,
+        losses: stats?.losses ?? 0,
+        overtimeLosses: stats?.overtimeLosses ?? 0,
+        shutouts: stats?.shutouts ?? 0,
+    };
+
+    const aura = useAura('playerSeasonStrip');
+
+    const sizeAt = (layer: number) =>
+        auraRangeFor(aura, 'playerSeasonStrip', layer);
+
+    const auraRest = [
+        `0 0 2px rgba(180, 230, 255, 0.9)`,
+        `0 0 ${(sizeAt(0) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
+        `0 0 ${(sizeAt(1) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
+        `0 0 ${(sizeAt(2) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.6)`,
+        `0 0 ${(sizeAt(3) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
+    ].join(', ');
+
+    const auraPeak = [
+        `0 0 3px rgba(200, 240, 255, 1)`,
+        `0 0 ${(sizeAt(0) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
+        `0 0 ${(sizeAt(1) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
+        `0 0 ${(sizeAt(2) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
+        `0 0 ${(sizeAt(3) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
+    ].join(', ');
+
+    const auraOn = !isAuraOff(aura);
+
+    const cells = isGoalie
+        ? [
+            {
+                key: 'gp',
+                label: 'GP',
+                value: s.gamesPlayed,
+                color: '#7DD3FC',
+                icon: 'skate',
+            },
+            {
+                key: 'w',
+                label: 'W',
+                value: s.wins,
+                color: '#22C55E',
+                icon: 'net',
+            },
+            {
+                key: 'l',
+                label: 'L',
+                value: s.losses,
+                color: '#A855F7',
+                icon: 'stick',
+            },
+            {
+                key: 'otl',
+                label: 'OTL',
+                value: s.overtimeLosses,
+                color: '#EAB308',
+                icon: 'star',
+            },
+            {
+                key: 'so',
+                label: 'SO',
+                value: s.shutouts,
+                color: '#F59E0B',
+                icon: 'puck',
+            },
+            {
+                key: 'fp',
+                label: 'FP',
+                value: s.fantasyPoints,
+                color: '#F59E0B',
+                icon: 'tophat',
+            },
+        ]
+        : [
+            {
+                key: 'gp',
+                label: 'GP',
+                value: s.gamesPlayed,
+                color: '#7DD3FC',
+                icon: 'skate',
+            },
+            {
+                key: 'g',
+                label: 'G',
+                value: s.goals,
+                color: '#22C55E',
+                icon: 'net',
+            },
+            {
+                key: 'a',
+                label: 'A',
+                value: s.assists,
+                color: '#A855F7',
+                icon: 'stick',
+            },
+            {
+                key: 'pts',
+                label: 'PTS',
+                value: s.points,
+                color: '#00F0FF',
+                icon: 'star',
+            },
+            {
+                key: 'ht',
+                label: '3B',
+                value: s.hatTricks,
+                color: '#EC4899',
+                icon: 'tophat',
+            },
+            {
+                key: 'fp',
+                label: 'FP',
+                value: s.fantasyPoints,
+                color: '#F59E0B',
+                icon: 'puck',
+            },
+        ];
+
+    return (
+        <div
+            className={cn(
+                'w-full rounded-lg border border-[#00A8FF]/40 bg-[#080D1A] p-1.5',
+                auraOn ? auraPulseClass('box') : '',
+            )}
+            style={
+                auraOn
+                    ? auraPulseStyle(auraRest, auraPeak)
+                    : undefined
+            }
+        >
+            <div className='flex w-full gap-1.5'>
+                {cells.map((cell) => (
+                    <div
+                        key={cell.key}
+                        className='relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-md'
+                    >
+                        <StatIcon name={cell.icon} color={cell.color} />
+
+                        <span
+                            className='whitespace-nowrap text-[0.6rem] font-bold uppercase tracking-wide'
+                            style={{ color: cell.color }}
+                        >
+                            {cell.label}
+                        </span>
+
+                        <span className='text-xl font-bold text-white tabular-nums'>
+                            {cell.value}
+                        </span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Tiny inline SVGs for the stat strip. Kept inline so no external
+ * icon set is needed for the four shapes we don't already have from
+ * lucide.
+ */
+function StatIcon({
+    name,
+    color,
+}: {
+    name: string;
+    color: string;
+}) {
+    const stroke = color;
+    const fill = 'none';
+    const common = {
+        xmlns: 'http://www.w3.org/2000/svg',
+        width: 20,
+        height: 20,
+        viewBox: '0 0 24 24',
+        fill,
+        stroke,
+        strokeWidth: 1.8,
+        strokeLinecap: 'round' as const,
+        strokeLinejoin: 'round' as const,
+    };
+
+    switch (name) {
+        case 'skate':
+            return (
+                <svg {...common}>
+                    <path d='M3 16h11l3 2h4v3H3z' />
+                    <path d='M3 16v-4h5l3 4' />
+                    <path d='M8 12V6h4l2 6' />
+                </svg>
+            );
+
+        case 'net':
+            return (
+                <svg {...common}>
+                    <path d='M3 6h18v14H3z' />
+                    <path d='M3 10h18M3 14h18M7 6v14M11 6v14M15 6v14M19 6v14' />
+                </svg>
+            );
+
+        case 'stick':
+            return (
+                <svg {...common}>
+                    <path d='M4 4l14 14' />
+                    <path d='M18 18l3 3' />
+                    <path d='M15 18l4 4' />
+                </svg>
+            );
+
+        case 'star':
+            return (
+                <svg {...common}>
+                    <path d='M12 3l2.7 6.2 6.8.6-5.1 4.5 1.5 6.7L12 17.8 6.1 21l1.5-6.7L2.5 9.8l6.8-.6z' />
+                </svg>
+            );
+
+        case 'puck':
+            return (
+                <svg {...common}>
+                    <ellipse cx='12' cy='15' rx='9' ry='3.5' />
+                    <path d='M3 15v-2c0-1.9 4-3.5 9-3.5s9 1.6 9 3.5v2' />
+                    <ellipse cx='12' cy='13' rx='9' ry='3.5' />
+                </svg>
+            );
+
+        case 'tophat':
+            return (
+                <svg {...common}>
+                    <path d='M6 4h12l-1 12H7z' />
+                    <path d='M4 18h16' />
+                    <path d='M5 18c0-1 3-2 7-2s7 1 7 2' />
+                </svg>
+            );
+
+        default:
+            return null;
+    }
 }
 
 function InjuryBadge({
@@ -802,6 +1126,7 @@ function SkaterCareerTable({
     totalsRow = null,
     plainRows = false,
     variant = 'default',
+    draftBoundarySeason = null,
 }: {
     rows: CareerRow[];
     showFantasyPoints?: boolean;
@@ -810,6 +1135,7 @@ function SkaterCareerTable({
     totalsRow?: React.ReactNode;
     plainRows?: boolean;
     variant?: 'default' | 'youthMinor';
+    draftBoundarySeason?: number | null;
 }) {
     if (rows.length === 0) {
         return (
@@ -836,7 +1162,7 @@ function SkaterCareerTable({
                         <th className={thRight}>A</th>
                         <th className={cn(thRight, 'font-bold text-[#00F0FF]')}>Pts</th>
                         {!isYouthMinor && showFantasyPoints && (
-                            <th className={cn(thRight, 'font-bold text-[#D4AF37]')}>FP</th>
+                            <th className={cn(thRight, 'font-bold text-[#F59E0B]')}>FP</th>
                         )}
                         {!isYouthMinor && showVor && (
                             <th className={cn(thRight, 'font-bold text-foreground')}>VOR</th>
@@ -857,15 +1183,44 @@ function SkaterCareerTable({
                     </tr>
                 </TableHead>
                 <tbody className='text-foreground'>
-                    {rows.map((row, index) => (
-                        <tr
-                            key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                            className={
-                                plainRows
-                                    ? rowClass(index)
-                                    : careerRowClass(row, index)
-                            }
-                        >
+                    {rows.map((row, index) => {
+                        // Draw the draft line on the border BETWEEN two
+                        // rows, not as a separate <tr>:
+                        //   - if this row's season is >= the draft
+                        //     boundary season, no line
+                        //   - if the NEXT row's season is < the draft
+                        //     boundary season, draw the line on THIS
+                        //     row's bottom border
+                        //
+                        // Because rows are sorted descending by season,
+                        // the line ends up exactly between the last
+                        // post-draft season and the first pre-draft
+                        // season.
+                        const nextRow = rows[index + 1];
+                        const hasNextRow = nextRow !== undefined;
+
+                        const isLastPostDraftRow =
+                            draftBoundarySeason != null &&
+                            hasNextRow &&
+                            row.season >= draftBoundarySeason &&
+                            nextRow.season < draftBoundarySeason;
+
+                        return (
+                            <tr
+                                key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
+                                className={cn(
+                                    plainRows
+                                        ? rowClass(index)
+                                        : careerRowClass(row, index),
+                                    isLastPostDraftRow &&
+                                    'border-b border-[#00A86B]/50',
+                                )}
+                                style={
+                                    isLastPostDraftRow
+                                        ? { boxShadow: DRAFT_LINE_GLOW }
+                                        : undefined
+                                }
+                            >
                             <td className={tdSeason}>{row.seasonLabel}</td>
                             <td className={tdTeam}>{teamDisplay(row)}</td>
                             <td className={tdLge}>{row.leagueAbbreviation}</td>
@@ -891,20 +1246,20 @@ function SkaterCareerTable({
                             >
                                 {row.points}
                             </td>
-                            {!isYouthMinor && showFantasyPoints && (
-                                <td
-                                    className={cn(
-                                        tdRight,
-                                        isNhlRow(row)
-                                            ? 'text-[#D4AF37]'
-                                            : 'text-foreground',
-                                    )}
-                                >
-                                    {row.hatTricks == null
-                                        ? '—'
-                                        : row.points + row.hatTricks * 2}
-                                </td>
-                            )}
+                                {!isYouthMinor && showFantasyPoints && (
+                                    <td
+                                        className={cn(
+                                            tdRight,
+                                            isNhlRow(row)
+                                                ? 'text-[#F59E0B]'
+                                                : 'text-foreground',
+                                        )}
+                                    >
+                                        {row.hatTricks == null
+                                            ? '—'
+                                            : row.points + row.hatTricks * 2}
+                                    </td>
+                                )}
                             {!isYouthMinor && showVor && (() => {
                                 if (row.hatTricks == null) {
                                     return <td className={tdRight}>—</td>;
@@ -946,8 +1301,9 @@ function SkaterCareerTable({
                                     <td className={tdRight}>{row.gameWinningGoals}</td>
                                 </>
                             )}
-                        </tr>
-                    ))}
+                            </tr>
+                        );
+                    })}
                     {totalsRow}
                 </tbody>
             </table>
@@ -960,11 +1316,13 @@ function GoalieCareerTable({
     totalsRow = null,
     plainRows = false,
     variant = 'default',
+    draftBoundarySeason = null,
 }: {
     rows: CareerRow[];
     totalsRow?: React.ReactNode;
     plainRows?: boolean;
     variant?: 'default' | 'youthMinor';
+    draftBoundarySeason?: number | null;
 }) {
     if (rows.length === 0) {
         return (
@@ -1002,15 +1360,32 @@ function GoalieCareerTable({
                     </tr>
                 </TableHead>
                 <tbody className='text-foreground'>
-                    {rows.map((row, index) => (
-                        <tr
-                            key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
-                            className={
-                                plainRows
-                                    ? rowClass(index)
-                                    : careerRowClass(row, index)
-                            }
-                        >
+                    {rows.map((row, index) => {
+                        const nextRow = rows[index + 1];
+                        const hasNextRow = nextRow !== undefined;
+
+                        const isLastPostDraftRow =
+                            draftBoundarySeason != null &&
+                            hasNextRow &&
+                            row.season >= draftBoundarySeason &&
+                            nextRow.season < draftBoundarySeason;
+
+                        return (
+                            <tr
+                                key={`${row.season}-${row.leagueAbbreviation}-${row.teamName}-${index}`}
+                                className={cn(
+                                    plainRows
+                                        ? rowClass(index)
+                                        : careerRowClass(row, index),
+                                    isLastPostDraftRow &&
+                                    'border-b border-[#00A86B]/50',
+                                )}
+                                style={
+                                    isLastPostDraftRow
+                                        ? { boxShadow: DRAFT_LINE_GLOW }
+                                        : undefined
+                                }
+                            >
                             <td className={tdSeason}>{row.seasonLabel}</td>
                             <td className={tdTeam}>{teamDisplay(row)}</td>
                             <td className={tdLge}>{row.leagueAbbreviation}</td>
@@ -1049,8 +1424,9 @@ function GoalieCareerTable({
                                     <td className={tdRight}>{row.shotsAgainst}</td>
                                 </>
                             )}
-                        </tr>
-                    ))}
+                            </tr>
+                        );
+                    })}
                     {totalsRow}
                 </tbody>
             </table>
@@ -1305,14 +1681,12 @@ export default function PlayerPage() {
     const [error, setError] = useState<string | null>(null);
     const [showGameLog, setShowGameLog] = useState(false);
     const [showInjuryDetails, setShowInjuryDetails] = useState(false);
-    const [activeTab, setActiveTab] = useState<'career' | 'journal'>('career');
 
     const injuryPanelRef = useRef<HTMLDivElement>(null);
     const injuryScrollOnOpenRef = useRef(false);
 
     const closeAura = useAura('playerPageCloseButton');
     const pageTeamLogoAura = useAura('playerPageTeamLogo');
-    const tabAura = useAura('playerPageTabButton');
 
     useEffect(() => {
         const state = location.state as
@@ -1408,21 +1782,6 @@ export default function PlayerPage() {
         `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 3).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
     ].join(', ');
 
-    // Tab button aura: a small blue text-shadow chain applied to both
-    // tab buttons so their labels get a subtle neon glow. The two
-    // endpoints are close, giving the pulse a gentle breathing motion.
-    const tabRest = [
-        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 0).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
-        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 1).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
-        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 2).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
-    ].join(', ');
-
-    const tabPeak = [
-        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 0).toFixed(2)}px rgba(0, 168, 255, 1)`,
-        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 1).toFixed(2)}px rgba(0, 168, 255, 0.75)`,
-        `0 0 ${auraRangeFor(tabAura, 'playerPageTabButton', 2).toFixed(2)}px rgba(0, 168, 255, 0.45)`,
-    ].join(', ');
-
     const pageTeamLogoColor = getNhlTeamColor(
         player?.nhlTeamAbbreviation ?? undefined,
     );
@@ -1449,17 +1808,6 @@ export default function PlayerPage() {
             ? auraPulseStyle(closeRest, closePeak)
             : {}),
     } as React.CSSProperties;
-
-    // Both tab buttons share the same glow class/style. The aura is a
-    // text-shadow on the button's text content, so it does not affect
-    // the border/background box.
-    const tabButtonAuraClass =
-        !isAuraOff(tabAura) ? auraPulseClass('text') : '';
-
-    const tabButtonAuraStyle =
-        !isAuraOff(tabAura)
-            ? auraPulseStyle(tabRest, tabPeak)
-            : undefined;
 
     function CloseButtonLayer() {
         return (
@@ -1561,6 +1909,20 @@ export default function PlayerPage() {
 
     const positionGrp = positionGroup(player.position);
     const vor = vorThreshold(positionGrp);
+
+    // Draft boundary: the season code right below which we draw the
+    // magenta line on the career tables. For a drafted player, that's
+    // the season that starts in his draft year (e.g. drafted 2019 ->
+    // 20192020). For an undrafted player, we use his first eligible
+    // draft year based on his birth date. If we know neither, the line
+    // is simply not drawn.
+    const draftYearForLine =
+        player.draftYear ?? firstEligibleDraftYear(player.birthDate);
+
+    const draftBoundarySeason =
+        draftYearForLine != null
+            ? draftedBoundarySeason(draftYearForLine)
+            : null;
 
     return (
         <>
@@ -1862,60 +2224,17 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                <div className='mt-6 flex justify-center gap-3'>
-                    <button
-                        type='button'
-                        onClick={() => setActiveTab('career')}
-                        className={cn(
-                            'cursor-pointer rounded-md px-5 py-2 text-base font-semibold transition-colors duration-200 focus:outline-none focus-visible:outline-none focus-visible:ring-0',
-                            activeTab === 'career' && !isAuraOff(tabAura)
-                                ? tabButtonAuraClass
-                                : '[text-shadow:none]',
-                            activeTab === 'career'
-                                ? isAuraOff(tabAura)
-                                    ? 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-none'
-                                    : 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-[0_0_6px_rgba(255,255,255,0.9),0_0_12px_rgba(0,168,255,0.9),0_0_24px_rgba(0,168,255,0.55),0_0_48px_rgba(0,168,255,0.3),inset_0_0_8px_rgba(0,168,255,0.25)]'
-                                : 'border border-border bg-transparent text-muted-foreground shadow-none hover:border-[#00A8FF]/60 hover:text-[#F2F5FA]',
-                        )}
-                        style={
-                            activeTab === 'career' && !isAuraOff(tabAura)
-                                ? tabButtonAuraStyle
-                                : undefined
-                        }
-                    >
-                        Carrière
-                    </button>
-
-                    <button
-                        type='button'
-                        onClick={() => setActiveTab('journal')}
-                        className={cn(
-                            'cursor-pointer rounded-md px-5 py-2 text-base font-semibold transition-colors duration-200 focus:outline-none focus-visible:outline-none focus-visible:ring-0',
-                            activeTab === 'journal' && !isAuraOff(tabAura)
-                                ? tabButtonAuraClass
-                                : '[text-shadow:none]',
-                            activeTab === 'journal'
-                                ? isAuraOff(tabAura)
-                                    ? 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-none'
-                                    : 'border border-[#00A8FF] bg-[#080D1A] text-[#F2F5FA] shadow-[0_0_6px_rgba(255,255,255,0.9),0_0_12px_rgba(0,168,255,0.9),0_0_24px_rgba(0,168,255,0.55),0_0_48px_rgba(0,168,255,0.3),inset_0_0_8px_rgba(0,168,255,0.25)]'
-                                : 'border border-border bg-transparent text-muted-foreground shadow-none hover:border-[#00A8FF]/60 hover:text-[#F2F5FA]',
-                        )}
-                        style={
-                            activeTab === 'journal' && !isAuraOff(tabAura)
-                                ? tabButtonAuraStyle
-                                : undefined
-                        }
-                    >
-                        Game logs
-                    </button>
+                <div className='mt-6 w-full'>
+                    <CurrentSeasonStrip
+                        stats={player.currentSeasonStats}
+                        isGoalie={isGoalie}
+                    />
                 </div>
 
-                {activeTab === 'career' && (
-                    <>
-                        <div className='grid grid-cols-1 gap-y-4 md:grid-cols-2 md:gap-x-1'>
-                            <div>
-                                <div>
-                                    <SubSectionTitle>Saison régulière</SubSectionTitle>
+                <div className='grid grid-cols-1 gap-y-4 md:grid-cols-2 md:gap-x-1'>
+                    <div>
+                        <div>
+                            <SubSectionTitle>Saison régulière</SubSectionTitle>
                                     {isGoalie ? (
                                         <GoalieCareerTable
                                             rows={combineNhlSeasonRows(
@@ -1928,6 +2247,7 @@ export default function PlayerPage() {
                                                     player.nhlTeamAbbreviation,
                                                 ),
                                             )}
+                                            draftBoundarySeason={draftBoundarySeason}
                                             totalsRow={
                                                 hasNhlTotals ? (
                                                     <TotalsRow
@@ -1951,6 +2271,7 @@ export default function PlayerPage() {
                                                     player.nhlTeamAbbreviation,
                                                 ),
                                             )}
+                                            draftBoundarySeason={draftBoundarySeason}
                                             showFantasyPoints
                                             showVor
                                             vor={vor}
@@ -1981,6 +2302,7 @@ export default function PlayerPage() {
                                                 true,
                                                 false,
                                             )}
+                                            draftBoundarySeason={draftBoundarySeason}
                                             totalsRow={
                                                 hasNhlTotals ? (
                                                     <TotalsRow
@@ -1999,6 +2321,7 @@ export default function PlayerPage() {
                                                 true,
                                                 false,
                                             )}
+                                            draftBoundarySeason={draftBoundarySeason}
                                             totalsRow={
                                                 hasNhlTotals ? (
                                                     <TotalsRow
@@ -2037,97 +2360,91 @@ export default function PlayerPage() {
                             )}
                         </div>
 
-                        <SectionTitle>Historique des blessures</SectionTitle>
-
-                        {player.injuryHistory.length === 0 ? (
-                            <p className='text-sm text-muted-foreground'>
-                                Aucune blessure enregistrée.
-                            </p>
-                        ) : (
-                            <TableShell>
-                                <table className='w-full min-w-[640px] text-xs tabular-nums'>
-                                    <TableHead>
-                                        <tr>
-                                            <th className={thLeft}>Statut</th>
-                                            <th className={thLeft}>Équipe</th>
-                                            <th className={thLeft}>Vue le</th>
-                                            <th className={thLeft}>
-                                                Dernière vue
-                                            </th>
-                                            <th className={thLeft}>Résolue le</th>
-                                            <th className={thLeft}>Note</th>
-                                        </tr>
-                                    </TableHead>
-                                    <tbody className='text-foreground'>
-                                        {player.injuryHistory.map((spell, index) => (
-                                            <tr
-                                                key={`${spell.firstSeenAt}-${index}`}
-                                                className={rowClass(index)}
-                                            >
-                                                <td className={tdLeft}>
-                                                    {spell.injuryStatus}
-                                                </td>
-                                                <td className={tdLeft}>
-                                                    {spell.teamAbbreviation}
-                                                </td>
-                                                <td className={tdLeft}>
-                                                    {shortDate(spell.firstSeenAt)}
-                                                </td>
-                                                <td className={tdLeft}>
-                                                    {shortDate(spell.lastSeenAt)}
-                                                </td>
-                                                <td className={tdLeft}>
-                                                    {spell.resolvedAt
-                                                        ? shortDate(spell.resolvedAt)
-                                                        : 'En cours'}
-                                                </td>
-                                                <td
-                                                    className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
-                                                >
-                                                    {spell.injuryDescription ?? '—'}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </TableShell>
-                        )}
+                {player.seasonMonths.length > 0 && (
+                    <>
+                        <SectionTitle>
+                            Par mois (saison courante)
+                        </SectionTitle>
+                        <MonthTable
+                            months={player.seasonMonths}
+                            isGoalie={isGoalie}
+                        />
                     </>
                 )}
 
-                {activeTab === 'journal' && (
-                    <>
-                        {player.seasonMonths.length > 0 && (
-                            <>
-                                <SectionTitle>
-                                    Par mois (saison courante)
-                                </SectionTitle>
-                                <MonthTable
-                                    months={player.seasonMonths}
-                                    isGoalie={isGoalie}
-                                />
-                            </>
-                        )}
+                <SectionTitle>Fiches de match</SectionTitle>
+                <button
+                    type='button'
+                    onClick={() => setShowGameLog((v) => !v)}
+                    className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
+                >
+                    {showGameLog ? '▼ Masquer' : '▶ Afficher'} les fiches
+                    de match
+                </button>
 
-                        <SectionTitle>Fiches de match</SectionTitle>
-                        <button
-                            type='button'
-                            onClick={() => setShowGameLog((v) => !v)}
-                            className='cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary'
-                        >
-                            {showGameLog ? '▼ Masquer' : '▶ Afficher'} les fiches
-                            de match
-                        </button>
+                {showGameLog && (
+                    <div className='mt-3'>
+                        <GameLogTable
+                            rows={player.recentGames}
+                            isGoalie={isGoalie}
+                        />
+                    </div>
+                )}
 
-                        {showGameLog && (
-                            <div className='mt-3'>
-                                <GameLogTable
-                                    rows={player.recentGames}
-                                    isGoalie={isGoalie}
-                                />
-                            </div>
-                        )}
-                    </>
+                <SectionTitle>Historique des blessures</SectionTitle>
+
+                {player.injuryHistory.length === 0 ? (
+                    <p className='text-sm text-muted-foreground'>
+                        Aucune blessure enregistrée.
+                    </p>
+                ) : (
+                    <TableShell>
+                        <table className='w-full min-w-[640px] text-xs tabular-nums'>
+                            <TableHead>
+                                <tr>
+                                    <th className={thLeft}>Statut</th>
+                                    <th className={thLeft}>Équipe</th>
+                                    <th className={thLeft}>Vue le</th>
+                                    <th className={thLeft}>
+                                        Dernière vue
+                                    </th>
+                                    <th className={thLeft}>Résolue le</th>
+                                    <th className={thLeft}>Note</th>
+                                </tr>
+                            </TableHead>
+                            <tbody className='text-foreground'>
+                                {player.injuryHistory.map((spell, index) => (
+                                    <tr
+                                        key={`${spell.firstSeenAt}-${index}`}
+                                        className={rowClass(index)}
+                                    >
+                                        <td className={tdLeft}>
+                                            {spell.injuryStatus}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {spell.teamAbbreviation}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {shortDate(spell.firstSeenAt)}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {shortDate(spell.lastSeenAt)}
+                                        </td>
+                                        <td className={tdLeft}>
+                                            {spell.resolvedAt
+                                                ? shortDate(spell.resolvedAt)
+                                                : 'En cours'}
+                                        </td>
+                                        <td
+                                            className={`${tdLeft} max-w-md whitespace-normal text-[0.7rem] text-muted-foreground`}
+                                        >
+                                            {spell.injuryDescription ?? '—'}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </TableShell>
                 )}
             </section>
         </>

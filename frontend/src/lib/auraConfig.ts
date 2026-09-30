@@ -44,7 +44,9 @@ export type AuraChannel =
     | 'capBarTrack'
     | 'playerPageCloseButton'
     | 'playerPageTeamLogo'
-    | 'playerPageTabButton';
+    | 'playerPageTabButton'
+    | 'auraButton'
+    | 'playerSeasonStrip';
 
 /**
  * Multiplies the (max - min) gap of every channel by this factor.
@@ -68,6 +70,8 @@ export const AURA_DEFAULTS: Record<AuraChannel, number> = {
     playerPageCloseButton: 7,
     playerPageTeamLogo: 2,
     playerPageTabButton: 3,
+    auraButton: 3,
+    playerSeasonStrip: 5,
 };
 
 /**
@@ -84,8 +88,11 @@ export const AURA_DEFAULTS: Record<AuraChannel, number> = {
  * Set rest to 0.05 (5% of the computed size) to make the aura almost
  * vanish at the trough. Bump peak to 1.5 for a noticeably larger breath.
  */
-export const LEAGUE_LOGO_PULSE_REST_SCALE = 0.05;
-export const LEAGUE_LOGO_PULSE_PEAK_SCALE = 1.5;
+export const LEAGUE_LOGO_PULSE_REST_SCALE = 0.30;
+export const LEAGUE_LOGO_PULSE_PEAK_SCALE = 1.4;
+
+export const AURA_STRIP_PULSE_REST_SCALE = 0.50;
+export const AURA_STRIP_PULSE_PEAK_SCALE = 1.35;
 
 // =====================================================================
 // END QUICK-EDIT SECTION
@@ -113,6 +120,8 @@ export const AURA_CHANNELS: {
         { key: 'playerPageCloseButton', label: 'Bouton Fermer', group: 'Page joueur' },
         { key: 'playerPageTeamLogo', label: 'Logo équipe LNH', group: 'Page joueur' },
         { key: 'playerPageTabButton', label: 'Onglets Carrière / Journal', group: 'Page joueur' },
+        { key: 'playerSeasonStrip', label: 'Bande de stats (page joueur)', group: 'Page joueur' },
+        { key: 'auraButton', label: 'Bouton réutilisable (onglets)', group: 'Général' },
     ];
 
 export interface AuraLayerRange {
@@ -256,6 +265,30 @@ export const AURA_RANGES: Record<AuraChannel, AuraChannelRanges> = {
             { min: 1, max: 2 },
             { min: 2, max: 5 },
             { min: 4, max: 10 },
+        ],
+    },
+
+    // Reusable aura button (see components/ui/AuraButton.tsx). Same
+    // shape as playerPageTabButton so the two feel equivalent at the
+    // same intensity, but kept as a separate channel so tuning one
+    // does not affect the other.
+    auraButton: {
+        layers: [
+            { min: 1, max: 2 },
+            { min: 2, max: 5 },
+            { min: 4, max: 10 },
+        ],
+    },
+
+    // Player page stat strip. Much wider range than the buttons so the
+    // slider has a visible effect: intensity 1 is a very tight halo,
+    // intensity 10 is a broad glow.
+    playerSeasonStrip: {
+        layers: [
+            { min: 0.5, max: 6 },
+            { min: 0.5, max: 14 },
+            { min: 1, max: 28 },
+            { min: 1, max: 44 },
         ],
     },
 };

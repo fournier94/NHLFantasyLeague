@@ -407,7 +407,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                 "NCAA", "H-East", "Big Ten", "NCHC", "ECAC", "WCHA", "CCHA",
                 "SHL", "Liiga", "KHL", "DEL", "NL", "Czech", "Czechia",
                 "Extraliga", "Allsvenskan", "Mestis", "ICEHL", "EIHL",
-                "USHL", "NAHL", "BCHL", "AJHL", "OJHL", "SJHL", "MJHL"
+                "USHL", "NAHL", "BCHL", "AJHL", "OJHL", "SJHL", "MJHL",
+                "MHL", "VHL"
             };
 
         private static List<CareerRowDto> BuildCareerRows(
