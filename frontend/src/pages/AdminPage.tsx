@@ -7,6 +7,11 @@ import {
     searchPlayers,
     swapRosterStatus,
     updateRosterEntry,
+    deleteStatusHistory,
+    getRosterStatusHistory,
+    recomputeTeamTotals,
+    updateStatusHistory,
+    type RosterStatusHistoryRow,
     type FantasyTeam,
     type PlayerSearchResult,
     type RosterEntry,
@@ -172,6 +177,27 @@ export default function AdminPage() {
     const [updateEffectiveAt, setUpdateEffectiveAt] = useState(
         todayLocalDateInputValue,
     );
+
+    // --- Team history section state ---
+    const [histTeamId, setHistTeamId] = useState('');
+    const [histRoster, setHistRoster] = useState<TeamRoster | null>(null);
+    const [histLoading, setHistLoading] = useState(false);
+    const [histError, setHistError] = useState<string | null>(null);
+    const [histSuccess, setHistSuccess] = useState<string | null>(null);
+
+    // Per-player history rows, keyed by playerId.
+    const [historyByPlayer, setHistoryByPlayer] = useState<
+        Record<number, RosterStatusHistoryRow[]>
+    >({});
+
+    // Which player's history is expanded.
+    const [expandedPlayerId, setExpandedPlayerId] = useState<number | null>(null);
+
+    // Which row is being edited.
+    const [editingRowId, setEditingRowId] = useState<number | null>(null);
+    const [editingEffectiveAt, setEditingEffectiveAt] = useState('');
+    const [editingNote, setEditingNote] = useState('');
+    const [historyBusy, setHistoryBusy] = useState(false);
 
     const [showAppearance, setShowAppearance] = useState(false);
 
@@ -539,6 +565,174 @@ export default function AdminPage() {
             Number(prTargetId),
             prEffectiveAt,
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Team history section
+    // ---------------------------------------------------------------
+
+    const CURRENT_SEASON_NHL_CODE = 20262027;
+
+    useEffect(() => {
+        if (!histTeamId) {
+            setHistRoster(null);
+            setHistoryByPlayer({});
+            setExpandedPlayerId(null);
+            setHistError(null);
+            setHistSuccess(null);
+            return;
+        }
+
+        let cancelled = false;
+        setHistLoading(true);
+        setHistError(null);
+        setHistSuccess(null);
+        setExpandedPlayerId(null);
+
+        getTeamRoster(Number(histTeamId))
+            .then((data) => {
+                if (!cancelled) {
+                    setHistRoster(data);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setHistError('Impossible de charger cette équipe.');
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setHistLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [histTeamId]);
+
+    async function togglePlayerHistory(playerId: number) {
+        if (expandedPlayerId === playerId) {
+            setExpandedPlayerId(null);
+            return;
+        }
+
+        setExpandedPlayerId(playerId);
+
+        if (historyByPlayer[playerId] != null) {
+            return;
+        }
+
+        try {
+            const rows = await getRosterStatusHistory(
+                playerId,
+                histRoster?.seasonId,
+            );
+            setHistoryByPlayer((prev) => ({
+                ...prev,
+                [playerId]: rows,
+            }));
+        } catch {
+            setHistError(
+                "Impossible de charger l'historique de ce joueur.",
+            );
+        }
+    }
+
+    async function reloadPlayerHistory(playerId: number) {
+        try {
+            const rows = await getRosterStatusHistory(
+                playerId,
+                histRoster?.seasonId,
+            );
+            setHistoryByPlayer((prev) => ({
+                ...prev,
+                [playerId]: rows,
+            }));
+        } catch {
+            setHistError(
+                "Impossible de recharger l'historique de ce joueur.",
+            );
+        }
+    }
+
+    function beginEditRow(row: RosterStatusHistoryRow) {
+        setEditingRowId(row.id);
+
+        // datetime-local expects "YYYY-MM-DDTHH:mm" in local time.
+        const d = new Date(row.effectiveAt);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        setEditingEffectiveAt(`${yyyy}-${mm}-${dd}T00:00`);
+        setEditingNote(row.note ?? '');
+    }
+
+    async function saveEditedRow(playerId: number) {
+        if (editingRowId == null) return;
+
+        const iso = localDateTimeToUtcIso(editingEffectiveAt);
+        if (!iso) {
+            setHistError('Date et heure invalides.');
+            return;
+        }
+
+        setHistoryBusy(true);
+        setHistError(null);
+        setHistSuccess(null);
+
+        try {
+            const result = await updateStatusHistory(editingRowId, {
+                effectiveAt: iso,
+                note: editingNote.trim() || undefined,
+            });
+
+            await recomputeTeamTotals(CURRENT_SEASON_NHL_CODE);
+            await reloadPlayerHistory(playerId);
+
+            setHistSuccess(result.message);
+            setEditingRowId(null);
+            setEditingEffectiveAt('');
+            setEditingNote('');
+        } catch (err) {
+            setHistError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setHistoryBusy(false);
+        }
+    }
+
+    async function deleteHistoryRow(
+        playerId: number,
+        rowId: number,
+    ) {
+        if (!window.confirm(
+            'Supprimer cette ligne d’historique ? ' +
+            'Toutes les lignes au même instant pour ce joueur seront ' +
+            'supprimées.'
+        )) {
+            return;
+        }
+
+        setHistoryBusy(true);
+        setHistError(null);
+        setHistSuccess(null);
+
+        try {
+            const result = await deleteStatusHistory(rowId);
+
+            await recomputeTeamTotals(CURRENT_SEASON_NHL_CODE);
+            await reloadPlayerHistory(playerId);
+
+            setHistSuccess(result.message);
+        } catch (err) {
+            setHistError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setHistoryBusy(false);
+        }
     }
 
     function handleRosterEntrySelect(entry: RosterEntry) {
@@ -1181,6 +1375,218 @@ export default function AdminPage() {
                             </button>
                         </div>
                     </>
+                )}
+            </div>
+
+            {/* ============================================================
+                Historique d'équipe
+                ============================================================ */}
+            <div className='max-w-3xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Historique d'équipe
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Sélectionnez une équipe, puis cliquez sur un joueur pour
+                    voir l'historique de ses changements d'équipe et de
+                    statut. Vous pouvez corriger la date d'une ligne ou la
+                    supprimer. Après chaque modification, les totaux sont
+                    recalculés automatiquement.
+                </p>
+
+                <select
+                    value={histTeamId}
+                    onChange={(event) => setHistTeamId(event.target.value)}
+                    className={selectClass}
+                >
+                    <option value='' disabled>
+                        Choisir une équipe
+                    </option>
+                    {teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                            {team.name}
+                        </option>
+                    ))}
+                </select>
+
+                {histLoading && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {histError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {histError}
+                    </p>
+                )}
+
+                {histSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {histSuccess}
+                    </p>
+                )}
+
+                {histRoster && histRoster.entries.length === 0 && (
+                    <p className='text-sm text-muted-foreground'>
+                        Aucun joueur dans cette équipe.
+                    </p>
+                )}
+
+                {histRoster && histRoster.entries.length > 0 && (
+                    <ul className='space-y-1'>
+                        {histRoster.entries.map((entry) => {
+                            const isOpen = expandedPlayerId === entry.playerId;
+                            const rows = historyByPlayer[entry.playerId];
+
+                            return (
+                                <li
+                                    key={entry.id}
+                                    className='rounded-lg border border-border bg-card'
+                                >
+                                    <button
+                                        type='button'
+                                        onClick={() =>
+                                            void togglePlayerHistory(entry.playerId)
+                                        }
+                                        className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                    >
+                                        <span className='text-foreground'>
+                                            {entry.firstName} {entry.lastName}
+                                            <span className='ml-2 text-xs text-muted-foreground'>
+                                                · {entry.position} · {entry.rosterStatus}
+                                            </span>
+                                        </span>
+                                        <span className='text-xs text-muted-foreground'>
+                                            {isOpen ? '▲' : '▼'}
+                                        </span>
+                                    </button>
+
+                                    {isOpen && (
+                                        <div className='border-t border-border px-3 py-2'>
+                                            {rows == null && (
+                                                <p className='text-xs text-muted-foreground'>
+                                                    Chargement...
+                                                </p>
+                                            )}
+
+                                            {rows != null && rows.length === 0 && (
+                                                <p className='text-xs text-muted-foreground'>
+                                                    Aucune ligne d'historique.
+                                                </p>
+                                            )}
+
+                                            {rows != null && rows.length > 0 && (
+                                                <table className='w-full text-xs'>
+                                                    <thead>
+                                                        <tr className='text-left text-muted-foreground'>
+                                                            <th className='py-1 pr-2'>Équipe</th>
+                                                            <th className='py-1 pr-2'>Statut</th>
+                                                            <th className='py-1 pr-2'>Date effective</th>
+                                                            <th className='py-1 pr-2'>Note</th>
+                                                            <th className='py-1' />
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {rows.map((row) => {
+                                                            const isEditing =
+                                                                editingRowId === row.id;
+
+                                                            return (
+                                                                <tr
+                                                                    key={row.id}
+                                                                    className='border-t border-border/40 align-top'
+                                                                >
+                                                                    <td className='py-1 pr-2 text-foreground'>
+                                                                        {row.fantasyTeamName}
+                                                                    </td>
+                                                                    <td className='py-1 pr-2 text-foreground'>
+                                                                        {row.rosterStatus}
+                                                                    </td>
+                                                                    <td className='py-1 pr-2 text-foreground'>
+                                                                        {isEditing ? (
+                                                                            <input
+                                                                                type='datetime-local'
+                                                                                value={editingEffectiveAt}
+                                                                                onChange={(event) =>
+                                                                                    setEditingEffectiveAt(event.target.value)
+                                                                                }
+                                                                                className='rounded border border-border bg-background px-2 py-1 text-xs'
+                                                                            />
+                                                                        ) : (
+                                                                            row.effectiveAt.slice(0, 10)
+                                                                        )}
+                                                                    </td>
+                                                                    <td className='py-1 pr-2 text-muted-foreground'>
+                                                                        {isEditing ? (
+                                                                            <input
+                                                                                type='text'
+                                                                                value={editingNote}
+                                                                                onChange={(event) =>
+                                                                                    setEditingNote(event.target.value)
+                                                                                }
+                                                                                placeholder='Note (optionnel)'
+                                                                                className='w-full rounded border border-border bg-background px-2 py-1 text-xs'
+                                                                            />
+                                                                        ) : (
+                                                                            row.note ?? '—'
+                                                                        )}
+                                                                    </td>
+                                                                    <td className='whitespace-nowrap py-1 text-right'>
+                                                                        {isEditing ? (
+                                                                            <>
+                                                                                <button
+                                                                                    type='button'
+                                                                                    onClick={() => void saveEditedRow(entry.playerId)}
+                                                                                    disabled={historyBusy}
+                                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                                >
+                                                                                    Enregistrer
+                                                                                </button>
+                                                                                <button
+                                                                                    type='button'
+                                                                                    onClick={() => setEditingRowId(null)}
+                                                                                    disabled={historyBusy}
+                                                                                    className='ml-2 cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                                >
+                                                                                    Annuler
+                                                                                </button>
+                                                                            </>
+                                                                        ) : (
+                                                                            <>
+                                                                                <button
+                                                                                    type='button'
+                                                                                    onClick={() => beginEditRow(row)}
+                                                                                    disabled={historyBusy}
+                                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                                >
+                                                                                    Modifier
+                                                                                </button>
+                                                                                <button
+                                                                                    type='button'
+                                                                                    onClick={() =>
+                                                                                        void deleteHistoryRow(entry.playerId, row.id)
+                                                                                    }
+                                                                                    disabled={historyBusy}
+                                                                                    className='ml-2 cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50'
+                                                                                >
+                                                                                    Supprimer
+                                                                                </button>
+                                                                            </>
+                                                                        )}
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            )}
+                                        </div>
+                                    )}
+                                </li>
+                            );
+                        })}
+                    </ul>
                 )}
             </div>
 

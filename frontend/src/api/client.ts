@@ -263,6 +263,60 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     return (await response.json()) as T;
 }
 
+/**
+ * Like apiPost, but for PATCH: sends JSON, expects JSON back, and on
+ * failure surfaces the API's own message.
+ */
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${API_BASE}${path}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+        let message: string | undefined;
+        try {
+            const payload = (await response.json()) as {
+                message?: string;
+                detail?: string;
+            };
+            message = payload.message ?? payload.detail;
+        } catch {
+            // Body was not JSON.
+        }
+        throw new Error(message ?? `Erreur API ${response.status}`);
+    }
+
+    return (await response.json()) as T;
+}
+
+/**
+ * Like apiGet, but for DELETE: expects a JSON reply, surfaces the API's
+ * message on failure.
+ */
+export async function apiDelete<T>(path: string): Promise<T> {
+    const response = await fetch(`${API_BASE}${path}`, {
+        method: 'DELETE',
+    });
+
+    if (!response.ok) {
+        let message: string | undefined;
+        try {
+            const payload = (await response.json()) as {
+                message?: string;
+                detail?: string;
+            };
+            message = payload.message ?? payload.detail;
+        } catch {
+            // Body was not JSON.
+        }
+        throw new Error(message ?? `Erreur API ${response.status}`);
+    }
+
+    return (await response.json()) as T;
+}
+
 /** Searches players by name; the endpoint is a GET even though it is a search. */
 export function searchPlayers(query: string): Promise<PlayerSearchResult[]> {
     return apiGet<PlayerSearchResult[]>(`/Roster/search?search=${encodeURIComponent(query)}`);
@@ -319,6 +373,34 @@ export function backfillStatusHistory(
     );
 }
 
+/** Recomputes every fantasy team's season total. Fast, idempotent. */
+export function recomputeTeamTotals(
+    seasonCode: number,
+): Promise<unknown> {
+    return apiPost<unknown>(
+        `/NhlGameLog/season/${seasonCode}/recompute-team-totals`,
+        {},
+    );
+}
+
+/** Corrects the EffectiveAt of a history row in place. */
+export function updateStatusHistory(
+    id: number,
+    request: UpdateRosterStatusHistoryRequest,
+): Promise<RosterActionResult> {
+    return apiPatch<RosterActionResult>(
+        `/Roster/status-history/${id}`,
+        request,
+    );
+}
+
+/** Deletes a history row (and any sibling at the same instant). */
+export function deleteStatusHistory(
+    id: number,
+): Promise<RosterActionResult> {
+    return apiDelete<RosterActionResult>(`/Roster/status-history/${id}`);
+}
+
 // Salary and season fields are deliberately absent from these requests:
 // the salary always comes from PlayerContracts server-side, and omitting
 // seasonId makes the API use the current season.
@@ -369,6 +451,13 @@ export const updateRosterEntry = (request: UpdateRosterEntryRequest) =>
 /** Removes a roster entry, making the player a free agent again (POST /api/Roster/release). */
 export const releasePlayer = (request: ReleasePlayerRequest) =>
     apiPost<RosterActionResult>('/Roster/release', request);
+
+/** Request body of PATCH /api/Roster/status-history/{id}. */
+export interface UpdateRosterStatusHistoryRequest {
+    effectiveAt: string; // ISO 8601
+    /** Optional: replaces the note on the updated row(s). */
+    note?: string;
+}
 
 // ---------------------------------------------------------------------
 // Player detail (GET /api/NhlPlayerDetail/{nhlPlayerId})
@@ -612,3 +701,4 @@ export interface PlayerDetail {
 /** Fetches everything the player detail page needs, by NHL player id. */
 export const getPlayerDetail = (nhlPlayerId: number) =>
     apiGet<PlayerDetail>(`/NhlPlayerDetail/${nhlPlayerId}`);
+

@@ -516,6 +516,163 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
+        /// <summary>
+        /// Corrects the EffectiveAt of a RosterStatusHistory row in place.
+        ///
+        /// Rules:
+        ///   - The row's new EffectiveAt must keep it strictly between
+        ///     its current predecessor and successor for the same
+        ///     (PlayerId, SeasonId). Otherwise the chronological order
+        ///     is ambiguous and the edit is refused.
+        ///   - If other rows share the row's current EffectiveAt for
+        ///     the same (PlayerId, SeasonId) -- which happens on trades,
+        ///     where the out-row and in-row share an instant -- they
+        ///     are moved to the same new EffectiveAt so the pair stays
+        ///     a pair.
+        ///
+        /// After saving, the caller (the controller) is expected to
+        /// trigger the team-totals recompute so standings update.
+        /// </summary>
+        public async Task<RosterActionResultDto> UpdateStatusHistoryAsync(
+            int historyId,
+            UpdateRosterStatusHistoryRequest request)
+        {
+            if (request.EffectiveAt == default)
+            {
+                return Failure(
+                    "EffectiveAt is required. Pass the corrected UTC instant.");
+            }
+
+            var row = await _dbContext.RosterStatusHistories
+                .FirstOrDefaultAsync(h => h.Id == historyId);
+
+            if (row == null)
+            {
+                return Failure($"History row {historyId} not found.");
+            }
+
+            var normalized = NormalizeEffectiveAt(request.EffectiveAt);
+
+            // Load the full history for the same player and season so we
+            // can (a) check ordering and (b) find any sibling rows that
+            // share the current EffectiveAt.
+            var siblings = await _dbContext.RosterStatusHistories
+                .Where(h =>
+                    h.PlayerId == row.PlayerId &&
+                    h.SeasonId == row.SeasonId)
+                .OrderBy(h => h.EffectiveAt)
+                .ThenBy(h => h.Id)
+                .ToListAsync();
+
+            var sameInstant = siblings
+                .Where(h => h.EffectiveAt == row.EffectiveAt)
+                .ToList();
+
+            var sameInstantIds = sameInstant
+                .Select(h => h.Id)
+                .ToHashSet();
+
+            var unaffected = siblings
+                .Where(h => !sameInstantIds.Contains(h.Id))
+                .ToList();
+
+            // The predecessor is the last unaffected row with
+            // EffectiveAt strictly less than the new instant.
+            var predecessor = unaffected
+                .Where(h => h.EffectiveAt < normalized)
+                .OrderBy(h => h.EffectiveAt)
+                .ThenBy(h => h.Id)
+                .LastOrDefault();
+
+            // The successor is the first unaffected row with
+            // EffectiveAt strictly greater than the new instant.
+            var successor = unaffected
+                .Where(h => h.EffectiveAt > normalized)
+                .OrderBy(h => h.EffectiveAt)
+                .ThenBy(h => h.Id)
+                .FirstOrDefault();
+
+            // We also need to make sure we are not colliding with an
+            // unaffected row exactly at the new instant (which would
+            // create two unrelated rows at the same EffectiveAt).
+            var collision = unaffected
+                .Any(h => h.EffectiveAt == normalized);
+
+            if (collision)
+            {
+                return Failure(
+                    "Another history row for this player already exists " +
+                    $"at {normalized:yyyy-MM-dd}. Choose a different date.");
+            }
+
+            // The "strictly between" check is enforced implicitly by
+            // choosing the predecessor/successor above: as long as both
+            // a predecessor and a successor exist on either side of the
+            // new instant, the row is between them. If they don't, the
+            // row is moving to the very start or the very end of the
+            // chain, which is allowed.
+
+            var previousDate = row.EffectiveAt;
+
+            foreach (var sibling in sameInstant)
+            {
+                sibling.EffectiveAt = normalized;
+                sibling.CreatedAt = DateTime.UtcNow;
+
+                if (!string.IsNullOrWhiteSpace(request.Note))
+                {
+                    sibling.Note = request.Note!.Trim();
+                }
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return new RosterActionResultDto
+            {
+                Success = true,
+                Message =
+                    $"History row(s) moved from " +
+                    $"{previousDate:yyyy-MM-dd} to {normalized:yyyy-MM-dd} " +
+                    $"({sameInstant.Count} row(s) updated)."
+            };
+        }
+
+        /// <summary>
+        /// Deletes a RosterStatusHistory row. Also deletes any sibling
+        /// row that shares the same (PlayerId, SeasonId, EffectiveAt),
+        /// so a trade's out-row and in-row disappear together.
+        /// </summary>
+        public async Task<RosterActionResultDto> DeleteStatusHistoryAsync(
+            int historyId)
+        {
+            var row = await _dbContext.RosterStatusHistories
+                .FirstOrDefaultAsync(h => h.Id == historyId);
+
+            if (row == null)
+            {
+                return Failure($"History row {historyId} not found.");
+            }
+
+            var siblings = await _dbContext.RosterStatusHistories
+                .Where(h =>
+                    h.PlayerId == row.PlayerId &&
+                    h.SeasonId == row.SeasonId &&
+                    h.EffectiveAt == row.EffectiveAt)
+                .ToListAsync();
+
+            _dbContext.RosterStatusHistories.RemoveRange(siblings);
+
+            await _dbContext.SaveChangesAsync();
+
+            return new RosterActionResultDto
+            {
+                Success = true,
+                Message =
+                    $"Deleted {siblings.Count} history row(s) at " +
+                    $"{row.EffectiveAt:yyyy-MM-dd}."
+            };
+        }
+
         public async Task<RosterActionResultDto> UpdateEntryAsync(UpdateRosterEntryRequest request)
         {
             var hasStatus = !string.IsNullOrWhiteSpace(request.RosterStatus);

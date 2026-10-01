@@ -99,4 +99,29 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public DateTime CreatedAt { get; set; }
         public string? Note { get; set; }
     }
+
+    /// <summary>
+    /// Request body for PATCH /api/Roster/status-history/{id}: corrects
+    /// the EffectiveAt of a history row in place.
+    ///
+    /// If another row for the same player and season shares the exact
+    /// same EffectiveAt (which happens on every trade: the outgoing and
+    /// incoming rows are written at the same instant), both rows are
+    /// moved together so the pair stays a pair.
+    /// </summary>
+    public class UpdateRosterStatusHistoryRequest
+    {
+        /// <summary>
+        /// New effective instant. Required. Normalized to day precision
+        /// (00:00 UTC of the same day) before it is written.
+        /// </summary>
+        [Required]
+        public DateTime EffectiveAt { get; set; }
+
+        /// <summary>
+        /// Optional free-text note that replaces the existing note on
+        /// the row(s). Null leaves the existing note alone.
+        /// </summary>
+        public string? Note { get; set; }
+    }
 }

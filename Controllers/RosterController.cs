@@ -228,5 +228,47 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(result);
         }
+
+        /// <summary>
+        /// Corrects the EffectiveAt of a history row in place. Sibling
+        /// rows that share the current EffectiveAt (e.g. the two rows
+        /// written by a trade) are moved together.
+        /// </summary>
+        /// <param name="id">History row id.</param>
+        /// <param name="request">The new effective instant and an optional note.</param>
+        [HttpPatch("status-history/{id}")]
+        public async Task<IActionResult> UpdateStatusHistory(
+            int id,
+            [FromBody] UpdateRosterStatusHistoryRequest request)
+        {
+            var result = await _rosterAdminService
+                .UpdateStatusHistoryAsync(id, request);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Deletes a history row. Sibling rows sharing the same
+        /// (PlayerId, SeasonId, EffectiveAt) are deleted together.
+        /// </summary>
+        /// <param name="id">History row id.</param>
+        [HttpDelete("status-history/{id}")]
+        public async Task<IActionResult> DeleteStatusHistory(int id)
+        {
+            var result = await _rosterAdminService
+                .DeleteStatusHistoryAsync(id);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
     }
 }

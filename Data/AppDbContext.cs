@@ -43,6 +43,15 @@ namespace NhlFantasyLeague.api.Data
                 .Property(r => r.RosterStatus)
                 .HasConversion<string>();
 
+            // Same string conversion for RosterStatusHistory.RosterStatus.
+            // Without this EF Core defaults to storing the enum as its
+            // underlying integer, which does not match the "text" column
+            // the migration created and causes an InvalidCastException
+            // when the recompute reads the rows back.
+            modelBuilder.Entity<RosterStatusHistory>()
+                .Property(h => h.RosterStatus)
+                .HasConversion<string>();
+
             modelBuilder.Entity<Player>()
                 .HasOne(p => p.NhlTeam)
                 .WithMany(t => t.Players)
@@ -257,8 +266,8 @@ namespace NhlFantasyLeague.api.Data
                 .HasPrecision(5, 4);
 
             modelBuilder.Entity<CapFreezePlayerReview>()
-     .Property(r => r.LastNameSimilarity)
-     .HasPrecision(5, 4);
+                .Property(r => r.LastNameSimilarity)
+                .HasPrecision(5, 4);
 
             // RosterStatusHistory: append-only log of status changes and
             // trades. Never edited or deleted, only inserted.
