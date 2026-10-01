@@ -19,6 +19,7 @@ import {
     AURA_STRIP_PULSE_PEAK_SCALE,
 } from '@/lib/auraConfig';
 import { getNhlTeamColor } from '@/lib/nhlTeamColors';
+import { getLastNonPlayerLocation } from '@/lib/playerNavigation';
 import ReactCountryFlag from 'react-country-flag';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { Banknote, Ruler } from 'lucide-react';
@@ -1327,7 +1328,7 @@ function SkaterCareerTable({
                                     >
                                         {row.hatTricks == null
                                             ? '—'
-                                            : row.points + row.hatTricks * 2}
+                                            : row.points + row.hatTricks * 3}
                                     </td>
                                 )}
                                 {!isYouthMinor && showVor && (() => {
@@ -1335,7 +1336,7 @@ function SkaterCareerTable({
                                         return <td className={tdRight}>—</td>;
                                     }
 
-                                    const fp = row.points + row.hatTricks * 2;
+                                    const fp = row.points + row.hatTricks * 3;
 
                                     // Per-season VOR threshold so shortened
                                     // seasons (lockouts, COVID) use their own
@@ -1858,12 +1859,33 @@ export default function PlayerPage() {
         return () => cancelAnimationFrame(frame);
     }, [showInjuryDetails]);
 
+    // Close: jump past every PlayerPage we opened and land on the last
+    // non-player page (typically /mon-equipe, with the scroll position
+    // restored by MonEquipePage via the pendingRestore store).
+    //
+    // If no non-player page was recorded -- direct URL entry, hard
+    // reload on a player page, tab restored from a discarded state --
+    // fall back to the user's own Mon équipe page.
+    //
+    // `replace: true` collapses the entire player-page chain out of
+    // history, so a hardware / gesture Back after Fermer does not
+    // re-enter the middle of the chain.
     function handleClose() {
-        if (window.history.length > 1) {
-            navigate(-1);
-        } else {
-            navigate('/joueurs');
+        const stored = getLastNonPlayerLocation();
+
+        if (stored != null) {
+            navigate(
+                {
+                    pathname: stored.pathname,
+                    search: stored.search,
+                    hash: stored.hash,
+                },
+                { replace: true },
+            );
+            return;
         }
+
+        navigate('/mon-equipe', { replace: true });
     }
 
     const closeRest = [
@@ -2437,28 +2459,6 @@ export default function PlayerPage() {
                     </div>
                 </div>
 
-                <SubSectionTitle>Tournois</SubSectionTitle>
-                {isGoalie ? (
-                    <GoalieCareerTable rows={player.tournaments} plainRows />
-                ) : (
-                    <SkaterCareerTable rows={player.tournaments} plainRows />
-                )}
-
-                <div className='mt-6'>
-                    <SubSectionTitle>Youth / Minor</SubSectionTitle>
-                    {isGoalie ? (
-                        <GoalieCareerTable
-                            rows={player.youthMinor}
-                            variant='youthMinor'
-                        />
-                    ) : (
-                        <SkaterCareerTable
-                            rows={player.youthMinor}
-                            variant='youthMinor'
-                        />
-                    )}
-                </div>
-
                 {player.seasonMonths.length > 0 && (
                     <>
                         <SectionTitle>
@@ -2545,6 +2545,28 @@ export default function PlayerPage() {
                         </table>
                     </TableShell>
                 )}
+
+                <SubSectionTitle>Tournois</SubSectionTitle>
+                {isGoalie ? (
+                    <GoalieCareerTable rows={player.tournaments} plainRows />
+                ) : (
+                    <SkaterCareerTable rows={player.tournaments} plainRows />
+                )}
+
+                <div className='mt-6'>
+                    <SubSectionTitle>Youth / Minor</SubSectionTitle>
+                    {isGoalie ? (
+                        <GoalieCareerTable
+                            rows={player.youthMinor}
+                            variant='youthMinor'
+                        />
+                    ) : (
+                        <SkaterCareerTable
+                            rows={player.youthMinor}
+                            variant='youthMinor'
+                        />
+                    )}
+                </div>
             </section>
         </>
     );

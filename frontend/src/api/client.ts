@@ -188,6 +188,54 @@ export interface RosterActionResult {
     entry?: unknown;
 }
 
+/** Request body of POST /api/Roster/swap-status. */
+export interface SwapRosterStatusRequest {
+    fantasyTeamId: number;
+    /** Player moving OUT of his current status. */
+    playerAId: number;
+    /** Player moving OUT of his current status (the other side of the swap). */
+    playerBId: number;
+    /** Optional: the current season is used when omitted. */
+    seasonId?: number;
+    /** UTC instant the swap becomes effective. Required. */
+    effectiveAt: string; // ISO 8601
+    note?: string;
+}
+
+/** Request body of POST /api/Roster/set-status. */
+export interface SetRosterStatusRequest {
+    fantasyTeamId: number;
+    playerId: number;
+    /** Must be exactly 'Active', 'Bench' or 'Prospect'. */
+    newRosterStatus: string;
+    seasonId?: number;
+    /** UTC instant the change becomes effective. Required. */
+    effectiveAt: string; // ISO 8601
+    note?: string;
+}
+
+/** Request body of POST /api/Roster/backfill-status-history. */
+export interface BackfillStatusHistoryRequest {
+    seasonId?: number;
+    /** UTC instant the seeded rows become effective. Required. */
+    effectiveAt: string; // ISO 8601
+}
+
+/** One row of a player's status history (GET /api/Roster/status-history/{playerId}). */
+export interface RosterStatusHistoryRow {
+    id: number;
+    playerId: number;
+    playerFirstName: string;
+    playerLastName: string;
+    fantasyTeamId: number;
+    fantasyTeamName: string;
+    seasonId: number;
+    rosterStatus: string;
+    effectiveAt: string; // ISO 8601
+    createdAt: string;   // ISO 8601
+    note: string | null;
+}
+
 /**
  * Like apiGet, but for POST requests: sends JSON and unwraps the JSON reply.
  * On failure it prefers the API's own message so the UI can display it.
@@ -225,6 +273,52 @@ export function assignPlayer(request: AssignPlayerRequest): Promise<RosterAction
     return apiPost<RosterActionResult>('/Roster/assign', request);
 }
 
+/**
+ * Atomically swaps the RosterStatus of two players on the same fantasy
+ * team at the same effective instant. Server enforces same position
+ * group and the exact league shape (12/6/1 active + 4/2/1 bench + 3
+ * prospects).
+ */
+export function swapRosterStatus(
+    request: SwapRosterStatusRequest,
+): Promise<RosterActionResult> {
+    return apiPost<RosterActionResult>('/Roster/swap-status', request);
+}
+
+/**
+ * Sets a single player's RosterStatus without a swap. Escape hatch for
+ * corrections. Server still enforces the league shape.
+ */
+export function setRosterStatus(
+    request: SetRosterStatusRequest,
+): Promise<RosterActionResult> {
+    return apiPost<RosterActionResult>('/Roster/set-status', request);
+}
+
+/** Returns the append-only RosterStatusHistory of one player for one season. */
+export function getRosterStatusHistory(
+    playerId: number,
+    seasonId?: number,
+): Promise<RosterStatusHistoryRow[]> {
+    const query = seasonId != null ? `?seasonId=${seasonId}` : '';
+    return apiGet<RosterStatusHistoryRow[]>(
+        `/Roster/status-history/${playerId}${query}`,
+    );
+}
+
+/**
+ * One-time seed: writes a history row per current RosterEntry for a
+ * season, so existing rosters have a baseline. Safe to re-run.
+ */
+export function backfillStatusHistory(
+    request: BackfillStatusHistoryRequest,
+): Promise<RosterActionResult> {
+    return apiPost<RosterActionResult>(
+        '/Roster/backfill-status-history',
+        request,
+    );
+}
+
 // Salary and season fields are deliberately absent from these requests:
 // the salary always comes from PlayerContracts server-side, and omitting
 // seasonId makes the API use the current season.
@@ -233,6 +327,14 @@ export function assignPlayer(request: AssignPlayerRequest): Promise<RosterAction
 export interface MovePlayerRequest {
     playerId: number;
     newFantasyTeamId: number;
+    /**
+     * UTC instant the trade becomes effective. Required: the API
+     * rejects a request without it. The server normalizes it to day
+     * precision (00:00 UTC of the same calendar day) before writing
+     * history rows.
+     */
+    effectiveAt: string; // ISO 8601, e.g. "2026-10-15T00:00:00Z"
+    note?: string;
 }
 
 /** Request body of POST /api/Roster/update (team + status can change together). */
@@ -241,6 +343,14 @@ export interface UpdateRosterEntryRequest {
     rosterStatus: string;
     /** When provided, the player is also transferred to this fantasy team. */
     fantasyTeamId?: number;
+    /**
+     * Required only when `fantasyTeamId` differs from the entry's
+     * current team (a trade). Ignored otherwise. The server normalizes
+     * it to day precision before writing history rows.
+     */
+    effectiveAt?: string; // ISO 8601
+    /** Optional free-text note stored on the trade history rows. */
+    note?: string;
 }
 
 /** Request body of POST /api/Roster/release. */

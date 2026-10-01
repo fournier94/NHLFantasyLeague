@@ -121,7 +121,7 @@ int season)
         [HttpPost("season/{season}/refresh-all")]
         public async Task<IActionResult> RefreshCurrentSeasonForAllPlayers(
             int season,
-            [FromQuery] int delayMsBetweenPlayers = 500,
+            [FromQuery] int delayMsBetweenPlayers = 350,
             CancellationToken ct = default)
         {
             if (delayMsBetweenPlayers < 0)
@@ -149,9 +149,9 @@ int season)
         /// </summary>
         [HttpPost("career-hat-tricks/backfill-all")]
         public async Task<IActionResult> BackfillCareerHatTricks(
-            [FromQuery] int delayMsBetweenCalls = 500,
-            [FromQuery] bool force = false,
-            CancellationToken ct = default)
+       [FromQuery] int delayMsBetweenCalls = 500,
+       [FromQuery] bool force = false,
+       CancellationToken ct = default)
         {
             if (delayMsBetweenCalls < 0)
             {
@@ -162,6 +162,29 @@ int season)
                 await _nhlStatsService.BackfillCareerHatTricksAsync(
                     delayMsBetweenCalls,
                     force,
+                    ct);
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Recomputes every fantasy team's season total from scratch,
+        /// using the season's PlayerGameLog rows and the append-only
+        /// RosterStatusHistory. Does not fetch anything from the NHL
+        /// API. Safe to call as often as you want.
+        ///
+        /// Called automatically at the end of
+        /// POST /api/NhlGameLog/season/{season}/refresh-all; this
+        /// endpoint is the standalone trigger.
+        /// </summary>
+        [HttpPost("season/{season}/recompute-team-totals")]
+        public async Task<IActionResult> RecomputeTeamTotals(
+            int season,
+            CancellationToken ct = default)
+        {
+            var result =
+                await _nhlGameLogService.RecomputeTeamSeasonTotalsAsync(
+                    season,
                     ct);
 
             return Ok(result);

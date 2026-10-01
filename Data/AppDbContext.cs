@@ -33,6 +33,7 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<PlayerContract> PlayerContracts { get; set; }
         public DbSet<CapFreezePlayerReview> CapFreezePlayerReviews { get; set; }
         public DbSet<PlayerInjuryHistory> PlayerInjuryHistories { get; set; }
+        public DbSet<RosterStatusHistory> RosterStatusHistories { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -256,8 +257,41 @@ namespace NhlFantasyLeague.api.Data
                 .HasPrecision(5, 4);
 
             modelBuilder.Entity<CapFreezePlayerReview>()
-                .Property(r => r.LastNameSimilarity)
-                .HasPrecision(5, 4);
+     .Property(r => r.LastNameSimilarity)
+     .HasPrecision(5, 4);
+
+            // RosterStatusHistory: append-only log of status changes and
+            // trades. Never edited or deleted, only inserted.
+            modelBuilder.Entity<RosterStatusHistory>()
+                .HasOne(h => h.Player)
+                .WithMany()
+                .HasForeignKey(h => h.PlayerId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<RosterStatusHistory>()
+                .HasOne(h => h.FantasyTeam)
+                .WithMany()
+                .HasForeignKey(h => h.FantasyTeamId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<RosterStatusHistory>()
+                .HasOne(h => h.Season)
+                .WithMany()
+                .HasForeignKey(h => h.SeasonId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Fast lookup of "this player's history this season, in
+            // chronological order". Not unique: a trade legitimately
+            // writes two rows at the same EffectiveAt (old team + new
+            // team), and a swap writes one row per player at the same
+            // instant.
+            modelBuilder.Entity<RosterStatusHistory>()
+                .HasIndex(h => new
+                {
+                    h.PlayerId,
+                    h.SeasonId,
+                    h.EffectiveAt
+                });
         }
     }
 }

@@ -123,6 +123,13 @@ namespace NhlFantasyLeague.api.Services
                 return Failure("Season not found. Run POST /api/League/setup first.");
             }
 
+            if (request.EffectiveAt == default)
+            {
+                return Failure(
+                    "EffectiveAt is required. Pass the UTC instant the " +
+                    "trade becomes effective.");
+            }
+
             var newTeam = await _dbContext.FantasyTeams
                 .FirstOrDefaultAsync(t => t.Id == request.NewFantasyTeamId);
 
@@ -151,9 +158,44 @@ namespace NhlFantasyLeague.api.Services
                     $"'{PlayerName(entry.Player)}' is already on '{newTeam.Name}'.");
             }
 
+            var oldTeamId = entry.FantasyTeamId;
             var oldTeamName = entry.FantasyTeam?.Name ?? $"team {entry.FantasyTeamId}";
+            var status = entry.RosterStatus;
 
             entry.FantasyTeamId = newTeam.Id;
+
+            // Append two history rows at the same instant:
+            //   - one against the old team, same status, closing out
+            //     the old team's ownership of the player;
+            //   - one against the new team, same status, opening the
+            //     new team's ownership.
+            //
+            // The recompute reads the last row with EffectiveAt <= game
+            // day, so every game before this instant belongs to the
+            // old team and every game from this instant belongs to the
+            // new team. That is exactly the mid-month trade semantics
+            // the league wants.
+            var effectiveAt = NormalizeEffectiveAt(request.EffectiveAt);
+
+            var note = string.IsNullOrWhiteSpace(request.Note)
+                ? $"Trade from '{oldTeamName}' to '{newTeam.Name}'"
+                : request.Note!.Trim();
+
+            AddHistoryRow(
+                entry.PlayerId,
+                oldTeamId,
+                season.Id,
+                status,
+                effectiveAt,
+                note);
+
+            AddHistoryRow(
+                entry.PlayerId,
+                newTeam.Id,
+                season.Id,
+                status,
+                effectiveAt,
+                note);
 
             await _dbContext.SaveChangesAsync();
 
@@ -230,6 +272,250 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
+        /// <summary>
+        /// Atomically swaps the RosterStatus of two players on the same
+        /// fantasy team at the same effective instant. Enforces:
+        ///   - both players are on the given team for the given season;
+        ///   - both players have a classifiable position group;
+        ///   - both players share the same position group
+        ///     (F &lt;-&gt; F, D &lt;-&gt; D, G &lt;-&gt; G);
+        ///   - the swap does not violate the league shape
+        ///     (12/6/1 active + 4/2/1 bench + 3 prospects).
+        ///
+        /// The two players simply exchange statuses; the caller does not
+        /// need to specify which goes where.
+        /// </summary>
+        public async Task<RosterActionResultDto> SwapRosterStatusAsync(
+            SwapRosterStatusRequest request)
+        {
+            var validation = await ValidateSwapAsync(request);
+
+            if (validation.Failure != null)
+            {
+                return validation.Failure;
+            }
+
+            var entryA = validation.EntryA!;
+            var entryB = validation.EntryB!;
+            var season = validation.Season!;
+
+            var previousStatusA = entryA.RosterStatus;
+            var previousStatusB = entryB.RosterStatus;
+
+            // Exchange. Safe: validation guaranteed two distinct rows.
+            entryA.RosterStatus = previousStatusB;
+            entryB.RosterStatus = previousStatusA;
+
+            var effectiveAt = NormalizeEffectiveAt(request.EffectiveAt);
+
+            var note = string.IsNullOrWhiteSpace(request.Note)
+                ? $"Swap {previousStatusA} <-> {previousStatusB}"
+                : request.Note!.Trim();
+
+            AddHistoryRow(
+                entryA.PlayerId,
+                entryA.FantasyTeamId,
+                season.Id,
+                entryA.RosterStatus,
+                effectiveAt,
+                note);
+
+            AddHistoryRow(
+                entryB.PlayerId,
+                entryB.FantasyTeamId,
+                season.Id,
+                entryB.RosterStatus,
+                effectiveAt,
+                note);
+
+            await _dbContext.SaveChangesAsync();
+
+            return new RosterActionResultDto
+            {
+                Success = true,
+                Message =
+                    $"'{PlayerName(entryA.Player!)}' -> {entryA.RosterStatus}, " +
+                    $"'{PlayerName(entryB.Player!)}' -> {entryB.RosterStatus}.",
+                Entry = ToRosterEntryDto(entryA)
+            };
+        }
+
+        /// <summary>
+        /// Sets a single player's RosterStatus. Escape hatch used for
+        /// corrections, backfills, and any case where a swap does not
+        /// apply. Validation still enforces the league shape.
+        /// </summary>
+        public async Task<RosterActionResultDto> SetRosterStatusAsync(
+            SetRosterStatusRequest request)
+        {
+            var season = await ResolveSeasonAsync(request.SeasonId);
+
+            if (season == null)
+            {
+                return Failure("Season not found. Run POST /api/League/setup first.");
+            }
+
+            if (!TryParseRosterStatus(request.NewRosterStatus, out var newStatus))
+            {
+                return Failure(
+                    $"Invalid NewRosterStatus '{request.NewRosterStatus}'. " +
+                    "Use Active, Bench or Prospect.");
+            }
+
+            var entry = await _dbContext.RosterEntries
+                .Include(e => e.Player)
+                .Include(e => e.FantasyTeam)
+                .FirstOrDefaultAsync(e =>
+                    e.SeasonId == season.Id &&
+                    e.FantasyTeamId == request.FantasyTeamId &&
+                    e.PlayerId == request.PlayerId);
+
+            if (entry == null)
+            {
+                return Failure(
+                    $"No roster entry found for player {request.PlayerId} " +
+                    $"on team {request.FantasyTeamId} for {season.Name}.");
+            }
+
+            if (entry.RosterStatus == newStatus)
+            {
+                return Failure(
+                    $"'{PlayerName(entry.Player!)}' is already {newStatus}.");
+            }
+
+            var shapeFailure = await CheckShapeAfterAsync(
+                entry.FantasyTeamId,
+                season.Id,
+                new[] { (entry.Id, newStatus) });
+
+            if (shapeFailure != null)
+            {
+                return shapeFailure;
+            }
+
+            var previousStatus = entry.RosterStatus;
+
+            entry.RosterStatus = newStatus;
+
+            var effectiveAt = NormalizeEffectiveAt(request.EffectiveAt);
+
+            AddHistoryRow(
+                entry.PlayerId,
+                entry.FantasyTeamId,
+                season.Id,
+                newStatus,
+                effectiveAt,
+                request.Note ?? $"Set {previousStatus} -> {newStatus}");
+
+            await _dbContext.SaveChangesAsync();
+
+            return new RosterActionResultDto
+            {
+                Success = true,
+                Message = $"'{PlayerName(entry.Player!)}' -> {newStatus}.",
+                Entry = ToRosterEntryDto(entry)
+            };
+        }
+
+        /// <summary>
+        /// Returns the append-only history of one player for one season,
+        /// most recent first. Used by the admin audit view.
+        /// </summary>
+        public async Task<List<RosterStatusHistoryDto>> GetRosterStatusHistoryAsync(
+            int playerId,
+            int? seasonId)
+        {
+            var season = await ResolveSeasonAsync(seasonId);
+
+            if (season == null)
+            {
+                return new List<RosterStatusHistoryDto>();
+            }
+
+            return await _dbContext.RosterStatusHistories
+                .Include(h => h.Player)
+                .Include(h => h.FantasyTeam)
+                .Where(h =>
+                    h.PlayerId == playerId &&
+                    h.SeasonId == season.Id)
+                .OrderByDescending(h => h.EffectiveAt)
+                .ThenByDescending(h => h.Id)
+                .Select(h => new RosterStatusHistoryDto
+                {
+                    Id = h.Id,
+                    PlayerId = h.PlayerId,
+                    PlayerFirstName = h.Player!.FirstName,
+                    PlayerLastName = h.Player!.LastName,
+                    FantasyTeamId = h.FantasyTeamId,
+                    FantasyTeamName = h.FantasyTeam!.Name,
+                    SeasonId = h.SeasonId,
+                    RosterStatus = h.RosterStatus.ToString(),
+                    EffectiveAt = h.EffectiveAt,
+                    CreatedAt = h.CreatedAt,
+                    Note = h.Note
+                })
+                .ToListAsync();
+        }
+
+        /// <summary>
+        /// One-time seed for turning history on: writes one history row
+        /// per current RosterEntry, effective at the given instant.
+        /// Skips entries that already have any history row for the season.
+        /// </summary>
+        public async Task<RosterActionResultDto> BackfillStatusHistoryAsync(
+            BackfillStatusHistoryRequest request)
+        {
+            var season = await ResolveSeasonAsync(request.SeasonId);
+
+            if (season == null)
+            {
+                return Failure("Season not found. Run POST /api/League/setup first.");
+            }
+
+            var entries = await _dbContext.RosterEntries
+                .Include(e => e.Player)
+                .Where(e => e.SeasonId == season.Id)
+                .ToListAsync();
+
+            var alreadyTracked = (await _dbContext.RosterStatusHistories
+                .Where(h => h.SeasonId == season.Id)
+                .Select(h => h.PlayerId)
+                .Distinct()
+                .ToListAsync())
+                .ToHashSet();
+
+            var normalized = NormalizeEffectiveAt(request.EffectiveAt);
+
+            var inserted = 0;
+
+            foreach (var entry in entries)
+            {
+                if (alreadyTracked.Contains(entry.PlayerId))
+                {
+                    continue;
+                }
+
+                AddHistoryRow(
+                    entry.PlayerId,
+                    entry.FantasyTeamId,
+                    season.Id,
+                    entry.RosterStatus,
+                    normalized,
+                    "Backfill from current RosterEntry");
+
+                inserted++;
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return new RosterActionResultDto
+            {
+                Success = true,
+                Message =
+                    $"Backfilled {inserted} history row(s) for {season.Name}."
+            };
+        }
+
         public async Task<RosterActionResultDto> UpdateEntryAsync(UpdateRosterEntryRequest request)
         {
             var hasStatus = !string.IsNullOrWhiteSpace(request.RosterStatus);
@@ -265,6 +551,9 @@ namespace NhlFantasyLeague.api.Services
             }
 
             var teamChanged = false;
+            var oldTeamId = entry.FantasyTeamId;
+            var oldTeamName = entry.FantasyTeam?.Name ?? $"team {entry.FantasyTeamId}";
+            var tradeStatus = entry.RosterStatus;
 
             if (request.FantasyTeamId.HasValue &&
                 request.FantasyTeamId.Value != entry.FantasyTeamId)
@@ -275,6 +564,16 @@ namespace NhlFantasyLeague.api.Services
                 if (targetTeam == null)
                 {
                     return Failure($"Fantasy team {request.FantasyTeamId.Value} not found.");
+                }
+
+                // Moving a player between fantasy teams is a trade. It
+                // needs a valid EffectiveAt so the recompute can slice
+                // his FP between the two teams.
+                if (request.EffectiveAt == null || request.EffectiveAt == default)
+                {
+                    return Failure(
+                        "EffectiveAt is required when the team changes. " +
+                        "Pass the UTC instant the trade becomes effective.");
                 }
 
                 entry.FantasyTeam = targetTeam;
@@ -289,6 +588,35 @@ namespace NhlFantasyLeague.api.Services
             if (request.RosterSlot.HasValue)
             {
                 entry.RosterSlot = request.RosterSlot.Value;
+            }
+
+            // Only write trade history when the team actually changed.
+            // Status-only and slot-only updates do not append history:
+            // they are covered by the swap / set-status endpoints, which
+            // write their own rows. This keeps the audit trail exact.
+            if (teamChanged)
+            {
+                var effectiveAt = NormalizeEffectiveAt(request.EffectiveAt!.Value);
+
+                var note = string.IsNullOrWhiteSpace(request.Note)
+                    ? $"Trade from '{oldTeamName}' to '{entry.FantasyTeam?.Name}'"
+                    : request.Note!.Trim();
+
+                AddHistoryRow(
+                    entry.PlayerId,
+                    oldTeamId,
+                    entry.SeasonId,
+                    tradeStatus,
+                    effectiveAt,
+                    note);
+
+                AddHistoryRow(
+                    entry.PlayerId,
+                    entry.FantasyTeamId,
+                    entry.SeasonId,
+                    tradeStatus,
+                    effectiveAt,
+                    note);
             }
 
             await _dbContext.SaveChangesAsync();
@@ -880,6 +1208,248 @@ namespace NhlFantasyLeague.api.Services
                 StartSeason = contract.StartSeason,
                 EndSeason = contract.EndSeason
             };
+        }
+
+        // =================================================================
+        // Swap / shape validation helpers
+        // =================================================================
+
+        private sealed class SwapValidationResult
+        {
+            public RosterEntry? EntryA { get; set; }
+            public RosterEntry? EntryB { get; set; }
+            public Season? Season { get; set; }
+            public RosterActionResultDto? Failure { get; set; }
+        }
+
+        private async Task<SwapValidationResult> ValidateSwapAsync(
+            SwapRosterStatusRequest request)
+        {
+            var season = await ResolveSeasonAsync(request.SeasonId);
+
+            if (season == null)
+            {
+                return new SwapValidationResult
+                {
+                    Failure = Failure(
+                        "Season not found. Run POST /api/League/setup first.")
+                };
+            }
+
+            if (request.PlayerAId == request.PlayerBId)
+            {
+                return new SwapValidationResult
+                {
+                    Failure = Failure(
+                        "PlayerAId and PlayerBId must be different.")
+                };
+            }
+
+            var entryA = await _dbContext.RosterEntries
+                .Include(e => e.Player)
+                .FirstOrDefaultAsync(e =>
+                    e.SeasonId == season.Id &&
+                    e.FantasyTeamId == request.FantasyTeamId &&
+                    e.PlayerId == request.PlayerAId);
+
+            var entryB = await _dbContext.RosterEntries
+                .Include(e => e.Player)
+                .FirstOrDefaultAsync(e =>
+                    e.SeasonId == season.Id &&
+                    e.FantasyTeamId == request.FantasyTeamId &&
+                    e.PlayerId == request.PlayerBId);
+
+            if (entryA == null)
+            {
+                return new SwapValidationResult
+                {
+                    Failure = Failure(
+                        $"Player {request.PlayerAId} is not on " +
+                        $"team {request.FantasyTeamId} for {season.Name}.")
+                };
+            }
+
+            if (entryB == null)
+            {
+                return new SwapValidationResult
+                {
+                    Failure = Failure(
+                        $"Player {request.PlayerBId} is not on " +
+                        $"team {request.FantasyTeamId} for {season.Name}.")
+                };
+            }
+
+            var groupA = PositionGroupHelper.Classify(entryA.Player!.Position);
+            var groupB = PositionGroupHelper.Classify(entryB.Player!.Position);
+
+            if (groupA == PositionGroup.Unknown ||
+                groupB == PositionGroup.Unknown)
+            {
+                return new SwapValidationResult
+                {
+                    Failure = Failure(
+                        "Cannot swap: at least one player has an " +
+                        "unclassifiable position. " +
+                        $"A='{entryA.Player.Position}', " +
+                        $"B='{entryB.Player.Position}'.")
+                };
+            }
+
+            if (groupA != groupB)
+            {
+                return new SwapValidationResult
+                {
+                    Failure = Failure(
+                        "Cannot swap across position groups. " +
+                        $"{PlayerName(entryA.Player)} is {groupA}, " +
+                        $"{PlayerName(entryB.Player)} is {groupB}.")
+                };
+            }
+
+            var shapeFailure = await CheckShapeAfterAsync(
+                request.FantasyTeamId,
+                season.Id,
+                new[]
+                {
+                    (entryA.Id, entryB.RosterStatus),
+                    (entryB.Id, entryA.RosterStatus)
+                });
+
+            if (shapeFailure != null)
+            {
+                return new SwapValidationResult { Failure = shapeFailure };
+            }
+
+            return new SwapValidationResult
+            {
+                EntryA = entryA,
+                EntryB = entryB,
+                Season = season
+            };
+        }
+
+        /// <summary>
+        /// Simulates the given pending changes on top of the current
+        /// roster and refuses the operation when the resulting shape is
+        /// not exactly 12/6/1 active + 4/2/1 bench + 3 prospects.
+        /// </summary>
+        private async Task<RosterActionResultDto?> CheckShapeAfterAsync(
+            int fantasyTeamId,
+            int seasonId,
+            IEnumerable<(int EntryId, RosterStatus NewStatus)> changes)
+        {
+            var changeMap = changes.ToDictionary(
+                c => c.EntryId, c => c.NewStatus);
+
+            var entries = await _dbContext.RosterEntries
+                .Include(e => e.Player)
+                .Where(e =>
+                    e.FantasyTeamId == fantasyTeamId &&
+                    e.SeasonId == seasonId)
+                .ToListAsync();
+
+            int activeF = 0, activeD = 0, activeG = 0;
+            int benchF = 0, benchD = 0, benchG = 0;
+            int prospects = 0;
+
+            foreach (var entry in entries)
+            {
+                var status = changeMap.TryGetValue(entry.Id, out var ns)
+                    ? ns
+                    : entry.RosterStatus;
+
+                if (status == RosterStatus.Prospect)
+                {
+                    prospects++;
+                    continue;
+                }
+
+                var group = PositionGroupHelper.Classify(
+                    entry.Player!.Position);
+
+                if (group == PositionGroup.Unknown)
+                {
+                    return Failure(
+                        $"Cannot classify position " +
+                        $"'{entry.Player.Position}' for " +
+                        $"{PlayerName(entry.Player)}.");
+                }
+
+                if (status == RosterStatus.Active)
+                {
+                    switch (group)
+                    {
+                        case PositionGroup.Forward: activeF++; break;
+                        case PositionGroup.Defense: activeD++; break;
+                        case PositionGroup.Goalie: activeG++; break;
+                    }
+                }
+                else if (status == RosterStatus.Bench)
+                {
+                    switch (group)
+                    {
+                        case PositionGroup.Forward: benchF++; break;
+                        case PositionGroup.Defense: benchD++; break;
+                        case PositionGroup.Goalie: benchG++; break;
+                    }
+                }
+            }
+
+            if (activeF != 12 || activeD != 6 || activeG != 1 ||
+                benchF != 4 || benchD != 2 || benchG != 1 ||
+                prospects != 3)
+            {
+                return Failure(
+                    "Operation refused: the resulting roster shape would be " +
+                    $"{activeF}F/{activeD}D/{activeG}G active, " +
+                    $"{benchF}F/{benchD}D/{benchG}G bench, " +
+                    $"{prospects} prospect(s). " +
+                    "Required: 12F/6D/1G active, 4F/2D/1G bench, 3 prospects.");
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Truncates the caller-supplied instant to day precision
+        /// (00:00:00 UTC of the same calendar day) so the scoring
+        /// recompute can compare it directly to PlayerGameLog.GameDate
+        /// without needing a per-game start time.
+        /// </summary>
+        private static DateTime NormalizeEffectiveAt(DateTime raw)
+        {
+            if (raw.Kind == DateTimeKind.Local)
+            {
+                raw = raw.ToUniversalTime();
+            }
+            else if (raw.Kind == DateTimeKind.Unspecified)
+            {
+                raw = DateTime.SpecifyKind(raw, DateTimeKind.Utc);
+            }
+
+            return new DateTime(
+                raw.Year, raw.Month, raw.Day,
+                0, 0, 0, DateTimeKind.Utc);
+        }
+
+        private void AddHistoryRow(
+            int playerId,
+            int fantasyTeamId,
+            int seasonId,
+            RosterStatus status,
+            DateTime effectiveAt,
+            string? note)
+        {
+            _dbContext.RosterStatusHistories.Add(new RosterStatusHistory
+            {
+                PlayerId = playerId,
+                FantasyTeamId = fantasyTeamId,
+                SeasonId = seasonId,
+                RosterStatus = status,
+                EffectiveAt = effectiveAt,
+                CreatedAt = DateTime.UtcNow,
+                Note = note
+            });
         }
 
         private sealed class CardStatLine

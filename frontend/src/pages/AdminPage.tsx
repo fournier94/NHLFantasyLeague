@@ -1,10 +1,11 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
     assignPlayer,
     getLeagueTeams,
     getTeamRoster,
     releasePlayer,
     searchPlayers,
+    swapRosterStatus,
     updateRosterEntry,
     type FantasyTeam,
     type PlayerSearchResult,
@@ -14,6 +15,115 @@ import {
 import { useAuraAll } from '@/lib/auraContext';
 import { AURA_CHANNELS } from '@/lib/auraConfig';
 import { AuraButton } from '@/components/ui/AuraButton';
+
+// ---------------------------------------------------------------------
+// Position grouping (mirrors the backend PositionGroup helper).
+// ---------------------------------------------------------------------
+
+type PositionGroup = 'F' | 'D' | 'G' | 'U';
+
+function positionGroup(rawPosition: string | null | undefined): PositionGroup {
+    if (!rawPosition) return 'U';
+
+    const normalized = rawPosition
+        .trim()
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ');
+
+    if (
+        normalized === 'G' ||
+        normalized === 'GK' ||
+        normalized === 'GB' ||
+        normalized === 'GOALIE' ||
+        normalized === 'GOALTENDER' ||
+        normalized === 'GARDIEN' ||
+        normalized === 'GARDIEN DE BUT'
+    ) {
+        return 'G';
+    }
+
+    if (
+        normalized === 'D' ||
+        normalized === 'LD' ||
+        normalized === 'RD' ||
+        normalized === 'DEFENSE' ||
+        normalized === 'DEFENCE' ||
+        normalized === 'DEFENSEMAN' ||
+        normalized === 'DEFENCEMAN' ||
+        normalized === 'LEFT DEFENSE' ||
+        normalized === 'RIGHT DEFENSE' ||
+        normalized === 'DEFENSEUR' ||
+        normalized === 'ARRIERE'
+    ) {
+        return 'D';
+    }
+
+    if (
+        normalized === 'C' ||
+        normalized === 'CENTER' ||
+        normalized === 'CENTRE' ||
+        normalized === 'L' ||
+        normalized === 'LW' ||
+        normalized === 'LEFT WING' ||
+        normalized === 'LEFTWING' ||
+        normalized === 'R' ||
+        normalized === 'RW' ||
+        normalized === 'RIGHT WING' ||
+        normalized === 'RIGHTWING' ||
+        normalized === 'W' ||
+        normalized === 'WINGER' ||
+        normalized === 'WING' ||
+        normalized === 'F' ||
+        normalized === 'FORWARD' ||
+        normalized === 'AG' ||
+        normalized === 'AD' ||
+        normalized === 'A' ||
+        normalized === 'AILIER' ||
+        normalized === 'AILIER GAUCHE' ||
+        normalized === 'AILIER DROIT' ||
+        normalized === 'AVANT' ||
+        normalized === 'ATTAQUANT'
+    ) {
+        return 'F';
+    }
+
+    return 'U';
+}
+
+function groupLabel(group: PositionGroup): string {
+    switch (group) {
+        case 'F': return 'Attaquants';
+        case 'D': return 'Défenseurs';
+        case 'G': return 'Gardiens';
+        default: return 'Inconnu';
+    }
+}
+
+/**
+ * Converts a value from <input type="datetime-local"> (which is in the
+ * browser's local time zone and has no seconds) into an ISO 8601 UTC
+ * string suitable for the API. Returns null when the input is empty
+ * or malformed.
+ */
+function localDateTimeToUtcIso(localValue: string): string | null {
+    if (!localValue) return null;
+
+    const parsed = new Date(localValue);
+    if (Number.isNaN(parsed.getTime())) return null;
+
+    return parsed.toISOString();
+}
+
+/** Today's local date at 00:00, formatted for a datetime-local input. */
+function todayLocalDateInputValue(): string {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T00:00`;
+}
 
 const ROSTER_STATUSES = [
     { value: 'Active', label: 'Actif' },
@@ -57,7 +167,32 @@ export default function AdminPage() {
     const [rosterLoading, setRosterLoading] = useState(false);
     const [rosterError, setRosterError] = useState<string | null>(null);
 
+    // EffectiveAt for the assigned-player update form (used only when
+    // the target team differs from the current one, i.e. a trade).
+    const [updateEffectiveAt, setUpdateEffectiveAt] = useState(
+        todayLocalDateInputValue,
+    );
+
     const [showAppearance, setShowAppearance] = useState(false);
+
+    // --- Swap section state ---
+    const [swapTeamId, setSwapTeamId] = useState('');
+    const [swapTeamRoster, setSwapTeamRoster] = useState<TeamRoster | null>(null);
+    const [swapLoading, setSwapLoading] = useState(false);
+    const [swapError, setSwapError] = useState<string | null>(null);
+
+    // Active <-> Bench swap
+    const [abEffectiveAt, setAbEffectiveAt] = useState(todayLocalDateInputValue);
+    const [abPlayerAId, setAbPlayerAId] = useState('');
+    const [abPlayerBId, setAbPlayerBId] = useState('');
+
+    // Prospect swap
+    const [prEffectiveAt, setPrEffectiveAt] = useState(todayLocalDateInputValue);
+    const [prProspectId, setPrProspectId] = useState('');
+    const [prTargetId, setPrTargetId] = useState('');
+
+    const [swapSubmitting, setSwapSubmitting] = useState(false);
+    const [swapSuccess, setSwapSuccess] = useState<string | null>(null);
 
     const { intensities, setIntensity, reset } = useAuraAll();
 
@@ -152,6 +287,50 @@ export default function AdminPage() {
         };
     }, [rosterTeamId]);
 
+    // --- Swap section: load the roster of the selected team ---
+    useEffect(() => {
+        if (!swapTeamId) {
+            setSwapTeamRoster(null);
+            setSwapError(null);
+            return;
+        }
+
+        let cancelled = false;
+        setSwapLoading(true);
+        setSwapError(null);
+
+        getTeamRoster(Number(swapTeamId))
+            .then((data) => {
+                if (!cancelled) {
+                    setSwapTeamRoster(data);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setSwapError('Impossible de charger cette équipe.');
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setSwapLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [swapTeamId]);
+
+    // Reset the swap dropdowns whenever the team changes.
+    useEffect(() => {
+        setAbPlayerAId('');
+        setAbPlayerBId('');
+        setPrProspectId('');
+        setPrTargetId('');
+        setSwapSuccess(null);
+        setSwapError(null);
+    }, [swapTeamId]);
+
     function handleSelect(player: PlayerSearchResult) {
         setSelectedPlayer(player);
         setQuery(`${player.firstName} ${player.lastName}`);
@@ -189,6 +368,177 @@ export default function AdminPage() {
         } catch {
             setRosterError('Impossible de recharger cette équipe.');
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Swap section: derived lists
+    // ---------------------------------------------------------------
+
+    const swapEntries = swapTeamRoster?.entries ?? [];
+
+    const activeOrBenchByGroup = useMemo(() => {
+        const groups: Record<PositionGroup, RosterEntry[]> = {
+            F: [], D: [], G: [], U: [],
+        };
+
+        for (const entry of swapEntries) {
+            if (entry.rosterStatus !== 'Active' && entry.rosterStatus !== 'Bench') {
+                continue;
+            }
+            groups[positionGroup(entry.position)].push(entry);
+        }
+
+        return groups;
+    }, [swapEntries]);
+
+    const prospectsByGroup = useMemo(() => {
+        const groups: Record<PositionGroup, RosterEntry[]> = {
+            F: [], D: [], G: [], U: [],
+        };
+
+        for (const entry of swapEntries) {
+            if (entry.rosterStatus !== 'Prospect') continue;
+            groups[positionGroup(entry.position)].push(entry);
+        }
+
+        return groups;
+    }, [swapEntries]);
+
+    // --- Active <-> Bench: pick the two players of the same group ---
+
+    // Whichever side the user picked first defines the group filter.
+    const abSelectedGroup = useMemo<PositionGroup | null>(() => {
+        const fromA = swapEntries.find((e) => String(e.playerId) === abPlayerAId);
+        if (fromA) return positionGroup(fromA.position);
+
+        const fromB = swapEntries.find((e) => String(e.playerId) === abPlayerBId);
+        if (fromB) return positionGroup(fromB.position);
+
+        return null;
+    }, [swapEntries, abPlayerAId, abPlayerBId]);
+
+    // Dropdown A: every Active or Bench player (optionally filtered by group).
+    const abOptionsA = useMemo(() => {
+        if (!abSelectedGroup) {
+            return activeOrBenchByGroup.F
+                .concat(activeOrBenchByGroup.D)
+                .concat(activeOrBenchByGroup.G);
+        }
+        return activeOrBenchByGroup[abSelectedGroup];
+    }, [abSelectedGroup, activeOrBenchByGroup]);
+
+    // Dropdown B: same, minus the one already picked in A.
+    const abOptionsB = useMemo(() => {
+        return abOptionsA.filter(
+            (e) => String(e.playerId) !== abPlayerAId,
+        );
+    }, [abOptionsA, abPlayerAId]);
+
+    const abSelectionValid =
+        abPlayerAId !== '' &&
+        abPlayerBId !== '' &&
+        abEffectiveAt !== '' &&
+        abSelectedGroup !== null;
+
+    // --- Prospect swap: prospect first, then target ---
+
+    const prProspect = useMemo(
+        () => swapEntries.find((e) => String(e.playerId) === prProspectId) ?? null,
+        [swapEntries, prProspectId],
+    );
+
+    const prProspectGroup = prProspect
+        ? positionGroup(prProspect.position)
+        : null;
+
+    // Target dropdown unlocks only after a prospect is picked.
+    // Shows Active or Bench players of the SAME position group.
+    const prTargets = useMemo(() => {
+        if (!prProspectGroup) return [];
+        return activeOrBenchByGroup[prProspectGroup];
+    }, [prProspectGroup, activeOrBenchByGroup]);
+
+    const prSelectionValid =
+        prProspectId !== '' &&
+        prTargetId !== '' &&
+        prEffectiveAt !== '' &&
+        prProspectGroup !== null;
+
+    // ---------------------------------------------------------------
+    // Swap section: submit handlers
+    // ---------------------------------------------------------------
+
+    async function runSwap(
+        label: string,
+        playerAId: number,
+        playerBId: number,
+        localEffectiveAt: string,
+    ) {
+        if (!swapTeamRoster) return;
+
+        const iso = localDateTimeToUtcIso(localEffectiveAt);
+        if (!iso) {
+            setSwapError('Date et heure invalides.');
+            return;
+        }
+
+        setSwapSubmitting(true);
+        setSwapError(null);
+        setSwapSuccess(null);
+
+        try {
+            const result = await swapRosterStatus({
+                fantasyTeamId: swapTeamRoster.fantasyTeamId,
+                playerAId,
+                playerBId,
+                effectiveAt: iso,
+                note: label,
+            });
+
+            setSwapSuccess(result.message);
+
+            // Refresh the local swap roster so dropdowns reflect the
+            // new statuses immediately.
+            const fresh = await getTeamRoster(swapTeamRoster.fantasyTeamId);
+            setSwapTeamRoster(fresh);
+
+            // Also refresh the "Alignement d'une équipe" panel if it's
+            // showing the same team.
+            if (rosterTeamId === String(swapTeamRoster.fantasyTeamId)) {
+                setTeamRoster(fresh);
+            }
+
+            setAbPlayerAId('');
+            setAbPlayerBId('');
+            setPrProspectId('');
+            setPrTargetId('');
+        } catch (err) {
+            setSwapError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setSwapSubmitting(false);
+        }
+    }
+
+    function handleActiveBenchSwap() {
+        if (!abSelectionValid) return;
+        return runSwap(
+            'Swap Active <-> Bench',
+            Number(abPlayerAId),
+            Number(abPlayerBId),
+            abEffectiveAt,
+        );
+    }
+
+    function handleProspectSwap() {
+        if (!prSelectionValid) return;
+        return runSwap(
+            'Swap Prospect <-> Active/Bench',
+            Number(prProspectId),
+            Number(prTargetId),
+            prEffectiveAt,
+        );
     }
 
     function handleRosterEntrySelect(entry: RosterEntry) {
@@ -257,6 +607,25 @@ export default function AdminPage() {
             return;
         }
 
+        // A team change is a trade and needs an EffectiveAt.
+        const teamIsChanging =
+            selectedPlayer.fantasyTeamId != null &&
+            String(selectedPlayer.fantasyTeamId) !== fantasyTeamId;
+
+        let effectiveAtIso: string | undefined;
+
+        if (teamIsChanging) {
+            const iso = localDateTimeToUtcIso(updateEffectiveAt);
+            if (!iso) {
+                setError(
+                    "Un changement d'équipe est un échange et nécessite " +
+                    'une date et une heure valides.',
+                );
+                return;
+            }
+            effectiveAtIso = iso;
+        }
+
         setSubmitting(true);
         setError(null);
         setSuccess(null);
@@ -266,6 +635,7 @@ export default function AdminPage() {
                 rosterEntryId: selectedPlayer.rosterEntryId,
                 rosterStatus,
                 fantasyTeamId: Number(fantasyTeamId),
+                effectiveAt: effectiveAtIso,
             });
 
             setSuccess(result.message);
@@ -467,6 +837,19 @@ export default function AdminPage() {
                             ))}
                         </select>
 
+                        <label className='text-sm font-medium text-muted-foreground'>
+                            Date et heure d'entrée en vigueur (échange seulement)
+                        </label>
+
+                        <input
+                            type='datetime-local'
+                            value={updateEffectiveAt}
+                            onChange={(event) =>
+                                setUpdateEffectiveAt(event.target.value)
+                            }
+                            className={selectClass}
+                        />
+
                         <button
                             type='button'
                             onClick={handleCombinedUpdate}
@@ -580,6 +963,227 @@ export default function AdminPage() {
                     </ul>
                 )}
             </div>
+
+            {/* ============================================================
+                Changement de statut (swaps)
+                ============================================================ */}
+            <div className='max-w-3xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Changement de statut
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Chaque changement est un échange entre deux joueurs du
+                    même groupe de position. Le format 12F/6D/1G actifs,
+                    4F/2D/1G banc, 3 prospects est toujours respecté.
+                </p>
+
+                <select
+                    value={swapTeamId}
+                    onChange={(event) => setSwapTeamId(event.target.value)}
+                    className={selectClass}
+                >
+                    <option value='' disabled>
+                        Choisir une équipe
+                    </option>
+                    {teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                            {team.name}
+                        </option>
+                    ))}
+                </select>
+
+                {swapLoading && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {swapError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {swapError}
+                    </p>
+                )}
+
+                {swapSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {swapSuccess}
+                    </p>
+                )}
+
+                {swapTeamRoster && (
+                    <>
+                        {/* ------- Active <-> Bench ------- */}
+                        <div className='space-y-3 rounded-lg border border-border bg-card p-3'>
+                            <h4 className='text-sm font-semibold uppercase tracking-wide text-muted-foreground'>
+                                Actif &lt;-&gt; Banc
+                            </h4>
+
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Date et heure d'entrée en vigueur
+                            </label>
+                            <input
+                                type='datetime-local'
+                                value={abEffectiveAt}
+                                onChange={(event) =>
+                                    setAbEffectiveAt(event.target.value)
+                                }
+                                className={selectClass}
+                            />
+
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Joueur A
+                            </label>
+                            <select
+                                value={abPlayerAId}
+                                onChange={(event) => {
+                                    setAbPlayerAId(event.target.value);
+                                    setAbPlayerBId('');
+                                }}
+                                className={selectClass}
+                            >
+                                <option value=''>Choisir un joueur</option>
+                                {abOptionsA.map((entry) => (
+                                    <option
+                                        key={entry.playerId}
+                                        value={entry.playerId}
+                                    >
+                                        {entry.firstName} {entry.lastName} ·{' '}
+                                        {entry.position} · {entry.rosterStatus}
+                                    </option>
+                                ))}
+                            </select>
+
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Joueur B
+                            </label>
+                            <select
+                                value={abPlayerBId}
+                                onChange={(event) =>
+                                    setAbPlayerBId(event.target.value)
+                                }
+                                disabled={abPlayerAId === ''}
+                                className={selectClass}
+                            >
+                                <option value=''>Choisir un joueur</option>
+                                {abOptionsB.map((entry) => (
+                                    <option
+                                        key={entry.playerId}
+                                        value={entry.playerId}
+                                    >
+                                        {entry.firstName} {entry.lastName} ·{' '}
+                                        {entry.position} · {entry.rosterStatus}
+                                    </option>
+                                ))}
+                            </select>
+
+                            {abSelectedGroup && (
+                                <p className='text-xs text-muted-foreground'>
+                                    Groupe filtré : {groupLabel(abSelectedGroup)}
+                                </p>
+                            )}
+
+                            <button
+                                type='button'
+                                onClick={handleActiveBenchSwap}
+                                disabled={!abSelectionValid || swapSubmitting}
+                                className={primaryButtonClass}
+                            >
+                                {swapSubmitting ? 'Traitement...' : 'Échanger'}
+                            </button>
+                        </div>
+
+                        {/* ------- Prospect <-> Actif/Banc ------- */}
+                        <div className='space-y-3 rounded-lg border border-border bg-card p-3'>
+                            <h4 className='text-sm font-semibold uppercase tracking-wide text-muted-foreground'>
+                                Prospect &lt;-&gt; Actif/Banc
+                            </h4>
+
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Date et heure d'entrée en vigueur
+                            </label>
+                            <input
+                                type='datetime-local'
+                                value={prEffectiveAt}
+                                onChange={(event) =>
+                                    setPrEffectiveAt(event.target.value)
+                                }
+                                className={selectClass}
+                            />
+
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Prospect
+                            </label>
+                            <select
+                                value={prProspectId}
+                                onChange={(event) => {
+                                    setPrProspectId(event.target.value);
+                                    setPrTargetId('');
+                                }}
+                                className={selectClass}
+                            >
+                                <option value=''>Choisir un prospect</option>
+                                {(['F', 'D', 'G'] as const).flatMap((g) =>
+                                    prospectsByGroup[g].map((entry) => (
+                                        <option
+                                            key={entry.playerId}
+                                            value={entry.playerId}
+                                        >
+                                            {entry.firstName} {entry.lastName} ·{' '}
+                                            {entry.position}
+                                        </option>
+                                    )),
+                                )}
+                            </select>
+
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Joueur Actif ou Banc (même groupe)
+                            </label>
+                            <select
+                                value={prTargetId}
+                                onChange={(event) =>
+                                    setPrTargetId(event.target.value)
+                                }
+                                disabled={prProspectId === ''}
+                                className={selectClass}
+                            >
+                                <option value=''>
+                                    {prProspectId === ''
+                                        ? 'Sélectionnez un prospect en premier'
+                                        : prTargets.length === 0
+                                            ? 'Aucun joueur admissible'
+                                            : 'Choisir un joueur'}
+                                </option>
+                                {prTargets.map((entry) => (
+                                    <option
+                                        key={entry.playerId}
+                                        value={entry.playerId}
+                                    >
+                                        {entry.firstName} {entry.lastName} ·{' '}
+                                        {entry.position} · {entry.rosterStatus}
+                                    </option>
+                                ))}
+                            </select>
+
+                            {prProspectGroup && (
+                                <p className='text-xs text-muted-foreground'>
+                                    Groupe filtré : {groupLabel(prProspectGroup)}
+                                </p>
+                            )}
+
+                            <button
+                                type='button'
+                                onClick={handleProspectSwap}
+                                disabled={!prSelectionValid || swapSubmitting}
+                                className={primaryButtonClass}
+                            >
+                                {swapSubmitting ? 'Traitement...' : 'Échanger'}
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+
 
             {/* Appearance settings (hidden behind a toggle) */}
             <div className='max-w-2xl space-y-3'>

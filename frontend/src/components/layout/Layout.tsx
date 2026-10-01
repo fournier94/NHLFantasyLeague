@@ -2,6 +2,10 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { TopBar } from '@/components/layout/TopBar';
 import { hasPendingRestore } from '@/lib/scrollRestoration';
+import {
+    isPlayerPath,
+    setLastNonPlayerLocation,
+} from '@/lib/playerNavigation';
 
 /**
  * Shell shared by every page: horizontal top navigation and the current
@@ -15,6 +19,10 @@ import { hasPendingRestore } from '@/lib/scrollRestoration';
  * It also resets the window scroll position to the top whenever the
  * route changes, so navigating from a scrolled page (e.g. Mon équipe)
  * to a new page (e.g. a player detail page) always starts at the top.
+ *
+ * Finally, it records the last non-player location the user visited, so
+ * PlayerPage's Fermer button can jump past a chain of player pages and
+ * land back on it (see lib/playerNavigation.ts).
  */
 export function Layout() {
     const headerRef = useRef<HTMLElement>(null);
@@ -52,6 +60,26 @@ export function Layout() {
         return () => cancelAnimationFrame(frame);
     }, [location.pathname]);
 
+    // Record the last non-player location. Player pages are skipped on
+    // purpose: we want Fermer on a player page to jump all the way back
+    // to the last page that was NOT a player page (typically Mon équipe,
+    // possibly with a query string like ?teamId=5).
+    //
+    // This runs on every location change, including player -> player
+    // transitions, but since those are player paths they simply do not
+    // overwrite the stored value.
+    useEffect(() => {
+        if (isPlayerPath(location.pathname)) {
+            return;
+        }
+
+        setLastNonPlayerLocation({
+            pathname: location.pathname,
+            search: location.search,
+            hash: location.hash,
+        });
+    }, [location.pathname, location.search, location.hash]);
+
     useEffect(() => {
         if (!headerRef.current) {
             return;
@@ -81,7 +109,7 @@ export function Layout() {
         >
             <header
                 ref={headerRef}
-                className='sticky top-0 z-50 flex items-center gap-3 border-b border-border bg-background px-4 py-3'
+                className='sticky top-0 z-50 flex items-center gap-3 bg-background px-4 py-3'
             >
                 <TopBar />
             </header>

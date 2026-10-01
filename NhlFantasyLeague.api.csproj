@@ -20,6 +20,7 @@
     <None Remove="frontend\src\lib\auraConfig.ts" />
     <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
+    <None Remove="frontend\src\lib\playerNavigation.ts" />
     <None Remove="frontend\src\lib\scrollRestoration.ts" />
     <None Remove="frontend\src\pages\PlayerPage.tsx" />
   </ItemGroup>
@@ -39,6 +40,7 @@
     <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\playerNavigation.ts" />
     <TypeScriptCompile Include="frontend\src\lib\scrollRestoration.ts" />
     <TypeScriptCompile Include="frontend\src\pages\PlayerPage.tsx" />
   </ItemGroup>

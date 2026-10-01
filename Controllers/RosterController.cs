@@ -147,5 +147,86 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(players);
         }
+
+        /// <summary>
+        /// Atomically swaps the RosterStatus of two players on the same
+        /// fantasy team at the same effective instant. Enforces same
+        /// position group and the exact league shape
+        /// (12/6/1 active + 4/2/1 bench + 3 prospects).
+        /// </summary>
+        /// <param name="request">Team, the two players, the effective instant and an optional note.</param>
+        /// <returns>The swap result, or 400 with the reason when it fails.</returns>
+        [HttpPost("swap-status")]
+        public async Task<IActionResult> SwapRosterStatus([FromBody] SwapRosterStatusRequest request)
+        {
+            var result = await _rosterAdminService.SwapRosterStatusAsync(request);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Sets a single player's RosterStatus. Escape hatch used for
+        /// corrections and manual adjustments where a swap is not
+        /// applicable. Still enforces the league shape.
+        /// </summary>
+        /// <param name="request">Team, player, new status, effective instant and an optional note.</param>
+        /// <returns>The update result, or 400 with the reason when it fails.</returns>
+        [HttpPost("set-status")]
+        public async Task<IActionResult> SetRosterStatus([FromBody] SetRosterStatusRequest request)
+        {
+            var result = await _rosterAdminService.SetRosterStatusAsync(request);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Returns the append-only RosterStatusHistory of one player for
+        /// one season, most recent first.
+        /// </summary>
+        /// <param name="playerId">Player id (Player.Id).</param>
+        /// <param name="seasonId">Season id, or omitted to use the current season.</param>
+        /// <returns>The history rows.</returns>
+        [HttpGet("status-history/{playerId}")]
+        public async Task<IActionResult> GetRosterStatusHistory(
+            int playerId,
+            [FromQuery] int? seasonId)
+        {
+            var history = await _rosterAdminService
+                .GetRosterStatusHistoryAsync(playerId, seasonId);
+
+            return Ok(history);
+        }
+
+        /// <summary>
+        /// One-time seed that writes a history row per current RosterEntry
+        /// for a season, so existing rosters have a baseline before any
+        /// real swap happens. Safe to re-run: entries that already have
+        /// any history row for the season are skipped.
+        /// </summary>
+        /// <param name="request">Season id (optional) and the effective instant.</param>
+        /// <returns>The number of history rows inserted.</returns>
+        [HttpPost("backfill-status-history")]
+        public async Task<IActionResult> BackfillStatusHistory([FromBody] BackfillStatusHistoryRequest request)
+        {
+            var result = await _rosterAdminService
+                .BackfillStatusHistoryAsync(request);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
     }
 }

@@ -149,14 +149,15 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
 
                 int points = isGoalie
-                    ? game.Goals + game.Assists
-                    : game.Points;
+                     ? game.Goals + game.Assists
+                     : game.Points;
 
                 int fantasyPoints = points;
 
                 if (hatTrick)
                 {
-                    fantasyPoints += 2;
+                    // League rule: a hat trick is worth a +3 bonus.
+                    fantasyPoints += 3;
                 }
 
                 if (goalieWin)
@@ -493,8 +494,230 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
             }
 
+            // Recompute every fantasy team's season total from scratch
+            // using the freshly refreshed game logs and the append-only
+            // roster status history. Runs even when some players failed:
+            // the recompute is idempotent, and a partial refresh just
+            // means the totals reflect whatever game logs we currently
+            // have.
+            try
+            {
+                var totals = await RecomputeTeamSeasonTotalsAsync(
+                    seasonCode, ct);
+
+                result.TeamTotals = totals;
+            }
+            catch (Exception ex)
+            {
+                result.Errors.Add(
+                    $"Team totals recompute failed: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+            }
+
             return result;
         }
+
+        /// <summary>
+        /// Recomputes FantasyTeamSeason.TotalFantasyPoints from scratch
+        /// for one season, then returns a per-team summary.
+        ///
+        /// For each PlayerGameLog in the season:
+        ///   1. Look up the player's RosterStatusHistory row that was
+        ///      effective at the start of the game's calendar day
+        ///      (EffectiveAt &lt;= GameDate 00:00 UTC, most recent wins).
+        ///   2. If that row's RosterStatus is Active, add the game's
+        ///      FantasyPoints to the FantasyTeamSeason row of the team
+        ///      on the history row.
+        ///   3. Otherwise, drop the points.
+        ///
+        /// Because history is append-only and includes a row for every
+        /// trade (against the new team), the "which team and status at
+        /// time T" question is answered by a single ordered lookup with
+        /// no special cases.
+        ///
+        /// Idempotent: every run resets each team's total to 0 first.
+        /// </summary>
+        public async Task<RecomputeTeamTotalsResult> RecomputeTeamSeasonTotalsAsync(
+            int seasonCode,
+            CancellationToken ct = default)
+        {
+            var result = new RecomputeTeamTotalsResult
+            {
+                SeasonCode = seasonCode
+            };
+
+            var season = await _dbContext.Seasons
+                .FirstOrDefaultAsync(
+                    s => s.NhlSeasonCode == seasonCode,
+                    ct);
+
+            if (season == null)
+            {
+                result.Errors.Add(
+                    $"Season {seasonCode} does not exist in the database.");
+
+                return result;
+            }
+
+            // 1. Load every FantasyTeamSeason for the season and zero
+            //    the totals. If any of them are missing, we still want
+            //    to detect that and report it.
+            var teamSeasons = await _dbContext.FantasyTeamSeasons
+                .Where(fts => fts.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            if (teamSeasons.Count == 0)
+            {
+                result.Errors.Add(
+                    $"No FantasyTeamSeason rows for season {seasonCode}. " +
+                    "Run POST /api/League/setup first.");
+
+                return result;
+            }
+
+            var teamSeasonByTeamId = teamSeasons
+                .ToDictionary(fts => fts.FantasyTeamId);
+
+            result.TeamsProcessed = teamSeasons.Count;
+
+            var now = DateTime.UtcNow;
+
+            foreach (var fts in teamSeasons)
+            {
+                fts.TotalFantasyPoints = 0;
+                fts.TotalFantasyPointsComputedAt = now;
+            }
+
+            // 2. Load the whole season's history, grouped by player and
+            //    sorted by EffectiveAt. History is small (one row per
+            //    swap per player, plus one row per trade).
+            var historyRows = await _dbContext.RosterStatusHistories
+                .Where(h => h.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            var historyByPlayerId = historyRows
+                .GroupBy(h => h.PlayerId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .OrderBy(h => h.EffectiveAt)
+                        .ThenBy(h => h.Id)
+                        .ToList());
+
+            // 3. Load every game log row in the season. At ~350 players
+            //    * 82 games this is fine as a materialized list; if it
+            //    ever becomes a problem, switch to a streaming query.
+            var games = await _dbContext.PlayerGameLogs
+                .Where(g => g.SeasonId == season.Id)
+                .Select(g => new
+                {
+                    g.PlayerId,
+                    g.GameDate,
+                    g.FantasyPoints
+                })
+                .ToListAsync(ct);
+
+            result.TotalGamesScanned = games.Count;
+
+            var playersWithoutHistory = new HashSet<int>();
+
+            foreach (var game in games)
+            {
+                if (!historyByPlayerId.TryGetValue(
+                        game.PlayerId,
+                        out var playerHistory) ||
+                    playerHistory.Count == 0)
+                {
+                    playersWithoutHistory.Add(game.PlayerId);
+                    continue;
+                }
+
+                // GameDate is a DateOnly; EffectiveAt was normalized to
+                // 00:00 UTC of the day it was set, so we compare at the
+                // same granularity. Games on the same day as a change
+                // belong to the pre-change status (EffectiveAt <=
+                // game-day-00:00).
+                var gameDayUtc = new DateTime(
+                    game.GameDate.Year,
+                    game.GameDate.Month,
+                    game.GameDate.Day,
+                    0, 0, 0,
+                    DateTimeKind.Utc);
+
+                RosterStatusHistory? effective = null;
+
+                // Last row with EffectiveAt <= game day.
+                for (var i = 0; i < playerHistory.Count; i++)
+                {
+                    if (playerHistory[i].EffectiveAt <= gameDayUtc)
+                    {
+                        effective = playerHistory[i];
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                if (effective == null)
+                {
+                    // Player had no status before this game (e.g. a
+                    // game played before the season-start backfill).
+                    // Skip: no team owned him in a countable state.
+                    continue;
+                }
+
+                if (effective.RosterStatus != RosterStatus.Active)
+                {
+                    continue;
+                }
+
+                if (!teamSeasonByTeamId.TryGetValue(
+                        effective.FantasyTeamId,
+                        out var target))
+                {
+                    // Team exists in history but has no
+                    // FantasyTeamSeason row (should not happen; the
+                    // setup links every team to the current season).
+                    continue;
+                }
+
+                target.TotalFantasyPoints += game.FantasyPoints;
+                result.GamesCredited++;
+            }
+
+            result.PlayersWithoutHistory = playersWithoutHistory.Count;
+
+            await _dbContext.SaveChangesAsync(ct);
+
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Summary of a team-total recompute run.
+    /// </summary>
+    public class RecomputeTeamTotalsResult
+    {
+        public int SeasonCode { get; set; }
+
+        /// <summary>Number of FantasyTeamSeason rows that were reset and recomputed.</summary>
+        public int TeamsProcessed { get; set; }
+
+        /// <summary>Number of PlayerGameLog rows scanned.</summary>
+        public int TotalGamesScanned { get; set; }
+
+        /// <summary>Number of PlayerGameLog rows credited to some team (Active at game time).</summary>
+        public int GamesCredited { get; set; }
+
+        /// <summary>
+        /// Number of players who had games in the season but no history
+        /// row at all. They contribute 0. Typically means the
+        /// backfill endpoint has not been run yet.
+        /// </summary>
+        public int PlayersWithoutHistory { get; set; }
+
+        public List<string> Errors { get; set; } = new();
     }
 
     /// <summary>
@@ -534,5 +757,12 @@ namespace NhlFantasyLeague.api.Services.NHL
         public int FailedPlayers { get; set; }
         public int TotalGamesSaved { get; set; }
         public List<string> Errors { get; set; } = new();
+
+        /// <summary>
+        /// Result of the team-total recompute that runs at the end of
+        /// the refresh. Null when the recompute failed hard before it
+        /// could produce anything.
+        /// </summary>
+        public RecomputeTeamTotalsResult? TeamTotals { get; set; }
     }
 }

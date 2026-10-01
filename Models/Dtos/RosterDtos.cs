@@ -1,4 +1,6 @@
-﻿namespace NhlFantasyLeague.api.Models.Dtos
+﻿using System.ComponentModel.DataAnnotations;
+
+namespace NhlFantasyLeague.api.Models.Dtos
 {
     /// <summary>
     /// Request body for POST /api/Roster/assign: puts a player on a fantasy team.
@@ -38,6 +40,18 @@
 
         /// <summary>Season id. Optional: the current season is used when omitted.</summary>
         public int? SeasonId { get; set; }
+
+        /// <summary>
+        /// UTC instant the move becomes effective. Required. Normalized
+        /// to day precision (00:00 UTC of the same calendar day) so it
+        /// lines up with RosterStatusHistory.EffectiveAt and the scoring
+        /// recompute.
+        /// </summary>
+        [Required]
+        public DateTime EffectiveAt { get; set; }
+
+        /// <summary>Optional free-text note stored on the two history rows.</summary>
+        public string? Note { get; set; }
     }
 
     /// <summary>
@@ -63,6 +77,12 @@
     /// Request body for POST /api/Roster/update: changes the status, the
     /// fantasy team or the slot of an existing roster entry. The fantasy
     /// salary is always derived from the player's PlayerContracts.
+    ///
+    /// When FantasyTeamId is provided AND different from the entry's
+    /// current team, the update is treated as a trade: two
+    /// RosterStatusHistory rows are written (old team + new team) at
+    /// the given EffectiveAt. That makes the FP split between the two
+    /// teams correctly.
     /// </summary>
     public class UpdateRosterEntryRequest
     {
@@ -80,6 +100,16 @@
 
         /// <summary>New lineup slot number. Optional.</summary>
         public int? RosterSlot { get; set; }
+
+        /// <summary>
+        /// UTC instant the update becomes effective. Required only when
+        /// FantasyTeamId actually changes the team (i.e. it is a trade).
+        /// Ignored for pure status/slot changes.
+        /// </summary>
+        public DateTime? EffectiveAt { get; set; }
+
+        /// <summary>Optional free-text note stored on the trade history rows.</summary>
+        public string? Note { get; set; }
     }
 
     /// <summary>
