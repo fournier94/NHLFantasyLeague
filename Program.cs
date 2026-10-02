@@ -46,7 +46,10 @@ builder.Services
         options.Cookie.Name = "LigueMousse.Auth";
         options.Cookie.HttpOnly = true;
         options.Cookie.SameSite = SameSiteMode.Lax;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        // TODO Dev-only: allow the cookie to be set over plain HTTP so LAN
+        // testing from a phone works. Flip back to SameAsRequest (or
+        // Always) once you host the app behind HTTPS.
+        options.Cookie.SecurePolicy = CookieSecurePolicy.None;
 
         // Return 401/403 instead of redirecting to a login page. The
         // SPA handles redirects itself.
