@@ -929,10 +929,12 @@ export default function AdminPage() {
             return;
         }
 
+        const playerId = selectedPlayer.playerId;
+
         return runMovement(async () => {
             const result = await assignPlayer({
                 fantasyTeamId: Number(fantasyTeamId),
-                playerId: selectedPlayer.playerId,
+                playerId,
                 rosterStatus,
             });
 
@@ -946,6 +948,10 @@ export default function AdminPage() {
         if (!selectedPlayer?.rosterEntryId) {
             return;
         }
+
+        // Capture the id in a local so TS narrowing survives into the
+        // try block below.
+        const entryId = selectedPlayer.rosterEntryId;
 
         // A team change is a trade and needs an EffectiveAt.
         const teamIsChanging =
@@ -972,7 +978,7 @@ export default function AdminPage() {
 
         try {
             const result = await updateRosterEntry({
-                rosterEntryId: selectedPlayer.rosterEntryId,
+                rosterEntryId: entryId,
                 rosterStatus,
                 fantasyTeamId: Number(fantasyTeamId),
                 effectiveAt: effectiveAtIso,
@@ -994,9 +1000,11 @@ export default function AdminPage() {
             return;
         }
 
+        const entryId = selectedPlayer.rosterEntryId;
+
         return runMovement(async () => {
             const result = await releasePlayer({
-                rosterEntryId: selectedPlayer.rosterEntryId,
+                rosterEntryId: entryId,
             });
 
             void refreshRosterIfVisible();

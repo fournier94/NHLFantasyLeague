@@ -38,6 +38,12 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<PlayerInjuryHistory> PlayerInjuryHistories { get; set; }
         public DbSet<RosterStatusHistory> RosterStatusHistories { get; set; }
 
+        /// <summary>
+        /// One row per external data source our sync jobs depend on.
+        /// See ExternalSourceHealth for the shape.
+        /// </summary>
+        public DbSet<ExternalSourceHealth> ExternalSourceHealths { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Identity first, so all its table config is registered.
@@ -260,6 +266,12 @@ namespace NhlFantasyLeague.api.Data
                 .Property(p => p.Status)
                 .HasConversion<string>();
 
+            // Store RosterLocation as its string name so the DB is
+            // readable and enum reordering never breaks existing rows.
+            modelBuilder.Entity<Player>()
+                .Property(p => p.RosterLocation)
+                .HasConversion<string>();
+
             modelBuilder.Entity<CapFreezePlayerReview>()
                 .HasOne(r => r.Player)
                 .WithMany()
@@ -310,6 +322,11 @@ namespace NhlFantasyLeague.api.Data
                     h.SeasonId,
                     h.EffectiveAt
                 });
+
+            // ExternalSourceHealth: one row per source, keyed by name.
+            modelBuilder.Entity<ExternalSourceHealth>()
+                .HasIndex(h => h.SourceName)
+                .IsUnique();
         }
     }
 }

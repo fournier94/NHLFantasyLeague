@@ -2,6 +2,7 @@
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Models.NHL;
+using NhlFantasyLeague.api.Services.Health;
 using System.Globalization;
 using System.Net.Http;
 using System.Text;
@@ -13,6 +14,7 @@ namespace NhlFantasyLeague.api.Services.NHL
         private readonly HttpClient _httpClient;
         private readonly AppDbContext _dbContext;
         private readonly ILogger<NhlInjuryService> _logger;
+        private readonly ExternalSourceHealthService _health;
 
         private const string EspnInjuriesUrl =
             "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries";
@@ -21,14 +23,24 @@ namespace NhlFantasyLeague.api.Services.NHL
         private const double AutoAcceptFirst = 0.92;
         private const double MinLeadOverRunnerUp = 0.05;
 
+        /// <summary>
+        /// Any league-wide injuries payload with this many injured
+        /// players or fewer is treated as suspicious and refused.
+        /// ESPN occasionally returns a 200 with a truncated feed, and
+        /// without this guard we would silently wipe every injury flag.
+        /// </summary>
+        private const int MinimumPlausibleInjuries = 5;
+
         public NhlInjuryService(
             HttpClient httpClient,
             AppDbContext dbContext,
-            ILogger<NhlInjuryService> logger)
+            ILogger<NhlInjuryService> logger,
+            ExternalSourceHealthService health)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
             _logger = logger;
+            _health = health;
         }
 
         public async Task<NhlInjurySyncResult> RefreshAsync(
@@ -50,6 +62,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                     "ESPN injuries fetch failed: {Type}: {Message}",
                     ex.GetType().Name, ex.Message);
 
+                await _health.RecordFailureAsync(
+                    ExternalSourceHealthService.EspnInjuries,
+                    $"{ex.GetType().Name}: {ex.Message}",
+                    ct);
+
                 return new NhlInjurySyncResult
                 {
                     Success = false,
@@ -60,6 +77,12 @@ namespace NhlFantasyLeague.api.Services.NHL
             if (payload == null || payload.Teams.Count == 0)
             {
                 _logger.LogWarning("ESPN injuries payload was empty.");
+
+                await _health.RecordFailureAsync(
+                    ExternalSourceHealthService.EspnInjuries,
+                    "ESPN injuries payload was empty.",
+                    ct);
+
                 return new NhlInjurySyncResult
                 {
                     Success = false,
@@ -67,12 +90,52 @@ namespace NhlFantasyLeague.api.Services.NHL
                 };
             }
 
-            // --- Team abbreviation lookup ---------------------------------
+            // Guard against a truncated payload: fewer than a handful of
+            // injured players league-wide is almost certainly ESPN
+            // misbehaving, not a healthy October league.
+            var totalInjuredPlayers = payload.Teams
+                .Sum(t => t.Players.Count);
+
+            if (totalInjuredPlayers <= MinimumPlausibleInjuries)
+            {
+                _logger.LogWarning(
+                    "ESPN injuries payload looks suspicious: only {Count} " +
+                    "injured players league-wide. Treating as a failed fetch.",
+                    totalInjuredPlayers);
+
+                await _health.RecordFailureAsync(
+                    ExternalSourceHealthService.EspnInjuries,
+                    $"Suspicious payload: only {totalInjuredPlayers} " +
+                    "injured players league-wide.",
+                    ct);
+
+                return new NhlInjurySyncResult
+                {
+                    Success = false,
+                    Message =
+                        $"ESPN returned only {totalInjuredPlayers} injured " +
+                        "players. Refusing to update. Existing data left untouched."
+                };
+            }
+
+            // --- Team lookup (ONE query for the whole refresh) -------------
+            //
+            // The old code re-queried NhlTeams inside ResolveTeamIdAsync
+            // every time an ESPN team could not be resolved by its id.
+            // Now we load everything we need once, and build both the
+            // abbreviation and the normalized-name lookups from that
+            // single result set.
             var teamRows = await _dbContext.NhlTeams
+                .AsNoTracking()
                 .Where(t =>
                     t.Abbreviation != null &&
                     t.Abbreviation != "")
-                .Select(t => new { t.Abbreviation, t.NhlTeamId })
+                .Select(t => new
+                {
+                    t.Abbreviation,
+                    t.Name,
+                    t.NhlTeamId
+                })
                 .ToListAsync(ct);
 
             var teamByAbbrev = teamRows
@@ -81,7 +144,19 @@ namespace NhlFantasyLeague.api.Services.NHL
                     g => g.Key,
                     g => g.First().NhlTeamId);
 
+            var teamByName = teamRows
+                .Where(t => !string.IsNullOrWhiteSpace(t.Name))
+                .GroupBy(t => NormalizeTeamName(t.Name))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.First().NhlTeamId);
+
             // --- Load every player once, indexed by NHL team --------------
+            //
+            // NOTE: this load MUST stay tracked. RefreshAsync clears and
+            // rewrites injury fields on every Player row below, then
+            // calls SaveChangesAsync. If we add AsNoTracking here, the
+            // writes silently do nothing.
             var allPlayers = await _dbContext.Players
                 .Include(p => p.NhlTeam)
                 .Where(p =>
@@ -121,8 +196,8 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             foreach (var team in payload.Teams)
             {
-                var teamId = await ResolveTeamIdAsync(
-                    team, teamByAbbrev, ct);
+                var teamId = ResolveTeamId(
+                    team, teamByAbbrev, teamByName);
 
                 if (teamId == null)
                 {
@@ -194,6 +269,9 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             // --- Resolve history spells that ended -------------------------
+            //
+            // NOTE: this load must stay tracked. We set ResolvedAt or
+            // LastSeenAt on the rows below.
             var openSpells = await _dbContext.PlayerInjuryHistories
                 .Where(h => h.ResolvedAt == null)
                 .ToListAsync(ct);
@@ -230,6 +308,10 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             await _dbContext.SaveChangesAsync(ct);
+
+            await _health.RecordSuccessAsync(
+                ExternalSourceHealthService.EspnInjuries,
+                ct);
 
             return new NhlInjurySyncResult
             {
@@ -328,6 +410,9 @@ namespace NhlFantasyLeague.api.Services.NHL
             // 2. Fall back to the database. Load the player's open spells
             //    once and compare in memory: EF Core cannot translate the
             //    StringComparison overload.
+            //
+            //    NOTE: must stay tracked, because we set LastSeenAt on a
+            //    match below.
             if (open == null)
             {
                 var openSpellsForPlayer = await _dbContext.PlayerInjuryHistories
@@ -384,6 +469,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             return _dbContext.NhlTeams
+                .AsNoTracking()
                 .Where(t => t.NhlTeamId == player.NhlTeamId)
                 .Select(t => t.Abbreviation)
                 .FirstOrDefault()
@@ -410,10 +496,19 @@ namespace NhlFantasyLeague.api.Services.NHL
             return InjuryKind.Injury;
         }
 
-        private async Task<int?> ResolveTeamIdAsync(
+        /// <summary>
+        /// Resolves an ESPN team to our NhlTeamId using only pre-built
+        /// lookups. No database calls: the caller loaded every team once
+        /// at the top of RefreshAsync.
+        ///
+        /// 1. ESPN team id equals our abbreviation (most common case).
+        /// 2. Normalized name match.
+        /// 3. Last resort: one normalized name contains the other.
+        /// </summary>
+        private static int? ResolveTeamId(
             NhlInjuryTeam team,
             Dictionary<string, int> teamByAbbrev,
-            CancellationToken ct)
+            Dictionary<string, int> teamByName)
         {
             // 1. ESPN team id equals our abbreviation? Most common case.
             if (!string.IsNullOrWhiteSpace(team.Id) &&
@@ -430,24 +525,21 @@ namespace NhlFantasyLeague.api.Services.NHL
             // 2. Match by name, ignoring accents and punctuation.
             var espnName = NormalizeTeamName(team.DisplayName);
 
-            var allTeams = await _dbContext.NhlTeams
-                .Select(t => new { t.NhlTeamId, t.Name })
-                .ToListAsync(ct);
-
-            var byName = allTeams.FirstOrDefault(t =>
-                NormalizeTeamName(t.Name) == espnName);
-
-            if (byName != null)
+            if (teamByName.TryGetValue(espnName, out var byName))
             {
-                return byName.NhlTeamId;
+                return byName;
             }
 
             // 3. Last resort: one normalized name contains the other.
-            var byContains = allTeams.FirstOrDefault(t =>
-                NormalizeTeamName(t.Name).Contains(espnName) ||
-                espnName.Contains(NormalizeTeamName(t.Name)));
+            foreach (var kvp in teamByName)
+            {
+                if (kvp.Key.Contains(espnName) || espnName.Contains(kvp.Key))
+                {
+                    return kvp.Value;
+                }
+            }
 
-            return byContains?.NhlTeamId;
+            return null;
         }
 
         /// <summary>

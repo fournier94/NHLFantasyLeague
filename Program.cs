@@ -6,6 +6,7 @@ using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.NHL;
 using NhlFantasyLeague.api.Services.CapFreeze;
+using NhlFantasyLeague.api.Services.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -106,6 +107,24 @@ builder.Services.AddScoped<NhlPopulationService>();
 builder.Services.AddScoped<LeagueSetupService>();
 builder.Services.AddScoped<RosterAdminService>();
 builder.Services.AddScoped<AuthService>();
+
+// ---------------------------------------------------------------------
+// Health / external-source tracking
+// ---------------------------------------------------------------------
+
+// Records the last success and failure of every external data source
+// our sync jobs depend on. Consumed by the admin banner and by the
+// PlayerRosterStatusService escalation ladder.
+builder.Services.AddScoped<ExternalSourceHealthService>();
+
+// Computes each player's RosterLocation (NHL / AHL / Injured /
+// NotOnActiveRoster) by combining NHL rosters, AHL rosters and the
+// injury flags already written by NhlInjuryService. A no-op while
+// PlayerStatus:Enabled is false in appsettings.
+builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(90);
+});
 
 // Bootstraps the Commissioner role from appsettings on startup.
 builder.Services.AddHostedService<CommissionerBootstrapService>();

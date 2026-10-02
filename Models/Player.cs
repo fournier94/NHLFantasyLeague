@@ -103,5 +103,19 @@ namespace NhlFantasyLeague.api.Models
         public DateTime? CapFreezeStatusLastUpdated { get; set; }
 
         public DateTime? CapFreezeContractLastUpdated { get; set; }
+
+        /// <summary>
+        /// Where this player currently sits within his NHL club, as of
+        /// the last successful PlayerRosterStatus refresh. Null when
+        /// the status has never been determined (fresh install, or the
+        /// feature is turned off).
+        /// </summary>
+        public RosterLocation? RosterLocation { get; set; }
+
+        /// <summary>
+        /// UTC timestamp of the last refresh that successfully wrote
+        /// RosterLocation. Null when never set.
+        /// </summary>
+        public DateTime? RosterLocationUpdatedAt { get; set; }
     }
 }

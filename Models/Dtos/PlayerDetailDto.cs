@@ -33,6 +33,20 @@
         /// <summary>Player status: "Unsigned", "Rostered", "FarmPlayer", "RFA".</summary>
         public string Status { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Where the player currently sits within his NHL club, as of
+        /// the last PlayerRosterStatus refresh. One of "NhlRoster",
+        /// "AhlRoster", "Injured", "NotOnActiveRoster", or null when
+        /// the feature has never run for him.
+        /// </summary>
+        public string? RosterLocation { get; set; }
+
+        /// <summary>
+        /// UTC instant of the last refresh that wrote RosterLocation,
+        /// or null when it has never been set.
+        /// </summary>
+        public DateTime? RosterLocationUpdatedAt { get; set; }
+
         // --- Bio --------------------------------------------------------
         public DateOnly? BirthDate { get; set; }
         public int? Age { get; set; }

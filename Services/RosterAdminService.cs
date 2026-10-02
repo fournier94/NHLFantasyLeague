@@ -800,8 +800,9 @@ namespace NhlFantasyLeague.api.Services
         public async Task<TeamRosterDto?> GetTeamRosterAsync(int fantasyTeamId, int? seasonId)
         {
             var team = await _dbContext.FantasyTeams
-                .Include(t => t.League)
-                .FirstOrDefaultAsync(t => t.Id == fantasyTeamId);
+      .AsNoTracking()
+      .Include(t => t.League)
+      .FirstOrDefaultAsync(t => t.Id == fantasyTeamId);
 
             if (team == null)
             {
@@ -815,6 +816,8 @@ namespace NhlFantasyLeague.api.Services
                 return null;
             }
 
+            // NOTE: intentionally tracked. This list is the one thing
+            // GetTeamRosterAsync may modify (FantasySalary) and save.
             var entries = await _dbContext.RosterEntries
                 .Include(e => e.Player)
                     .ThenInclude(p => p.NhlTeam)
@@ -830,11 +833,12 @@ namespace NhlFantasyLeague.api.Services
                 .ToList();
 
             var cardSeasons = await _dbContext.Seasons
-                .Where(s =>
-                    s.NhlSeasonCode == TwoSeasonsAgoNhlCode ||
-                    s.NhlSeasonCode == PreviousSeasonNhlCode ||
-                    s.NhlSeasonCode == CurrentSeasonNhlCode)
-                .ToListAsync();
+           .AsNoTracking()
+           .Where(s =>
+               s.NhlSeasonCode == TwoSeasonsAgoNhlCode ||
+               s.NhlSeasonCode == PreviousSeasonNhlCode ||
+               s.NhlSeasonCode == CurrentSeasonNhlCode)
+           .ToListAsync();
 
             var twoSeasonsAgoSeason = cardSeasons
                 .FirstOrDefault(s => s.NhlSeasonCode == TwoSeasonsAgoNhlCode);
@@ -850,13 +854,14 @@ namespace NhlFantasyLeague.api.Services
             if (playerIds.Count > 0)
             {
                 careerRows = await _dbContext.PlayerCareerStats
-                    .Where(s =>
-                        playerIds.Contains(s.PlayerId) &&
-                        (s.Season == TwoSeasonsAgoNhlCode ||
-                         s.Season == PreviousSeasonNhlCode ||
-                         s.Season == CurrentSeasonNhlCode) &&
-                        s.GameTypeId == 2)
-                    .ToListAsync();
+                     .AsNoTracking()
+                     .Where(s =>
+                         playerIds.Contains(s.PlayerId) &&
+                         (s.Season == TwoSeasonsAgoNhlCode ||
+                          s.Season == PreviousSeasonNhlCode ||
+                          s.Season == CurrentSeasonNhlCode) &&
+                         s.GameTypeId == 2)
+                     .ToListAsync();
             }
 
             var leagueLines = careerRows
@@ -914,8 +919,9 @@ namespace NhlFantasyLeague.api.Services
             if (playerIds.Count > 0)
             {
                 var contracts = await _dbContext.PlayerContracts
-                    .Where(c => playerIds.Contains(c.PlayerId))
-                    .ToListAsync();
+                     .AsNoTracking()
+                     .Where(c => playerIds.Contains(c.PlayerId))
+                     .ToListAsync();
 
                 contractsByPlayerId = contracts
                     .GroupBy(c => c.PlayerId)
@@ -955,8 +961,9 @@ namespace NhlFantasyLeague.api.Services
                 .ToList();
 
             var capBySeasonCode = await _dbContext.Seasons
-                .Where(s => projectedSeasonCodes.Contains(s.NhlSeasonCode))
-                .ToDictionaryAsync(s => s.NhlSeasonCode, s => s.SalaryCap);
+                 .AsNoTracking()
+                 .Where(s => projectedSeasonCodes.Contains(s.NhlSeasonCode))
+                 .ToDictionaryAsync(s => s.NhlSeasonCode, s => s.SalaryCap);
 
             var fallbackCap = season.SalaryCap;
 
@@ -1079,6 +1086,7 @@ namespace NhlFantasyLeague.api.Services
             }
 
             var players = await playersQuery
+                .AsNoTracking()
                 .OrderBy(p => p.LastName)
                 .ThenBy(p => p.FirstName)
                 .Take(take)
@@ -1087,19 +1095,21 @@ namespace NhlFantasyLeague.api.Services
             var playerIds = players.Select(p => p.Id).ToList();
 
             var currentSeason = await _dbContext.Seasons
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync();
+                 .AsNoTracking()
+                 .OrderByDescending(s => s.StartDate)
+                 .FirstOrDefaultAsync();
 
             var currentEntryByPlayerId = new Dictionary<int, RosterEntry>();
 
             if (currentSeason != null && playerIds.Count > 0)
             {
                 var entries = await _dbContext.RosterEntries
-                    .Include(e => e.FantasyTeam)
-                    .Where(e =>
-                        e.SeasonId == currentSeason.Id &&
-                        playerIds.Contains(e.PlayerId))
-                    .ToListAsync();
+                  .AsNoTracking()
+                  .Include(e => e.FantasyTeam)
+                  .Where(e =>
+                      e.SeasonId == currentSeason.Id &&
+                      playerIds.Contains(e.PlayerId))
+                  .ToListAsync();
 
                 foreach (var entry in entries)
                 {
@@ -1147,10 +1157,12 @@ namespace NhlFantasyLeague.api.Services
             if (seasonId.HasValue)
             {
                 return await _dbContext.Seasons
+                    .AsNoTracking()
                     .FirstOrDefaultAsync(s => s.Id == seasonId.Value);
             }
 
             return await _dbContext.Seasons
+                .AsNoTracking()
                 .OrderByDescending(s => s.StartDate)
                 .FirstOrDefaultAsync();
         }

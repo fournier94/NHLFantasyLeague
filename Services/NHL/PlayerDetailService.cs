@@ -1,4 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Collections.Concurrent;
+using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Models.Dtos;
@@ -24,6 +25,28 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// <summary>How many recent games to include in the game log.</summary>
         private const int RecentGameCount = 10;
 
+        /// <summary>
+        /// Cache of the whole-league game-date range per season.
+        ///
+        /// The range is identical for every player in the same season,
+        /// so running the Min/Max query on every player page load is
+        /// wasteful. Static because the service is scoped (an instance
+        /// field would be re-created on every request) and
+        /// ConcurrentDictionary because a single API instance can serve
+        /// several requests in parallel.
+        /// </summary>
+        private static readonly ConcurrentDictionary<int, CachedSeasonRange>
+            SeasonRangeCache = new();
+
+        /// <summary>How long a cached season range stays fresh.</summary>
+        private static readonly TimeSpan SeasonRangeCacheTtl =
+            TimeSpan.FromMinutes(30);
+
+        private sealed record CachedSeasonRange(
+            DateOnly? First,
+            DateOnly? Last,
+            DateTime CachedAt);
+
         public PlayerDetailService(AppDbContext dbContext)
         {
             _dbContext = dbContext;
@@ -32,6 +55,7 @@ namespace NhlFantasyLeague.api.Services.NHL
         public async Task<PlayerDetailDto?> GetPlayerDetailAsync(int nhlPlayerId)
         {
             var player = await _dbContext.Players
+                .AsNoTracking()
                 .Include(p => p.NhlTeam)
                 .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
 
@@ -40,58 +64,70 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return null;
             }
 
+            // Combined season lookup: one query instead of two.
+            var seasons = await _dbContext.Seasons
+                .AsNoTracking()
+                .Where(s =>
+                    s.NhlSeasonCode == CurrentSeasonNhlCode ||
+                    s.NhlSeasonCode == PreviousSeasonNhlCode)
+                .ToListAsync();
+
+            var currentSeason = seasons
+                .FirstOrDefault(s => s.NhlSeasonCode == CurrentSeasonNhlCode);
+
+            var previousSeason = seasons
+                .FirstOrDefault(s => s.NhlSeasonCode == PreviousSeasonNhlCode);
+
+            // Combined season-stats lookup: one query instead of two.
+            // The two season ids are what we actually need; -1 is a
+            // sentinel that can never match a real season.
+            var currentSeasonId = currentSeason?.Id ?? -1;
+            var previousSeasonId = previousSeason?.Id ?? -1;
+
+            var seasonStats = await _dbContext.PlayerSeasonStats
+                .AsNoTracking()
+                .Where(s =>
+                    s.PlayerId == player.Id &&
+                    (s.SeasonId == currentSeasonId ||
+                     s.SeasonId == previousSeasonId))
+                .ToListAsync();
+
+            var fantasySeasonStat = seasonStats
+                .FirstOrDefault(s => s.SeasonId == currentSeasonId);
+
+            var lastSeasonFantasyStat = seasonStats
+                .FirstOrDefault(s => s.SeasonId == previousSeasonId);
+
             var contracts = await _dbContext.PlayerContracts
+                .AsNoTracking()
                 .Where(c => c.PlayerId == player.Id)
                 .OrderBy(c => c.StartSeason)
                 .ToListAsync();
 
             var history = await _dbContext.PlayerInjuryHistories
+                .AsNoTracking()
                 .Where(h => h.PlayerId == player.Id)
                 .OrderByDescending(h => h.FirstSeenAt)
                 .ToListAsync();
 
             var careerRows = await _dbContext.PlayerCareerStats
+                .AsNoTracking()
                 .Where(s => s.PlayerId == player.Id)
                 .OrderBy(s => s.Season)
                 .ThenBy(s => s.GameTypeId)
                 .ThenBy(s => s.Sequence)
                 .ToListAsync();
 
-            var currentSeason = await _dbContext.Seasons
-                .FirstOrDefaultAsync(s => s.NhlSeasonCode == CurrentSeasonNhlCode);
-
             RosterEntry? entry = null;
 
             if (currentSeason != null)
             {
                 entry = await _dbContext.RosterEntries
+                    .AsNoTracking()
                     .Include(e => e.FantasyTeam)
                     .FirstOrDefaultAsync(e =>
                         e.PlayerId == player.Id &&
                         e.SeasonId == currentSeason.Id);
-            }
-
-            PlayerSeasonStat? fantasySeasonStat = null;
-
-            if (currentSeason != null)
-            {
-                fantasySeasonStat = await _dbContext.PlayerSeasonStats
-                    .FirstOrDefaultAsync(s =>
-                        s.PlayerId == player.Id &&
-                        s.SeasonId == currentSeason.Id);
-            }
-
-            var previousSeason = await _dbContext.Seasons
-                .FirstOrDefaultAsync(s => s.NhlSeasonCode == PreviousSeasonNhlCode);
-
-            PlayerSeasonStat? lastSeasonFantasyStat = null;
-
-            if (previousSeason != null)
-            {
-                lastSeasonFantasyStat = await _dbContext.PlayerSeasonStats
-                    .FirstOrDefaultAsync(s =>
-                        s.PlayerId == player.Id &&
-                        s.SeasonId == previousSeason.Id);
             }
 
             // Every current-season game for this player, sorted oldest
@@ -101,6 +137,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             if (currentSeason != null)
             {
                 currentSeasonGames = await _dbContext.PlayerGameLogs
+                    .AsNoTracking()
                     .Include(g => g.OpponentNhlTeam)
                     .Where(g =>
                         g.PlayerId == player.Id &&
@@ -131,6 +168,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             if (player.PreviousNhlTeamId.HasValue)
             {
                 previousTeam = await _dbContext.NhlTeams
+                    .AsNoTracking()
                     .FirstOrDefaultAsync(t =>
                         t.NhlTeamId == player.PreviousNhlTeamId.Value);
             }
@@ -157,6 +195,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                 PreviousNhlTeamName = previousTeam?.Name,
 
                 Status = player.Status.ToString(),
+
+                RosterLocation = player.RosterLocation.HasValue
+                    ? player.RosterLocation.Value.ToString()
+                    : null,
+                RosterLocationUpdatedAt = player.RosterLocationUpdatedAt,
 
                 BirthDate = player.BirthDate,
                 Age = CalculateAge(player.BirthDate),
@@ -290,35 +333,26 @@ namespace NhlFantasyLeague.api.Services.NHL
         // =================================================================
 
         private async Task<List<MonthDto>> BuildSeasonMonthsAsync(
-    int playerId,
-    Season? currentSeason,
-    List<PlayerGameLog> playerGames)
+            int playerId,
+            Season? currentSeason,
+            List<PlayerGameLog> playerGames)
         {
             if (currentSeason == null)
             {
                 return new List<MonthDto>();
             }
 
-            // Whole-league range: earliest and latest game date this
-            // season across every player, so all players' monthly rows
-            // line up on the same calendar months.
-            var range = await _dbContext.PlayerGameLogs
-                .Where(g => g.SeasonId == currentSeason.Id)
-                .GroupBy(g => 1)
-                .Select(g => new
-                {
-                    First = g.Min(x => x.GameDate),
-                    Last = g.Max(x => x.GameDate)
-                })
-                .FirstOrDefaultAsync();
+            // Whole-league range: identical for every player this
+            // season, so the cached helper below answers most calls
+            // without touching the database at all.
+            var range = await GetSeasonRangeAsync(currentSeason.Id);
 
             if (range == null)
             {
                 return new List<MonthDto>();
             }
 
-            var firstDate = range.First;
-            var lastDate = range.Last;
+            var (firstDate, lastDate) = range.Value;
 
             if (lastDate < firstDate)
             {
@@ -387,6 +421,51 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             return months;
+        }
+
+        /// <summary>
+        /// Returns the earliest and latest game dates for a season across
+        /// the whole league, cached for a short window so the same
+        /// Min/Max query is not re-run on every player page load.
+        /// Returns null when the season has no game logs yet.
+        /// </summary>
+        private async Task<(DateOnly First, DateOnly Last)?> GetSeasonRangeAsync(
+            int seasonId)
+        {
+            if (SeasonRangeCache.TryGetValue(seasonId, out var cached))
+            {
+                if (DateTime.UtcNow - cached.CachedAt < SeasonRangeCacheTtl)
+                {
+                    return cached.First.HasValue && cached.Last.HasValue
+                        ? (cached.First.Value, cached.Last.Value)
+                        : null;
+                }
+            }
+
+            var range = await _dbContext.PlayerGameLogs
+                .AsNoTracking()
+                .Where(g => g.SeasonId == seasonId)
+                .GroupBy(g => 1)
+                .Select(g => new
+                {
+                    First = g.Min(x => x.GameDate),
+                    Last = g.Max(x => x.GameDate)
+                })
+                .FirstOrDefaultAsync();
+
+            var entry = new CachedSeasonRange(
+                range?.First,
+                range?.Last,
+                DateTime.UtcNow);
+
+            SeasonRangeCache[seasonId] = entry;
+
+            if (range == null)
+            {
+                return null;
+            }
+
+            return (range.First, range.Last);
         }
 
         // =================================================================

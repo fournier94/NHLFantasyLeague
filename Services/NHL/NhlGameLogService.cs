@@ -40,10 +40,20 @@ namespace NhlFantasyLeague.api.Services.NHL
             return await _httpClient.GetFromJsonAsync<NhlPlayerGameLogResponse>(url);
         }
 
+        /// <summary>
+        /// Upserts one player's game logs for one season, then recomputes
+        /// his PlayerSeasonStat (FantasyPoints + HatTricks).
+        ///
+        /// The optional <paramref name="preloadedTeams"/> dictionary lets a
+        /// batch caller (refresh-all, backfill-all) avoid re-querying the
+        /// same NhlTeams table for every player. When null, the teams are
+        /// loaded once from the database with AsNoTracking.
+        /// </summary>
         public async Task<int> SavePlayerGameLogsAsync(
             int nhlPlayerId,
             int seasonCode,
-            int gameType = 2)
+            int gameType = 2,
+            Dictionary<string, NhlTeam>? preloadedTeams = null)
         {
             var playerResponse = await _playerService.GetPlayerAsync(nhlPlayerId);
 
@@ -66,6 +76,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var season = await _dbContext.Seasons
+                .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.NhlSeasonCode == seasonCode);
 
             if (season == null)
@@ -87,13 +98,29 @@ namespace NhlFantasyLeague.api.Services.NHL
                     "G",
                     StringComparison.OrdinalIgnoreCase);
 
-            var teams = await _dbContext.NhlTeams
-                .ToListAsync();
+            // ---------------------------------------------------------
+            // Teams lookup: reuse the caller's dictionary when provided.
+            // Fallback path (single-player call) loads once with
+            // AsNoTracking since we only read from these rows.
+            // ---------------------------------------------------------
 
-            var teamsByAbbreviation = teams
-                .ToDictionary(
-                    t => t.Abbreviation,
-                    StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, NhlTeam> teamsByAbbreviation;
+
+            if (preloadedTeams != null)
+            {
+                teamsByAbbreviation = preloadedTeams;
+            }
+            else
+            {
+                var teams = await _dbContext.NhlTeams
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                teamsByAbbreviation = teams
+                    .ToDictionary(
+                        t => t.Abbreviation,
+                        StringComparer.OrdinalIgnoreCase);
+            }
 
             var existingLogs = await _dbContext.PlayerGameLogs
                 .Where(g =>
@@ -253,6 +280,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             int seasonCode)
         {
             var player = await _dbContext.Players
+                .AsNoTracking()
                 .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
 
             if (player == null)
@@ -261,6 +289,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var season = await _dbContext.Seasons
+                .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.NhlSeasonCode == seasonCode);
 
             if (season == null)
@@ -301,6 +330,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             };
 
             var season = await _dbContext.Seasons
+                .AsNoTracking()
                 .FirstOrDefaultAsync(
                     s => s.NhlSeasonCode == seasonCode,
                     ct);
@@ -314,7 +344,19 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return result;
             }
 
+            // Load the team lookup ONCE for the whole run instead of
+            // re-querying it inside SavePlayerGameLogsAsync per player.
+            var allTeams = await _dbContext.NhlTeams
+                .AsNoTracking()
+                .ToListAsync(ct);
+
+            var teamsByAbbreviation = allTeams
+                .ToDictionary(
+                    t => t.Abbreviation,
+                    StringComparer.OrdinalIgnoreCase);
+
             var players = await _dbContext.Players
+                .AsNoTracking()
                 .OrderBy(p => p.Id)
                 .Select(p => new
                 {
@@ -328,6 +370,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             result.TotalPlayers = players.Count;
 
             var playersWithLogs = (await _dbContext.PlayerGameLogs
+                .AsNoTracking()
                 .Where(g => g.SeasonId == season.Id)
                 .Select(g => g.PlayerId)
                 .Distinct()
@@ -355,7 +398,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                     var saved =
                         await SavePlayerGameLogsAsync(
                             player.NhlPlayerId,
-                            seasonCode);
+                            seasonCode,
+                            2,
+                            teamsByAbbreviation);
 
                     result.PlayersProcessed++;
                     result.TotalGamesSaved += saved;
@@ -374,6 +419,12 @@ namespace NhlFantasyLeague.api.Services.NHL
                         $"({player.FirstName} {player.LastName}): " +
                         $"{ex.GetType().Name}: {ex.Message}");
                 }
+
+                // Release every tracked entity from this iteration before
+                // moving to the next player. Without this, the scoped
+                // DbContext accumulates thousands of tracked entities
+                // over a full run and memory climbs linearly.
+                _dbContext.ChangeTracker.Clear();
 
                 if (delayMsBetweenPlayers > 0)
                 {
@@ -415,6 +466,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             };
 
             var season = await _dbContext.Seasons
+                .AsNoTracking()
                 .FirstOrDefaultAsync(
                     s => s.NhlSeasonCode == seasonCode,
                     ct);
@@ -428,7 +480,18 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return result;
             }
 
+            // Load the team lookup ONCE for the whole run.
+            var allTeams = await _dbContext.NhlTeams
+                .AsNoTracking()
+                .ToListAsync(ct);
+
+            var teamsByAbbreviation = allTeams
+                .ToDictionary(
+                    t => t.Abbreviation,
+                    StringComparer.OrdinalIgnoreCase);
+
             var players = await _dbContext.Players
+                .AsNoTracking()
                 .OrderBy(p => p.Id)
                 .Select(p => new
                 {
@@ -463,7 +526,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                         await SavePlayerGameLogsAsync(
                             player.NhlPlayerId,
                             seasonCode,
-                            2);
+                            2,
+                            teamsByAbbreviation);
 
                     result.PlayersProcessed++;
                     result.TotalGamesSaved += saved;
@@ -487,6 +551,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                         $"({player.FirstName} {player.LastName}): " +
                         $"{ex.GetType().Name}: {ex.Message}");
                 }
+
+                // Release every tracked entity from this iteration before
+                // moving to the next player. This keeps memory flat over
+                // a 2,500-player run instead of climbing linearly.
+                _dbContext.ChangeTracker.Clear();
 
                 if (delayMsBetweenPlayers > 0)
                 {
@@ -550,6 +619,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             };
 
             var season = await _dbContext.Seasons
+                .AsNoTracking()
                 .FirstOrDefaultAsync(
                     s => s.NhlSeasonCode == seasonCode,
                     ct);
@@ -564,7 +634,8 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             // 1. Load every FantasyTeamSeason for the season and zero
             //    every aggregate. Idempotent: the recompute always
-            //    starts from zero.
+            //    starts from zero. THIS list stays tracked because it
+            //    is the only thing modified by this method.
             var teamSeasons = await _dbContext.FantasyTeamSeasons
                 .Where(fts => fts.SeasonId == season.Id)
                 .ToListAsync(ct);
@@ -606,8 +677,10 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             // 2. Load the whole season's history, grouped by player and
             //    sorted by EffectiveAt. History is small (one row per
-            //    swap per player, plus one row per trade).
+            //    swap per player, plus one row per trade) and read-only,
+            //    so AsNoTracking.
             var historyRows = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
                 .Where(h => h.SeasonId == season.Id)
                 .ToListAsync(ct);
 
@@ -620,8 +693,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                         .ThenBy(h => h.Id)
                         .ToList());
 
-            // 3. Load every game log row in the season, plus the fields
-            //    we need to route stats to the skater / goalie segment.
+            // 3. Load every game log row in the season as an anonymous
+            //    projection. Because it's projected, EF never tracks it,
+            //    so no AsNoTracking call is needed here.
             var games = await _dbContext.PlayerGameLogs
                 .Where(g => g.SeasonId == season.Id)
                 .Select(g => new
@@ -642,7 +716,8 @@ namespace NhlFantasyLeague.api.Services.NHL
             result.TotalGamesScanned = games.Count;
 
             // Map PlayerId -> Position, one query. Needed to decide
-            // skater vs goalie segment for each game log row.
+            // skater vs goalie segment for each game log row. Projected,
+            // so tracking is not a concern.
             var playerIds = games
                 .Select(g => g.PlayerId)
                 .Distinct()

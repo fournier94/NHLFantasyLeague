@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
     getPlayerDetail,
@@ -1002,11 +1002,13 @@ function InjuryBadge({
     injuryKind,
     shortDescription,
     size = 16,
+    onClick,
 }: {
     isInjured: boolean;
     injuryKind: string;
     shortDescription: string | null;
     size?: number;
+    onClick?: () => void;
 }) {
     if (!isInjured) return null;
 
@@ -1017,6 +1019,36 @@ function InjuryBadge({
         : 'drop-shadow(0 0 3px rgba(239, 68, 68, 0.9))';
     const label = isSuspension ? 'Suspension' : 'Blessé';
 
+    const icon = (
+        <svg
+            viewBox='0 0 24 24'
+            width={size}
+            height={size}
+            xmlns='http://www.w3.org/2000/svg'
+        >
+            <rect x='9' y='3' width='6' height='18' fill={crossColor} />
+            <rect x='3' y='9' width='18' height='6' fill={crossColor} />
+        </svg>
+    );
+
+    // When the caller wires onClick, render as a button so the
+    // injury details can be opened directly from the icon. Otherwise
+    // fall back to a plain non-interactive span.
+    if (onClick) {
+        return (
+            <button
+                type='button'
+                onClick={onClick}
+                title={shortDescription ?? label}
+                aria-label={label}
+                className='inline-flex shrink-0 cursor-pointer items-center justify-center transition-transform hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50'
+                style={{ width: size, height: size, filter: glowColor }}
+            >
+                {icon}
+            </button>
+        );
+    }
+
     return (
         <span
             title={shortDescription ?? label}
@@ -1024,15 +1056,77 @@ function InjuryBadge({
             className='inline-flex shrink-0 items-center justify-center'
             style={{ width: size, height: size, filter: glowColor }}
         >
-            <svg
-                viewBox='0 0 24 24'
-                width={size}
-                height={size}
-                xmlns='http://www.w3.org/2000/svg'
+            {icon}
+        </span>
+    );
+}
+
+/**
+ * Small badge showing the player's current location within his NHL
+ * club: on the NHL roster, sent to the AHL, injured, or not on either
+ * active roster. Renders nothing when RosterLocation is null (the
+ * feature has never run for this player).
+ */
+function RosterLocationBadge({
+    location,
+    onInjuredClick,
+}: {
+    location: string | null;
+    onInjuredClick?: () => void;
+}) {
+    if (!location) return null;
+
+    const config: Record<
+        string,
+        { label: string; className: string }
+    > = {
+        NhlRoster: {
+            label: 'LNH',
+            className:
+                'border-emerald-500/40 bg-emerald-500/15 text-emerald-300',
+        },
+        AhlRoster: {
+            label: 'AHL',
+            className:
+                'border-sky-500/40 bg-sky-500/15 text-sky-300',
+        },
+        Injured: {
+            label: 'Blessé',
+            className:
+                'border-red-500/40 bg-red-500/15 text-red-300',
+        },
+        NotOnActiveRoster: {
+            label: 'Hors de la LNH',
+            className:
+                'border-zinc-500/40 bg-zinc-500/15 text-zinc-300',
+        },
+    };
+
+    const entry = config[location];
+    if (!entry) return null;
+
+    const badgeClass =
+        'ml-2 inline-flex items-center rounded border px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide';
+
+    // Injured is the only location that opens the injury modal.
+    // When the caller does not wire onInjuredClick, fall back to a
+    // plain non-interactive span so this component is safe to reuse.
+    if (location === 'Injured' && onInjuredClick) {
+        return (
+            <button
+                type='button'
+                onClick={onInjuredClick}
+                aria-label='Voir les détails de la blessure'
+                className={`${badgeClass} ${entry.className} cursor-pointer transition-colors hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50`}
             >
-                <rect x='9' y='3' width='6' height='18' fill={crossColor} />
-                <rect x='3' y='9' width='18' height='6' fill={crossColor} />
-            </svg>
+                {entry.label}
+            </button>
+        );
+    }
+
+    return (
+        <span className={`${badgeClass} ${entry.className}`}>
+            {entry.label}
         </span>
     );
 }
@@ -1779,13 +1873,25 @@ export default function PlayerPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [showGameLog, setShowGameLog] = useState(false);
-    const [showInjuryDetails, setShowInjuryDetails] = useState(false);
-
-    const injuryPanelRef = useRef<HTMLDivElement>(null);
-    const injuryScrollOnOpenRef = useRef(false);
+    const [showInjuryModal, setShowInjuryModal] = useState(false);
 
     const closeAura = useAura('playerPageCloseButton');
     const pageTeamLogoAura = useAura('playerPageTeamLogo');
+
+    useEffect(() => {
+        if (!showInjuryModal) return;
+
+        function onKeyDown(event: KeyboardEvent) {
+            if (event.key === 'Escape') {
+                setShowInjuryModal(false);
+            }
+        }
+
+        document.addEventListener('keydown', onKeyDown);
+        return () => {
+            document.removeEventListener('keydown', onKeyDown);
+        };
+    }, [showInjuryModal]);
 
     useEffect(() => {
         const state = location.state as
@@ -1830,34 +1936,6 @@ export default function PlayerPage() {
             cancelled = true;
         };
     }, [nhlPlayerId]);
-
-    useEffect(() => {
-        if (!showInjuryDetails) {
-            injuryScrollOnOpenRef.current = false;
-            return;
-        }
-
-        if (!injuryScrollOnOpenRef.current) {
-            return;
-        }
-
-        injuryScrollOnOpenRef.current = false;
-
-        const frame = requestAnimationFrame(() => {
-            const el = injuryPanelRef.current;
-
-            if (!el) return;
-
-            const rect = el.getBoundingClientRect();
-            const bottomGap = 16;
-            const top =
-                rect.bottom + window.scrollY - window.innerHeight + bottomGap;
-
-            window.scrollTo({ top, behavior: 'smooth' });
-        });
-
-        return () => cancelAnimationFrame(frame);
-    }, [showInjuryDetails]);
 
     // Close: jump past every PlayerPage we opened and land on the last
     // non-player page (typically /mon-equipe, with the scroll position
@@ -2074,6 +2152,7 @@ export default function PlayerPage() {
                                             injuryKind={player.injuryKind}
                                             shortDescription={player.injuryShortDescription}
                                             size={20}
+                                            onClick={() => setShowInjuryModal(true)}
                                         />
                                     </span>
                                 )}
@@ -2097,6 +2176,13 @@ export default function PlayerPage() {
                                     )}
                                     {shootsDisplay}
                                 </span>
+
+                                <RosterLocationBadge
+                                    location={player.rosterLocation}
+                                    onInjuredClick={() =>
+                                        setShowInjuryModal(true)
+                                    }
+                                />
 
                                 {player.nhlTeamLogoUrl && (
                                     <img
@@ -2236,112 +2322,6 @@ export default function PlayerPage() {
                         />
                     )}
                 </div>
-
-                {player.isInjured && (
-                    <div
-                        ref={injuryPanelRef}
-                        className='rounded-lg border border-destructive/40 bg-destructive/10 text-sm'
-                    >
-                        <button
-                            type='button'
-                            onClick={() => {
-                                setShowInjuryDetails((v) => {
-                                    const next = !v;
-                                    injuryScrollOnOpenRef.current = next;
-                                    return next;
-                                });
-                            }}
-                            aria-expanded={showInjuryDetails}
-                            className='relative flex w-full cursor-pointer flex-col items-center gap-y-1 rounded-lg px-8 py-2 text-center font-semibold text-foreground transition-colors hover:bg-destructive/10'
-                        >
-                            <div className='flex flex-wrap items-center justify-center gap-x-2'>
-                                <span>
-                                    {player.injuryKind === 'Suspension'
-                                        ? 'Suspension'
-                                        : 'Blessé'}
-                                </span>
-
-                                <span className='font-normal text-muted-foreground'>•</span>
-
-                                <span>
-                                    {player.injuryStatus ?? 'Statut inconnu'}
-                                </span>
-                            </div>
-
-                            {player.injuryReturnDate && (
-                                <div className='flex w-full items-center justify-center'>
-                                    <span>
-                                        Retour prévu :{' '}
-                                        <span className='font-normal'>
-                                            {shortDate(player.injuryReturnDate)}
-                                        </span>
-                                    </span>
-                                </div>
-                            )}
-
-                            <span
-                                aria-hidden='true'
-                                className='absolute right-3 top-1/2 -translate-y-1/2 text-xs font-normal'
-                            >
-                                {showInjuryDetails ? '▲' : '▼'}
-                            </span>
-                        </button>
-
-                        {showInjuryDetails && (
-                            <div className='px-3 pb-3'>
-                                {(player.injuryType ||
-                                    player.injurySide ||
-                                    player.injuryDetail) && (
-                                        <p className='mt-1 text-foreground'>
-                                            {player.injuryType}
-                                            {player.injurySide &&
-                                                player.injurySide !== 'Not Specified' &&
-                                                ` (${player.injurySide})`}
-                                            {player.injuryDetail &&
-                                                player.injuryDetail !== 'Not Specified' &&
-                                                ` — ${player.injuryDetail}`}
-                                        </p>
-                                    )}
-
-                                {player.injuryFantasyStatus &&
-                                    player.injuryFantasyStatus.trim().toLowerCase() !==
-                                    (player.injuryStatus ?? '')
-                                        .trim()
-                                        .toLowerCase() && (
-                                        <p className='mt-1 text-foreground'>
-                                            Statut fantaisie :{' '}
-                                            {player.injuryFantasyStatus}
-                                        </p>
-                                    )}
-
-                                {player.injuryShortDescription && (
-                                    <p className='mt-1 text-foreground'>
-                                        {player.injuryShortDescription}
-                                    </p>
-                                )}
-
-                                {player.injuryLongDescription &&
-                                    player.injuryLongDescription
-                                        .trim()
-                                        .toLowerCase() !==
-                                    (
-                                        player.injuryShortDescription ?? ''
-                                    )
-                                        .trim()
-                                        .toLowerCase() && (
-                                        <p className='mt-1 text-muted-foreground'>
-                                            {player.injuryLongDescription}
-                                        </p>
-                                    )}
-
-                                <p className='mt-1 text-xs text-muted-foreground'>
-                                    Dernière mise à jour :{' '}
-                                    {shortDate(player.injuryUpdatedAt)}
-                                </p>
-                            </div>
-                        )}
-                    </div>
-                )}
 
                 <div className='mt-6 w-full'>
                     <CurrentSeasonStrip
@@ -2568,6 +2548,100 @@ export default function PlayerPage() {
                     )}
                 </div>
             </section>
+
+            {showInjuryModal && player.isInjured && (
+                <div
+                    className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
+                    onClick={() => setShowInjuryModal(false)}
+                    role='dialog'
+                    aria-modal='true'
+                    aria-label='Détails de la blessure'
+                >
+                    <div
+                        className='w-full max-w-md rounded-lg border border-destructive/40 bg-card shadow-2xl'
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className='flex items-center justify-between border-b border-border px-4 py-3'>
+                            <h3 className='text-base font-semibold text-foreground'>
+                                {player.injuryKind === 'Suspension'
+                                    ? 'Suspension'
+                                    : 'Blessure'}
+                            </h3>
+
+                            <button
+                                type='button'
+                                onClick={() => setShowInjuryModal(false)}
+                                aria-label='Fermer'
+                                className='cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground'
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className='space-y-3 px-4 py-3 text-sm'>
+                            <div className='flex items-center justify-between gap-2'>
+                                <span className='font-semibold text-foreground'>
+                                    {player.injuryKind === 'Suspension'
+                                        ? 'Suspension'
+                                        : 'Blessé'}
+                                </span>
+
+                                <span className='text-foreground'>
+                                    {player.injuryStatus ?? 'Statut inconnu'}
+                                </span>
+                            </div>
+
+                            {player.injuryReturnDate && (
+                                <p className='text-foreground'>
+                                    <span className='font-medium'>
+                                        Retour prévu :{' '}
+                                    </span>
+                                    {shortDate(player.injuryReturnDate)}
+                                </p>
+                            )}
+
+                            {(player.injuryType ||
+                                player.injurySide ||
+                                player.injuryDetail) && (
+                                    <p className='text-foreground'>
+                                        {player.injuryType}
+                                        {player.injurySide &&
+                                            player.injurySide !== 'Not Specified' &&
+                                            ` (${player.injurySide})`}
+                                        {player.injuryDetail &&
+                                            player.injuryDetail !== 'Not Specified' &&
+                                            ` — ${player.injuryDetail}`}
+                                    </p>
+                                )}
+
+                            {player.injuryShortDescription && (
+                                <p className='text-foreground'>
+                                    {player.injuryShortDescription}
+                                </p>
+                            )}
+
+                            {player.injuryLongDescription &&
+                                player.injuryLongDescription
+                                    .trim()
+                                    .toLowerCase() !==
+                                (
+                                    player.injuryShortDescription ?? ''
+                                )
+                                    .trim()
+                                    .toLowerCase() && (
+                                    <p className='text-foreground'>
+                                        {player.injuryLongDescription}
+                                    </p>
+                                )}
+
+                            <p className='text-xs text-foreground'>
+                                Dernière mise à jour :{' '}
+                                {shortDate(player.injuryUpdatedAt)}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

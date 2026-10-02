@@ -114,6 +114,7 @@ namespace NhlFantasyLeague.api.Services.NHL
         public async Task<List<CareerStatDto>?> GetPlayerCareerStatsAsync(int nhlPlayerId)
         {
             var player = await _dbContext.Players
+                .AsNoTracking()
                 .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
 
             if (player == null)
@@ -122,6 +123,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             return await _dbContext.PlayerCareerStats
+                .AsNoTracking()
                 .Where(s => s.PlayerId == player.Id)
                 .OrderByDescending(s => s.Season)
                 .ThenBy(s => s.GameTypeId)
@@ -168,6 +170,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             int seasonCode)
         {
             var player = await _dbContext.Players
+                .AsNoTracking()
                 .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
 
             if (player == null)
@@ -176,6 +179,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var season = await _dbContext.Seasons
+                .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.NhlSeasonCode == seasonCode);
 
             if (season == null)
@@ -184,6 +188,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             return await _dbContext.PlayerSeasonStats
+                .AsNoTracking()
                 .FirstOrDefaultAsync(s =>
                     s.PlayerId == player.Id &&
                     s.SeasonId == season.Id);
@@ -194,6 +199,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             int seasonCode)
         {
             var player = await _dbContext.Players
+                .AsNoTracking()
                 .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
 
             if (player == null)
@@ -202,6 +208,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var season = await _dbContext.Seasons
+                .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.NhlSeasonCode == seasonCode);
 
             if (season == null)
@@ -209,7 +216,12 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return;
             }
 
+            // We only read these rows to sum FantasyPoints and count
+            // hat-tricks, so no tracking is needed. AsNoTracking keeps
+            // EF from building identity maps and snapshots over the
+            // ~82 rows per player.
             var logs = await _dbContext.PlayerGameLogs
+                .AsNoTracking()
                 .Where(g =>
                     g.PlayerId == player.Id &&
                     g.SeasonId == season.Id)
@@ -370,6 +382,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             await _dbContext.SaveChangesAsync();
 
             return await _dbContext.PlayerCareerStats
+                .AsNoTracking()
                 .Where(s => s.PlayerId == player.Id)
                 .OrderBy(s => s.Season)
                 .ThenBy(s => s.GameTypeId)
@@ -504,6 +517,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             // Load every NHL career row we might need to touch. We only
             // need the fields required to group rows and write the result.
             var query = _dbContext.PlayerCareerStats
+                .AsNoTracking()
                 .Where(r => r.LeagueAbbreviation == "NHL");
 
             if (!force)
@@ -546,6 +560,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ToList();
 
             var nhlIdByPlayerId = await _dbContext.Players
+                .AsNoTracking()
                 .Where(p => playerIds.Contains(p.Id))
                 .Select(p => new { p.Id, p.NhlPlayerId })
                 .ToDictionaryAsync(
@@ -633,7 +648,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
             }
 
-            // Apply all updates in one pass.
+            // Apply all updates in one pass. These rows must be tracked
+            // because we modify and save them.
             var rowIdsToUpdate = rowsToUpdate
                 .Select(r => r.RowId)
                 .ToHashSet();

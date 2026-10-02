@@ -49,43 +49,43 @@ namespace NhlFantasyLeague.api.Services.CapFreeze
         private static readonly Dictionary<string, string> CapFreezeTeamSlugs =
 new(StringComparer.OrdinalIgnoreCase)
 {
-["NJD"] = "new-jersey-devils",
-["NYI"] = "new-york-islanders",
-["NYR"] = "new-york-rangers",
-["PHI"] = "philadelphia-flyers",
-["PIT"] = "pittsburgh-penguins",
+    ["NJD"] = "new-jersey-devils",
+    ["NYI"] = "new-york-islanders",
+    ["NYR"] = "new-york-rangers",
+    ["PHI"] = "philadelphia-flyers",
+    ["PIT"] = "pittsburgh-penguins",
 
-["BOS"] = "boston-bruins",
-["BUF"] = "buffalo-sabres",
-["MTL"] = "montreal-canadiens",
-["OTT"] = "ottawa-senators",
-["TOR"] = "toronto-maple-leafs",
+    ["BOS"] = "boston-bruins",
+    ["BUF"] = "buffalo-sabres",
+    ["MTL"] = "montreal-canadiens",
+    ["OTT"] = "ottawa-senators",
+    ["TOR"] = "toronto-maple-leafs",
 
-["CAR"] = "carolina-hurricanes",
-["FLA"] = "florida-panthers",
-["TBL"] = "tampa-bay-lightning",
-["WSH"] = "washington-capitals",
+    ["CAR"] = "carolina-hurricanes",
+    ["FLA"] = "florida-panthers",
+    ["TBL"] = "tampa-bay-lightning",
+    ["WSH"] = "washington-capitals",
 
-["CHI"] = "chicago-blackhawks",
-["DET"] = "detroit-red-wings",
-["NSH"] = "nashville-predators",
-["STL"] = "st-louis-blues",
+    ["CHI"] = "chicago-blackhawks",
+    ["DET"] = "detroit-red-wings",
+    ["NSH"] = "nashville-predators",
+    ["STL"] = "st-louis-blues",
 
-["CGY"] = "calgary-flames",
-["COL"] = "colorado-avalanche",
-["EDM"] = "edmonton-oilers",
-["VAN"] = "vancouver-canucks",
+    ["CGY"] = "calgary-flames",
+    ["COL"] = "colorado-avalanche",
+    ["EDM"] = "edmonton-oilers",
+    ["VAN"] = "vancouver-canucks",
 
-["ANA"] = "anaheim-ducks",
-["DAL"] = "dallas-stars",
-["LAK"] = "los-angeles-kings",
-["SJS"] = "san-jose-sharks",
-["CBJ"] = "columbus-blue-jackets",
-["MIN"] = "minnesota-wild",
-["WPG"] = "winnipeg-jets",
-["VGK"] = "vegas-golden-knights",
-["SEA"] = "seattle-kraken",
-["UTA"] = "utah-mammoth"
+    ["ANA"] = "anaheim-ducks",
+    ["DAL"] = "dallas-stars",
+    ["LAK"] = "los-angeles-kings",
+    ["SJS"] = "san-jose-sharks",
+    ["CBJ"] = "columbus-blue-jackets",
+    ["MIN"] = "minnesota-wild",
+    ["WPG"] = "winnipeg-jets",
+    ["VGK"] = "vegas-golden-knights",
+    ["SEA"] = "seattle-kraken",
+    ["UTA"] = "utah-mammoth"
 };
 
 
@@ -154,6 +154,11 @@ new(StringComparer.OrdinalIgnoreCase)
 
             // ---------------------------------------------------------
             // LOAD PLAYERS
+            //
+            // NOTE: must stay tracked. We mutate player.Status,
+            // player.CapFreezeName, player.CapFreezeSlug and
+            // player.CapFreezeStatusLastUpdated below and rely on
+            // SaveChangesAsync at the end of this method.
             // ---------------------------------------------------------
 
             var allPlayers =
@@ -173,6 +178,9 @@ new(StringComparer.OrdinalIgnoreCase)
 
             // ---------------------------------------------------------
             // PRELOAD EXISTING CONTRACTS
+            //
+            // NOTE: must stay tracked. CapFreezeContractService mutates
+            // these rows in place and inserts new ones.
             // ---------------------------------------------------------
 
             var teamPlayerIds =
@@ -188,6 +196,10 @@ new(StringComparer.OrdinalIgnoreCase)
 
             // ---------------------------------------------------------
             // PRELOAD ALL REVIEWS (duplicate-safe)
+            //
+            // NOTE: kept tracked because MatchCapFreezeTeamEntries may
+            // add new CapFreezePlayerReview rows, and the lookup needs
+            // to reflect what is already in the DB.
             // ---------------------------------------------------------
 
             var existingReviews =
@@ -363,10 +375,14 @@ new(StringComparer.OrdinalIgnoreCase)
         {
             // ---------------------------------------------------------
             // LOAD ALL NHL TEAMS
+            //
+            // Read-only metadata: AsNoTracking so the 32 team rows are
+            // not re-tracked on every iteration of the loop below.
             // ---------------------------------------------------------
 
             var teams =
                 await _dbContext.NhlTeams
+                    .AsNoTracking()
                     .OrderBy(t => t.NhlTeamId)
                     .ToListAsync();
 
@@ -411,6 +427,11 @@ new(StringComparer.OrdinalIgnoreCase)
 
             // ---------------------------------------------------------
             // SYNC EACH TEAM SEQUENTIALLY (one transaction per team)
+            //
+            // After every team we clear the ChangeTracker so that the
+            // 32nd team's sync does not carry the tracked entities of
+            // the previous 31 teams. Without this, a full run keeps
+            // growing its memory footprint until the request ends.
             // ---------------------------------------------------------
 
             foreach (var team in teams)
@@ -456,15 +477,6 @@ new(StringComparer.OrdinalIgnoreCase)
                         // Preserve the original synchronization error.
                     }
 
-                    foreach (var entry in
-                        _dbContext.ChangeTracker
-                            .Entries()
-                            .ToList())
-                    {
-                        entry.State =
-                            EntityState.Detached;
-                    }
-
                     failedTeams.Add(
                         new
                         {
@@ -476,6 +488,15 @@ new(StringComparer.OrdinalIgnoreCase)
                             ErrorType = ex.GetType().Name,
                             ErrorMessage = ex.Message
                         });
+                }
+                finally
+                {
+                    // Free every tracked entity from this iteration.
+                    // Safe to call whether the transaction committed or
+                    // rolled back: in both cases anything we care about
+                    // has already been written (or explicitly not
+                    // written) to the database.
+                    _dbContext.ChangeTracker.Clear();
                 }
             }
 
@@ -526,6 +547,8 @@ new(StringComparer.OrdinalIgnoreCase)
                     .Select(o => o.NhlPlayerId)
                     .ToList();
 
+            // NOTE: must stay tracked. We set player.Status below and
+            // rely on the final SaveChangesAsync to persist it.
             var players =
                 await _dbContext.Players
                     .Where(p => nhlPlayerIds.Contains(p.NhlPlayerId))
@@ -534,8 +557,10 @@ new(StringComparer.OrdinalIgnoreCase)
             var databasePlayerIds =
                 players.Select(p => p.Id).ToList();
 
+            // Read-only projection: AsNoTracking is safe.
             var playerIdsWithContracts =
                 (await _dbContext.PlayerContracts
+                    .AsNoTracking()
                     .Where(c => databasePlayerIds.Contains(c.PlayerId))
                     .Select(c => c.PlayerId)
                     .Distinct()

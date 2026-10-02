@@ -721,6 +721,10 @@ export interface PlayerDetail {
     previousNhlTeamName: string | null;
     status: string;
 
+    /** "NhlRoster" | "AhlRoster" | "Injured" | "NotOnActiveRoster" | null */
+    rosterLocation: string | null;
+    rosterLocationUpdatedAt: string | null;
+
     birthDate: string | null;
     age: number | null;
     birthCity: string | null;
@@ -775,3 +779,28 @@ export interface PlayerDetail {
 
 export const getPlayerDetail = (nhlPlayerId: number) =>
     apiGet<PlayerDetail>(`/NhlPlayerDetail/${nhlPlayerId}`);
+
+// ---------------------------------------------------------------------
+// External source health (commissioner only)
+// ---------------------------------------------------------------------
+
+export type ExternalSourceStatus = 'Healthy' | 'Degraded' | 'Broken';
+
+export interface ExternalSourceHealthRow {
+    sourceName: string;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+    lastError: string | null;
+    consecutiveFailures: number;
+    status: ExternalSourceStatus;
+}
+
+export interface ExternalSourceHealthResponse {
+    playerStatusEnabled: boolean;
+    overallStatus: ExternalSourceStatus;
+    sources: ExternalSourceHealthRow[];
+}
+
+export function getExternalSourceHealth(): Promise<ExternalSourceHealthResponse> {
+    return apiGet<ExternalSourceHealthResponse>('/Health/external-sources');
+}

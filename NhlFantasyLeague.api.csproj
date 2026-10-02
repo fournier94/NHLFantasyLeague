@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Remove="frontend\src\components\layout\HealthBanner.tsx" />
     <None Remove="frontend\src\components\ui\AuraButton.tsx" />
     <None Remove="frontend\src\lib\auraConfig.ts" />
     <None Remove="frontend\src\lib\auraContext.tsx" />
@@ -40,6 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <TypeScriptCompile Include="frontend\src\components\layout\HealthBanner.tsx" />
     <TypeScriptCompile Include="frontend\src\components\ui\AuraButton.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
