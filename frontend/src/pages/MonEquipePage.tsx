@@ -9,8 +9,6 @@ import {
     auraPulseStyle,
     auraRangeFor,
     isAuraOff,
-    AURA_STRIP_PULSE_REST_SCALE,
-    AURA_STRIP_PULSE_PEAK_SCALE,
 } from '@/lib/auraConfig';
 import { consumePendingRestore } from '@/lib/scrollRestoration';
 import { useAuth } from '@/lib/AuthContext';
@@ -46,12 +44,12 @@ export default function MonEquipePage() {
     const [isTeamPickerOpen, setIsTeamPickerOpen] = useState(false);
     const teamPickerRef = useRef<HTMLDivElement>(null);
 
+    const [activeView, setActiveView] = useState<'contracts' | 'cap'>(
+        'contracts',
+    );
+
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
 
-    // Resolve the team id:
-    //   1. ?teamId= in the URL if present (viewing another team).
-    //   2. Otherwise, the logged-in user's own team.
-    //   3. Otherwise, null (unassigned user; show a message).
     const teamId = useMemo<number | null>(() => {
         if (teamIdParam) {
             const parsed = Number(teamIdParam);
@@ -66,7 +64,6 @@ export default function MonEquipePage() {
 
     const trackAura = useAura('capBarTrack');
 
-    // Label shown on the closed picker button.
     const selectedTeamLabel = (() => {
         if (teamIdParam != null) {
             const selected = teams.find(
@@ -77,34 +74,6 @@ export default function MonEquipePage() {
         return 'Mon équipe';
     })();
 
-    // Same aura channel as the player-page stat strip, so tuning
-    // 'Bande de stats (page joueur)' in the admin panel moves both.
-    const dropdownAura = useAura('playerSeasonStrip');
-
-    const dropdownSizeAt = (layer: number) =>
-        auraRangeFor(dropdownAura, 'playerSeasonStrip', layer);
-
-    const dropdownAuraRest = [
-        `0 0 2px rgba(180, 230, 255, 0.9)`,
-        `0 0 ${(dropdownSizeAt(0) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
-        `0 0 ${(dropdownSizeAt(1) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
-        `0 0 ${(dropdownSizeAt(2) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.6)`,
-        `0 0 ${(dropdownSizeAt(3) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
-    ].join(', ');
-
-    const dropdownAuraPeak = [
-        `0 0 3px rgba(200, 240, 255, 1)`,
-        `0 0 ${(dropdownSizeAt(0) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
-        `0 0 ${(dropdownSizeAt(1) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
-        `0 0 ${(dropdownSizeAt(2) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
-        `0 0 ${(dropdownSizeAt(3) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
-    ].join(', ');
-
-    const dropdownAuraOn = !isAuraOff(dropdownAura);
-
-    // Blue text-shadow aura on the picker label, matching the roster
-    // section titles. Same channel, so the "Titres de section roster"
-    // slider moves both at once.
     const fontAura = useAura('rosterSectionTitle');
 
     const fontAuraRest = [
@@ -123,7 +92,6 @@ export default function MonEquipePage() {
 
     const fontAuraOn = !isAuraOff(fontAura);
 
-    // Load the list of teams once, for the dropdown.
     useEffect(() => {
         let cancelled = false;
 
@@ -142,7 +110,6 @@ export default function MonEquipePage() {
         };
     }, []);
 
-    // Custom team-picker dropdown: close on outside click and Escape.
     useEffect(() => {
         if (!isTeamPickerOpen) return;
 
@@ -170,7 +137,6 @@ export default function MonEquipePage() {
         };
     }, [isTeamPickerOpen]);
 
-    // Load the roster whenever the resolved team changes.
     useEffect(() => {
         if (teamId == null) {
             setRoster(null);
@@ -206,7 +172,6 @@ export default function MonEquipePage() {
         };
     }, [teamId]);
 
-    // Restore scroll position when coming back from a player page.
     useEffect(() => {
         if (!roster) {
             return;
@@ -244,7 +209,6 @@ export default function MonEquipePage() {
 
     function handleTeamChange(newTeamId: string) {
         if (newTeamId === '') {
-            // Reverting to "my team": strip the query param.
             setSearchParams({});
             return;
         }
@@ -252,7 +216,6 @@ export default function MonEquipePage() {
         setSearchParams({ teamId: newTeamId });
     }
 
-    // Unassigned user, and no ?teamId override.
     if (!authLoading && user != null && teamId == null) {
         return (
             <section className='space-y-4'>
@@ -302,14 +265,18 @@ export default function MonEquipePage() {
         `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.45)`,
     ].join(', ');
 
-    return (
-        <section className='space-y-4'>
-            <div className='flex flex-col items-center gap-3'>
-                <h2 className='hidden text-2xl font-semibold text-foreground md:block'>
-                    Mon équipe · {roster.fantasyTeamName}
-                </h2>
+    const otherTeams = teams.filter((t) => t.id !== user?.fantasyTeamId);
 
-                <div className='flex w-full max-w-md flex-col items-center gap-2'>
+    return (
+        <section className='-mt-4 space-y-4 sm:-mt-6'>
+            {/* The picker sits flush under the sticky header on this
+                page. main (Layout.tsx) adds py-4/sm:py-6 top padding
+                for every other page; the -mt-4/sm:-mt-6 here cancels
+                that padding entirely, so the picker touches the
+                navbar. If main's top padding is ever changed, update
+                these values to match. */}
+            <div className='flex flex-col items-center gap-3'>
+                <div className='flex w-full flex-col items-center gap-2'>
                     <div
                         ref={teamPickerRef}
                         className='relative w-full'
@@ -320,34 +287,46 @@ export default function MonEquipePage() {
                             aria-expanded={isTeamPickerOpen}
                             aria-label='Choisir une équipe'
                             onClick={() => setIsTeamPickerOpen((v) => !v)}
-                            className={`w-full rounded-lg border bg-[#080D1A] px-3 py-2 text-center text-xl font-bold text-foreground focus:outline-none focus-visible:outline-none ${dropdownAuraOn
-                                    ? `border-[#00A8FF]/40 ${auraPulseClass('box')}`
-                                    : 'border-border focus:ring-2 focus:ring-ring/50'
-                                }`}
-                            style={
-                                dropdownAuraOn
-                                    ? auraPulseStyle(dropdownAuraRest, dropdownAuraPeak)
-                                    : undefined
-                            }
+                            className='relative mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
                         >
-                            <span
-                                className={
-                                    fontAuraOn ? auraPulseClass('text') : ''
-                                }
-                                style={
-                                    fontAuraOn
-                                        ? auraPulseStyle(fontAuraRest, fontAuraPeak)
-                                        : undefined
-                                }
-                            >
-                                {selectedTeamLabel}
+                            {/* Label is the only flex child, so it
+                                centers on the button width. The caret
+                                is absolutely positioned at the right
+                                edge of the label, so it never shifts
+                                the label off-center. */}
+                            <span className='relative inline-block'>
+                                <span
+                                    className={`text-lg font-bold leading-none text-foreground ${fontAuraOn ? auraPulseClass('text') : ''
+                                        }`}
+                                    style={
+                                        fontAuraOn
+                                            ? auraPulseStyle(fontAuraRest, fontAuraPeak)
+                                            : undefined
+                                    }
+                                >
+                                    {selectedTeamLabel}
+                                </span>
+
+                                <span
+                                    aria-hidden='true'
+                                    className='pointer-events-none absolute left-full top-1/2 ml-2 inline-block text-sm leading-none text-[#00E5FF] transition-transform duration-200'
+                                    style={{
+                                        transform: isTeamPickerOpen
+                                            ? 'translateY(-50%) rotate(180deg)'
+                                            : 'translateY(-50%) rotate(0deg)',
+                                        filter:
+                                            'drop-shadow(0 0 4px rgba(0, 229, 255, 0.7))',
+                                    }}
+                                >
+                                    ▼
+                                </span>
                             </span>
                         </button>
 
                         {isTeamPickerOpen && (
                             <ul
                                 role='listbox'
-                                className='absolute left-0 right-0 z-50 mt-1 max-h-72 overflow-y-auto rounded-lg border border-border bg-[#0F1626] shadow-2xl'
+                                className='absolute left-0 right-0 z-50 mt-1 max-h-72 overflow-y-auto rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
                             >
                                 {user?.fantasyTeamId != null && (
                                     <li>
@@ -359,129 +338,174 @@ export default function MonEquipePage() {
                                                 handleTeamChange('');
                                                 setIsTeamPickerOpen(false);
                                             }}
-                                            className='w-full cursor-pointer px-3 py-2 text-center text-base text-foreground transition-colors hover:bg-secondary'
+                                            className={`w-full cursor-pointer border-b border-[#00E5FF]/15 px-4 py-2.5 text-center text-lg font-semibold transition-colors ${teamIdParam == null
+                                                    ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
+                                                    : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
+                                                }`}
                                         >
                                             Mon équipe
                                         </button>
                                     </li>
                                 )}
 
-                                {teams
-                                    .filter((t) => t.id !== user?.fantasyTeamId)
-                                    .map((team) => (
+                                {otherTeams.map((team) => {
+                                    const isSelected =
+                                        teamIdParam === String(team.id);
+
+                                    return (
                                         <li key={team.id}>
                                             <button
                                                 type='button'
                                                 role='option'
-                                                aria-selected={
-                                                    teamIdParam === String(team.id)
-                                                }
+                                                aria-selected={isSelected}
                                                 onClick={() => {
                                                     handleTeamChange(String(team.id));
                                                     setIsTeamPickerOpen(false);
                                                 }}
-                                                className='w-full cursor-pointer px-3 py-2 text-center text-base text-foreground transition-colors hover:bg-secondary'
+                                                className={`w-full cursor-pointer px-4 py-2.5 text-center text-lg font-semibold transition-colors ${isSelected
+                                                        ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
+                                                        : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
+                                                    }`}
                                             >
                                                 {team.name}
                                             </button>
                                         </li>
-                                    ))}
+                                    );
+                                })}
                             </ul>
                         )}
                     </div>
                 </div>
+
+                <div className='flex w-full flex-col items-center gap-2'>
+                    <div className='flex w-full items-center rounded-full border border-[#00E5FF] bg-[#080D1A] p-0.5'>
+                        <button
+                            type='button'
+                            onClick={() => setActiveView('contracts')}
+                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-colors ${activeView === 'contracts'
+                                    ? 'bg-[#00E5FF] text-[#080D1A]'
+                                    : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
+                                }`}
+                        >
+                            Contrats
+                        </button>
+
+                        <button
+                            type='button'
+                            onClick={() => setActiveView('cap')}
+                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-colors ${activeView === 'cap'
+                                    ? 'bg-[#00E5FF] text-[#080D1A]'
+                                    : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
+                                }`}
+                        >
+                            Masse salariale
+                        </button>
+                    </div>
+                </div>
             </div>
 
-            {roster.futureCapBySeason.length > 0 && (
-                <div className='space-y-2'>
-                    {roster.futureCapBySeason.map((row) => {
-                        const pct = capPercentage(row.capSalary, row.salaryCap);
-                        const available = Math.max(0, row.salaryCap - row.capSalary);
+            {/* "Contrats" tab is intentionally empty below the
+                segmented button. All roster content lives under the
+                "Masse salariale" tab instead. */}
 
-                        return (
-                            <div key={row.nhlSeasonCode}>
-                                <div className='flex items-center gap-3'>
-                                    <span className='w-12 shrink-0 text-xs font-medium text-foreground'>
-                                        {row.label}
-                                    </span>
+            {activeView === 'cap' && (
+                <>
+                    {roster.futureCapBySeason.length > 0 && (
+                        <RosterSection title='Masse salariale'>
+                            <div className='space-y-2'>
+                                {roster.futureCapBySeason.map((row) => {
+                                    const pct = capPercentage(row.capSalary, row.salaryCap);
+                                    const available = Math.max(0, row.salaryCap - row.capSalary);
 
-                                    <div
-                                        className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} ${!isAuraOff(trackAura) ? auraPulseClass('box') : ''}`}
-                                        style={
-                                            !isAuraOff(trackAura)
-                                                ? auraPulseStyle(trackRest, trackPeak)
-                                                : undefined
-                                        }
-                                    >
-                                        <div
-                                            className='h-full rounded bg-cyan-400 transition-[width]'
-                                            style={{ width: `${pct}%` }}
-                                        />
-                                    </div>
-                                </div>
+                                    return (
+                                        <div key={row.nhlSeasonCode}>
+                                            <div className='flex items-center gap-3'>
+                                                <span className='w-12 shrink-0 text-xs font-medium text-foreground'>
+                                                    {row.label}
+                                                </span>
 
-                                <div className='mt-1 flex items-center justify-between pl-15 text-xs text-white'>
-                                    <span>
-                                        {maxSignedPlayers > 0
-                                            ? `${row.signedPlayers}/${maxSignedPlayers} sous contrats`
-                                            : `${row.signedPlayers} sous contrats`}
-                                    </span>
+                                                <div
+                                                    className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} ${!isAuraOff(trackAura)
+                                                            ? auraPulseClass('box')
+                                                            : ''
+                                                        }`}
+                                                    style={
+                                                        !isAuraOff(trackAura)
+                                                            ? auraPulseStyle(trackRest, trackPeak)
+                                                            : undefined
+                                                    }
+                                                >
+                                                    <div
+                                                        className='h-full rounded bg-cyan-400 transition-[width]'
+                                                        style={{ width: `${pct}%` }}
+                                                    />
+                                                </div>
+                                            </div>
 
-                                    <span>
-                                        {available > 0
-                                            ? `${compactMillions(available)} $ disponible`
-                                            : '0 $ disponible'}
-                                    </span>
-                                </div>
+                                            <div className='mt-1 flex items-center justify-between pl-15 text-xs text-white'>
+                                                <span>
+                                                    {maxSignedPlayers > 0
+                                                        ? `${row.signedPlayers}/${maxSignedPlayers} sous contrats`
+                                                        : `${row.signedPlayers} sous contrats`}
+                                                </span>
+
+                                                <span>
+                                                    {available > 0
+                                                        ? `${compactMillions(available)} $ disponible`
+                                                        : '0 $ disponible'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                             </div>
-                        );
-                    })}
-                </div>
+                        </RosterSection>
+                    )}
+
+                    <RosterSection title='Attaquants' count={forwards.length}>
+                        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
+                            {forwards.map((entry) => (
+                                <PlayerCard key={entry.id} entry={entry} />
+                            ))}
+                        </div>
+                    </RosterSection>
+
+                    <RosterSection title='Défenseurs' count={defensemen.length}>
+                        <div className='mx-auto grid w-full grid-cols-1 gap-3 md:w-2/3 md:grid-cols-2'>
+                            {defensemen.map((entry) => (
+                                <PlayerCard key={entry.id} entry={entry} />
+                            ))}
+                        </div>
+                    </RosterSection>
+
+                    <RosterSection title='Gardiens' count={goalies.length}>
+                        <div className='mx-auto w-full md:w-1/3 md:min-w-[260px]'>
+                            {goalies.map((entry) => (
+                                <PlayerCard
+                                    key={entry.id}
+                                    entry={entry}
+                                />
+                            ))}
+                        </div>
+                    </RosterSection>
+
+                    <RosterSection title='Banc' count={bench.length}>
+                        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
+                            {bench.map((entry) => (
+                                <PlayerCard key={entry.id} entry={entry} />
+                            ))}
+                        </div>
+                    </RosterSection>
+
+                    <RosterSection title='Prospects' count={prospects.length}>
+                        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
+                            {prospects.map((entry) => (
+                                <PlayerCard key={entry.id} entry={entry} />
+                            ))}
+                        </div>
+                    </RosterSection>
+                </>
             )}
-
-            <RosterSection title='Attaquants' count={forwards.length}>
-                <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
-                    {forwards.map((entry) => (
-                        <PlayerCard key={entry.id} entry={entry} />
-                    ))}
-                </div>
-            </RosterSection>
-
-            <RosterSection title='Défenseurs' count={defensemen.length}>
-                <div className='mx-auto grid w-full grid-cols-1 gap-3 md:w-2/3 md:grid-cols-2'>
-                    {defensemen.map((entry) => (
-                        <PlayerCard key={entry.id} entry={entry} />
-                    ))}
-                </div>
-            </RosterSection>
-
-            <RosterSection title='Gardiens' count={goalies.length}>
-                <div className='flex justify-center'>
-                    {goalies.map((entry) => (
-                        <PlayerCard
-                            key={entry.id}
-                            entry={entry}
-                            className='w-full md:w-1/3 md:min-w-[260px]'
-                        />
-                    ))}
-                </div>
-            </RosterSection>
-
-            <RosterSection title='Banc' count={bench.length}>
-                <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
-                    {bench.map((entry) => (
-                        <PlayerCard key={entry.id} entry={entry} />
-                    ))}
-                </div>
-            </RosterSection>
-
-            <RosterSection title='Prospects' count={prospects.length}>
-                <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
-                    {prospects.map((entry) => (
-                        <PlayerCard key={entry.id} entry={entry} />
-                    ))}
-                </div>
-            </RosterSection>
         </section>
     );
 }

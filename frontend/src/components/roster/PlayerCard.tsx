@@ -56,7 +56,15 @@ function shortName(firstName: string, lastName: string): string {
 }
 
 function shortSeasonLabel(label: string): string {
-    return label.replace(/^20/, '');
+    // Handles every format the backend might send:
+    //   "2026-27"    -> "26-27"
+    //   "2026-2027"  -> "26-27"
+    //   "26-27"      -> "26-27" (already short)
+    //   anything else -> returned unchanged
+    //
+    // (?:20)? makes the entire "20" optional, unlike 20? which
+    // only makes the final "0" optional.
+    return label.replace(/^20(\d{2})-(?:20)?(\d{2})$/, '$1-$2');
 }
 
 function compactSalary(salary: number): string {
@@ -651,7 +659,7 @@ export function PlayerCard({
                                                 </td>
 
                                                 <td
-                                                    className={`px-0.5 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                    className={`px-0.5 text-center text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
                                                     style={
                                                         !isAuraOff(textAura)
                                                             ? auraPulseStyle(textRest, textPeak)
