@@ -1,10 +1,13 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Models.CapFreeze;
 
 namespace NhlFantasyLeague.api.Data
 {
-    public class AppDbContext : DbContext
+    public class AppDbContext
+        : IdentityDbContext<ApplicationUser, IdentityRole<int>, int>
     {
         public AppDbContext(DbContextOptions<AppDbContext> options)
             : base(options)
@@ -37,17 +40,35 @@ namespace NhlFantasyLeague.api.Data
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
+            // Identity first, so all its table config is registered.
             base.OnModelCreating(modelBuilder);
+
+            // -----------------------------------------------------------------
+            // ApplicationUser <-> FantasyTeam
+            // -----------------------------------------------------------------
+
+            modelBuilder.Entity<ApplicationUser>()
+                .HasOne(u => u.FantasyTeam)
+                .WithMany()
+                .HasForeignKey(u => u.FantasyTeamId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // A FantasyTeam can be owned by at most one user. Filtered
+            // unique index: rows with FantasyTeamId IS NULL are ignored,
+            // so any number of users can be unassigned at the same time.
+            modelBuilder.Entity<ApplicationUser>()
+                .HasIndex(u => u.FantasyTeamId)
+                .HasFilter("\"FantasyTeamId\" IS NOT NULL")
+                .IsUnique();
+
+            // -----------------------------------------------------------------
+            // Existing model configuration, unchanged below.
+            // -----------------------------------------------------------------
 
             modelBuilder.Entity<RosterEntry>()
                 .Property(r => r.RosterStatus)
                 .HasConversion<string>();
 
-            // Same string conversion for RosterStatusHistory.RosterStatus.
-            // Without this EF Core defaults to storing the enum as its
-            // underlying integer, which does not match the "text" column
-            // the migration created and causes an InvalidCastException
-            // when the recompute reads the rows back.
             modelBuilder.Entity<RosterStatusHistory>()
                 .Property(h => h.RosterStatus)
                 .HasConversion<string>();
@@ -165,8 +186,6 @@ namespace NhlFantasyLeague.api.Data
                 .HasIndex(x => x.DraftPickId)
                 .IsUnique();
 
-            // One fantasy row per player and per season. The raw per-league
-            // history lives in PlayerCareerStat instead.
             modelBuilder.Entity<PlayerSeasonStat>()
                 .HasIndex(x => new { x.SeasonId, x.PlayerId })
                 .IsUnique();
@@ -209,9 +228,6 @@ namespace NhlFantasyLeague.api.Data
                 .HasForeignKey(h => h.PlayerId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            // One open spell per (player, status, team). Filtered index:
-            // only rows with ResolvedAt IS NULL count, so an open spell
-            // and its resolved predecessor never collide.
             modelBuilder.Entity<PlayerInjuryHistory>()
                 .HasIndex(h => new
                 {
@@ -269,8 +285,6 @@ namespace NhlFantasyLeague.api.Data
                 .Property(r => r.LastNameSimilarity)
                 .HasPrecision(5, 4);
 
-            // RosterStatusHistory: append-only log of status changes and
-            // trades. Never edited or deleted, only inserted.
             modelBuilder.Entity<RosterStatusHistory>()
                 .HasOne(h => h.Player)
                 .WithMany()
@@ -289,11 +303,6 @@ namespace NhlFantasyLeague.api.Data
                 .HasForeignKey(h => h.SeasonId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Fast lookup of "this player's history this season, in
-            // chronological order". Not unique: a trade legitimately
-            // writes two rows at the same EffectiveAt (old team + new
-            // team), and a swap writes one row per player at the same
-            // instant.
             modelBuilder.Entity<RosterStatusHistory>()
                 .HasIndex(h => new
                 {

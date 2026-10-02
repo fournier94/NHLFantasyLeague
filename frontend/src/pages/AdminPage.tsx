@@ -1,17 +1,24 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import {
     assignPlayer,
+    assignUserTeam,
+    demoteUser,
     getLeagueTeams,
     getTeamRoster,
+    getUsers,
+    promoteUser,
     releasePlayer,
+    resetUserPassword,
     searchPlayers,
     swapRosterStatus,
+    unassignUserTeam,
     updateRosterEntry,
     deleteStatusHistory,
     getRosterStatusHistory,
     recomputeTeamTotals,
     updateStatusHistory,
     type RosterStatusHistoryRow,
+    type AdminUserRow,
     type FantasyTeam,
     type PlayerSearchResult,
     type RosterEntry,
@@ -199,6 +206,17 @@ export default function AdminPage() {
     const [editingNote, setEditingNote] = useState('');
     const [historyBusy, setHistoryBusy] = useState(false);
 
+    // --- Users section state ---
+    const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
+    const [usersLoading, setUsersLoading] = useState(false);
+    const [usersError, setUsersError] = useState<string | null>(null);
+    const [usersSuccess, setUsersSuccess] = useState<string | null>(null);
+    const [usersBusyId, setUsersBusyId] = useState<number | null>(null);
+    const [resetPasswordFor, setResetPasswordFor] = useState<number | null>(null);
+    const [resetPasswordValue, setResetPasswordValue] = useState('');
+    const [assignTeamFor, setAssignTeamFor] = useState<number | null>(null);
+    const [assignTeamValue, setAssignTeamValue] = useState('');
+
     const [showAppearance, setShowAppearance] = useState(false);
 
     // --- Swap section state ---
@@ -240,6 +258,11 @@ export default function AdminPage() {
         return () => {
             cancelled = true;
         };
+    }, []);
+
+    // Load the users list once on mount.
+    useEffect(() => {
+        void loadUsers();
     }, []);
 
     useEffect(() => {
@@ -732,6 +755,129 @@ export default function AdminPage() {
             );
         } finally {
             setHistoryBusy(false);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Users section
+    // ---------------------------------------------------------------
+
+    async function loadUsers() {
+        setUsersLoading(true);
+        setUsersError(null);
+
+        try {
+            const data = await getUsers();
+            setAdminUsers(data);
+        } catch (err) {
+            setUsersError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setUsersLoading(false);
+        }
+    }
+
+    async function handlePromote(userId: number) {
+        setUsersBusyId(userId);
+        setUsersError(null);
+        setUsersSuccess(null);
+
+        try {
+            const result = await promoteUser(userId);
+            setUsersSuccess(result.message);
+            await loadUsers();
+        } catch (err) {
+            setUsersError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setUsersBusyId(null);
+        }
+    }
+
+    async function handleDemote(userId: number) {
+        setUsersBusyId(userId);
+        setUsersError(null);
+        setUsersSuccess(null);
+
+        try {
+            const result = await demoteUser(userId);
+            setUsersSuccess(result.message);
+            await loadUsers();
+        } catch (err) {
+            setUsersError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setUsersBusyId(null);
+        }
+    }
+
+    async function handleResetPassword(userId: number) {
+        if (!resetPasswordValue) {
+            setUsersError('Entrez un nouveau mot de passe.');
+            return;
+        }
+
+        setUsersBusyId(userId);
+        setUsersError(null);
+        setUsersSuccess(null);
+
+        try {
+            const result = await resetUserPassword(userId, resetPasswordValue);
+            setUsersSuccess(result.message);
+            setResetPasswordFor(null);
+            setResetPasswordValue('');
+        } catch (err) {
+            setUsersError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setUsersBusyId(null);
+        }
+    }
+
+    async function handleAssignTeam(userId: number) {
+        if (!assignTeamValue) {
+            setUsersError('Choisissez une équipe.');
+            return;
+        }
+
+        setUsersBusyId(userId);
+        setUsersError(null);
+        setUsersSuccess(null);
+
+        try {
+            const result = await assignUserTeam(userId, Number(assignTeamValue));
+            setUsersSuccess(result.message);
+            setAssignTeamFor(null);
+            setAssignTeamValue('');
+            await loadUsers();
+        } catch (err) {
+            setUsersError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setUsersBusyId(null);
+        }
+    }
+
+    async function handleUnassignTeam(userId: number) {
+        setUsersBusyId(userId);
+        setUsersError(null);
+        setUsersSuccess(null);
+
+        try {
+            const result = await unassignUserTeam(userId);
+            setUsersSuccess(result.message);
+            await loadUsers();
+        } catch (err) {
+            setUsersError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setUsersBusyId(null);
         }
     }
 
@@ -1587,6 +1733,221 @@ export default function AdminPage() {
                             );
                         })}
                     </ul>
+                )}
+            </div>
+
+            {/* ============================================================
+                Utilisateurs
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Utilisateurs
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Liste des comptes enregistrés. Assignez une équipe,
+                    gérez les rôles de commissaire, ou réinitialisez un
+                    mot de passe.
+                </p>
+
+                {usersError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {usersError}
+                    </p>
+                )}
+
+                {usersSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {usersSuccess}
+                    </p>
+                )}
+
+                {usersLoading && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {!usersLoading && adminUsers.length === 0 && (
+                    <p className='text-sm text-muted-foreground'>
+                        Aucun utilisateur enregistré.
+                    </p>
+                )}
+
+                {!usersLoading && adminUsers.length > 0 && (
+                    <div className='overflow-x-auto rounded-lg border border-border bg-card'>
+                        <table className='w-full min-w-[720px] text-sm'>
+                            <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
+                                <tr>
+                                    <th className='px-2 py-2 text-left font-medium'>Utilisateur</th>
+                                    <th className='px-2 py-2 text-left font-medium'>Équipe</th>
+                                    <th className='px-2 py-2 text-center font-medium'>Commissaire</th>
+                                    <th className='px-2 py-2 text-center font-medium'>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className='text-foreground'>
+                                {adminUsers.map((u, index) => (
+                                    <tr
+                                        key={u.id}
+                                        className={
+                                            index % 2 === 0
+                                                ? 'bg-transparent'
+                                                : 'bg-secondary/20'
+                                        }
+                                    >
+                                        <td className='px-2 py-2 align-top'>
+                                            <div className='font-medium'>
+                                                {u.userName}
+                                            </div>
+                                        </td>
+                                        <td className='px-2 py-2 align-top'>
+                                            {u.fantasyTeamName ?? '—'}
+                                        </td>
+                                        <td className='px-2 py-2 text-center align-top'>
+                                            {u.isCommissioner ? '✓' : ''}
+                                        </td>
+                                        <td className='px-2 py-2 text-center align-top'>
+                                            <div className='flex flex-wrap items-center justify-center gap-2'>
+                                                {/* Promote / demote */}
+                                                {u.isCommissioner ? (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => void handleDemote(u.id)}
+                                                        disabled={usersBusyId === u.id}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                    >
+                                                        Retirer commissaire
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => void handlePromote(u.id)}
+                                                        disabled={usersBusyId === u.id}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                    >
+                                                        Promouvoir
+                                                    </button>
+                                                )}
+
+                                                {/* Team assign / unassign */}
+                                                {u.fantasyTeamId == null ? (
+                                                    <>
+                                                        {assignTeamFor === u.id ? (
+                                                            <>
+                                                                <select
+                                                                    value={assignTeamValue}
+                                                                    onChange={(event) =>
+                                                                        setAssignTeamValue(event.target.value)
+                                                                    }
+                                                                    className='rounded border border-border bg-background px-2 py-0.5 text-xs'
+                                                                >
+                                                                    <option value=''>— équipe —</option>
+                                                                    {teams
+                                                                        .filter((t) =>
+                                                                            adminUsers.every(
+                                                                                (other) =>
+                                                                                    other.fantasyTeamId !== t.id,
+                                                                            ),
+                                                                        )
+                                                                        .map((t) => (
+                                                                            <option key={t.id} value={t.id}>
+                                                                                {t.name}
+                                                                            </option>
+                                                                        ))}
+                                                                </select>
+                                                                <button
+                                                                    type='button'
+                                                                    onClick={() => void handleAssignTeam(u.id)}
+                                                                    disabled={usersBusyId === u.id}
+                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                >
+                                                                    OK
+                                                                </button>
+                                                                <button
+                                                                    type='button'
+                                                                    onClick={() => {
+                                                                        setAssignTeamFor(null);
+                                                                        setAssignTeamValue('');
+                                                                    }}
+                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                                >
+                                                                    Annuler
+                                                                </button>
+                                                            </>
+                                                        ) : (
+                                                            <button
+                                                                type='button'
+                                                                onClick={() => {
+                                                                    setAssignTeamFor(u.id);
+                                                                    setAssignTeamValue('');
+                                                                }}
+                                                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                            >
+                                                                Assigner équipe
+                                                            </button>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => void handleUnassignTeam(u.id)}
+                                                        disabled={usersBusyId === u.id}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                    >
+                                                        Désassigner équipe
+                                                    </button>
+                                                )}
+
+                                                {/* Reset password */}
+                                                {resetPasswordFor === u.id ? (
+                                                    <>
+                                                        <input
+                                                            type='text'
+                                                            value={resetPasswordValue}
+                                                            onChange={(event) =>
+                                                                setResetPasswordValue(event.target.value)
+                                                            }
+                                                            placeholder='Nouveau mot de passe'
+                                                            className='rounded border border-border bg-background px-2 py-0.5 text-xs'
+                                                        />
+                                                        <button
+                                                            type='button'
+                                                            onClick={() => void handleResetPassword(u.id)}
+                                                            disabled={usersBusyId === u.id}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            OK
+                                                        </button>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() => {
+                                                                setResetPasswordFor(null);
+                                                                setResetPasswordValue('');
+                                                            }}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                        >
+                                                            Annuler
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            setResetPasswordFor(u.id);
+                                                            setResetPasswordValue('');
+                                                        }}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                    >
+                                                        Réinitialiser mot de passe
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
             </div>
 

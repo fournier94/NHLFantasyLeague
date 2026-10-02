@@ -1,6 +1,6 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getTeamRoster, type RosterEntry, type TeamRoster } from '@/api/client';
+import { getLeagueTeams, getTeamRoster, type FantasyTeam, type RosterEntry, type TeamRoster } from '@/api/client';
 import { PlayerCard } from '@/components/roster/PlayerCard';
 import { RosterSection } from '@/components/roster/RosterSection';
 import { useAura } from '@/lib/auraContext';
@@ -11,8 +11,7 @@ import {
     isAuraOff,
 } from '@/lib/auraConfig';
 import { consumePendingRestore } from '@/lib/scrollRestoration';
-
-const TEMPORARY_TEAM_ID = 5;
+import { useAuth } from '@/lib/AuthContext';
 
 function isActive(entry: RosterEntry): boolean {
     return entry.rosterStatus === 'Active';
@@ -37,18 +36,59 @@ function compactMillions(value: number): string {
 }
 
 export default function MonEquipePage() {
-    const [searchParams] = useSearchParams();
+    const { user, loading: authLoading } = useAuth();
+
+    const [searchParams, setSearchParams] = useSearchParams();
     const teamIdParam = searchParams.get('teamId');
-    const teamId = teamIdParam ? Number(teamIdParam) : TEMPORARY_TEAM_ID;
+
+    const [teams, setTeams] = useState<FantasyTeam[]>([]);
+
+    // Resolve the team id:
+    //   1. ?teamId= in the URL if present (viewing another team).
+    //   2. Otherwise, the logged-in user's own team.
+    //   3. Otherwise, null (unassigned user; show a message).
+    const teamId = useMemo<number | null>(() => {
+        if (teamIdParam) {
+            const parsed = Number(teamIdParam);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+        return user?.fantasyTeamId ?? null;
+    }, [teamIdParam, user?.fantasyTeamId]);
 
     const [roster, setRoster] = useState<TeamRoster | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    // Single aura around the whole bar. No separate fill slider.
     const trackAura = useAura('capBarTrack');
 
+    // Load the list of teams once, for the dropdown.
     useEffect(() => {
+        let cancelled = false;
+
+        getLeagueTeams()
+            .then((data) => {
+                if (!cancelled) {
+                    setTeams(data);
+                }
+            })
+            .catch(() => {
+                // Not fatal; the dropdown just won't populate.
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    // Load the roster whenever the resolved team changes.
+    useEffect(() => {
+        if (teamId == null) {
+            setRoster(null);
+            setLoading(false);
+            setError(null);
+            return;
+        }
+
         let cancelled = false;
 
         setLoading(true);
@@ -77,12 +117,6 @@ export default function MonEquipePage() {
     }, [teamId]);
 
     // Restore scroll position when coming back from a player page.
-    // Runs after the roster has rendered so the page has its full
-    // height. Uses requestAnimationFrame so the browser has painted
-    // before we measure / scroll.
-    //
-    // Prefers the exact scroll Y the user was at when they left. Falls
-    // back to the card id only when no scroll Y is available.
     useEffect(() => {
         if (!roster) {
             return;
@@ -118,15 +152,48 @@ export default function MonEquipePage() {
         return () => cancelAnimationFrame(frame);
     }, [roster]);
 
-    if (loading) return <p className='text-muted-foreground'>Chargement...</p>;
+    function handleTeamChange(newTeamId: string) {
+        if (newTeamId === '') {
+            // Reverting to "my team": strip the query param.
+            setSearchParams({});
+            return;
+        }
+
+        setSearchParams({ teamId: newTeamId });
+    }
+
+    // Unassigned user, and no ?teamId override.
+    if (!authLoading && user != null && teamId == null) {
+        return (
+            <section className='space-y-4'>
+                <h2 className='text-center text-2xl font-semibold text-foreground'>
+                    Mon équipe
+                </h2>
+                <p className='text-center text-muted-foreground'>
+                    Aucune équipe ne vous a encore été assignée. Le
+                    commissaire doit vous assigner une équipe avant que
+                    vous puissiez la voir.
+                </p>
+            </section>
+        );
+    }
+
+    if (loading || authLoading) {
+        return <p className='text-muted-foreground'>Chargement...</p>;
+    }
+
     if (error) return <p className='text-destructive'>{error}</p>;
     if (!roster) return null;
 
     const forwards = roster.entries.filter(
         (entry) => isActive(entry) && entry.position !== 'D' && entry.position !== 'G',
     );
-    const defensemen = roster.entries.filter((entry) => isActive(entry) && entry.position === 'D');
-    const goalies = roster.entries.filter((entry) => isActive(entry) && entry.position === 'G');
+    const defensemen = roster.entries.filter(
+        (entry) => isActive(entry) && entry.position === 'D',
+    );
+    const goalies = roster.entries.filter(
+        (entry) => isActive(entry) && entry.position === 'G',
+    );
     const bench = roster.entries.filter((entry) => entry.rosterStatus === 'Bench');
     const prospects = roster.entries.filter((entry) => entry.rosterStatus === 'Prospect');
 
@@ -145,12 +212,53 @@ export default function MonEquipePage() {
         `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.45)`,
     ].join(', ');
 
+    const isViewingOwnTeam =
+        user?.fantasyTeamId != null &&
+        user.fantasyTeamId === roster.fantasyTeamId;
+
     return (
         <section className='space-y-4'>
-            <div>
+            <div className='flex flex-col items-center gap-3'>
                 <h2 className='hidden text-2xl font-semibold text-foreground md:block'>
                     Mon équipe · {roster.fantasyTeamName}
                 </h2>
+
+                <div className='flex w-full max-w-md flex-col items-center gap-2'>
+                    <label
+                        htmlFor='team-picker'
+                        className='text-sm font-medium text-muted-foreground'
+                    >
+                        Voir une autre équipe
+                    </label>
+                    <select
+                        id='team-picker'
+                        value={
+                            teamIdParam ??
+                            String(user?.fantasyTeamId ?? '')
+                        }
+                        onChange={(event) => handleTeamChange(event.target.value)}
+                        className='w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/50'
+                    >
+                        {user?.fantasyTeamId != null && (
+                            <option value=''>
+                                Mon équipe ({user.fantasyTeamName ?? ''})
+                            </option>
+                        )}
+                        {teams
+                            .filter((t) => t.id !== user?.fantasyTeamId)
+                            .map((team) => (
+                                <option key={team.id} value={team.id}>
+                                    {team.name}
+                                </option>
+                            ))}
+                    </select>
+
+                    {isViewingOwnTeam && (
+                        <span className='text-xs text-[#00F0FF]'>
+                            Ma team
+                        </span>
+                    )}
+                </div>
             </div>
 
             {roster.futureCapBySeason.length > 0 && (

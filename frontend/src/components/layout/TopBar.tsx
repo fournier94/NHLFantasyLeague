@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
     Bell,
     LogIn,
+    LogOut,
     Menu,
     MessageSquare,
     Search,
@@ -16,6 +17,7 @@ import {
     searchPlayers,
     type PlayerSearchResult,
 } from '@/api/client';
+import { useAuth } from '@/lib/AuthContext';
 import {
     Sheet,
     SheetContent,
@@ -44,6 +46,14 @@ export function TopBar() {
     const location = useLocation();
     const navigate = useNavigate();
     const [mobileOpen, setMobileOpen] = useState(false);
+
+    const { user, isAuthenticated, logout } = useAuth();
+
+    async function handleLogout() {
+        await logout();
+        setMobileOpen(false);
+        navigate('/connexion', { replace: true });
+    }
 
     // Player search state
     const [searchQuery, setSearchQuery] = useState('');
@@ -217,17 +227,19 @@ export function TopBar() {
                     })}
 
                     <div className='flex items-center gap-4'>
-                        <Link
-                            to='/admin'
-                            aria-label='Administration'
-                            className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/admin'
-                                ? 'font-medium text-primary'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            <ShieldCheck className='h-4 w-4' />
-                            <span>Admin</span>
-                        </Link>
+                        {isAuthenticated && (
+                            <Link
+                                to='/admin'
+                                aria-label='Administration'
+                                className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/admin'
+                                    ? 'font-medium text-primary'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                <ShieldCheck className='h-4 w-4' />
+                                <span>Admin</span>
+                            </Link>
+                        )}
 
                         <Link
                             to='/messages'
@@ -251,27 +263,44 @@ export function TopBar() {
                             <Bell className='h-5 w-5' />
                         </Link>
 
-                        <Link
-                            to='/profil'
-                            aria-label='Profil'
-                            className={`transition-colors ${location.pathname === '/profil'
-                                ? 'text-primary'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            <User className='h-5 w-5' />
-                        </Link>
+                        {isAuthenticated ? (
+                            <>
+                                <Link
+                                    to='/profil'
+                                    aria-label='Profil'
+                                    className={`transition-colors ${location.pathname === '/profil'
+                                        ? 'text-primary'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                >
+                                    <User className='h-5 w-5' />
+                                </Link>
 
-                        <Link
-                            to='/connexion'
-                            className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/connexion'
-                                ? 'font-medium text-primary'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            <LogIn className='h-4 w-4' />
-                            <span>Connexion</span>
-                        </Link>
+                                <span className='text-sm text-foreground'>
+                                    {user?.displayName ?? user?.userName}
+                                </span>
+
+                                <button
+                                    type='button'
+                                    onClick={handleLogout}
+                                    className='flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground'
+                                >
+                                    <LogOut className='h-4 w-4' />
+                                    <span>Déconnexion</span>
+                                </button>
+                            </>
+                        ) : (
+                            <Link
+                                to='/connexion'
+                                className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/connexion'
+                                    ? 'font-medium text-primary'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                <LogIn className='h-4 w-4' />
+                                <span>Connexion</span>
+                            </Link>
+                        )}
                     </div>
                 </div>
 
@@ -361,14 +390,36 @@ export function TopBar() {
                                         <span>Profil</span>
                                     </Link>
 
-                                    <Link
-                                        to='/connexion'
-                                        onClick={() => setMobileOpen(false)}
-                                        className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
-                                    >
-                                        <LogIn className='h-4 w-4' />
-                                        <span>Connexion / Inscription</span>
-                                    </Link>
+                                    {isAuthenticated ? (
+                                        <button
+                                            type='button'
+                                            onClick={handleLogout}
+                                            className='flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-secondary'
+                                        >
+                                            <LogOut className='h-4 w-4' />
+                                            <span>Déconnexion ({user?.displayName ?? user?.userName})</span>
+                                        </button>
+                                    ) : (
+                                        <>
+                                            <Link
+                                                to='/connexion'
+                                                onClick={() => setMobileOpen(false)}
+                                                className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
+                                            >
+                                                <LogIn className='h-4 w-4' />
+                                                <span>Connexion</span>
+                                            </Link>
+
+                                            <Link
+                                                to='/inscription'
+                                                onClick={() => setMobileOpen(false)}
+                                                className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
+                                            >
+                                                <User className='h-4 w-4' />
+                                                <span>Inscription</span>
+                                            </Link>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         </SheetContent>

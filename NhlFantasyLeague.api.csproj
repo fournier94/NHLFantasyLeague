@@ -19,15 +19,18 @@
     <None Remove="frontend\src\components\ui\AuraButton.tsx" />
     <None Remove="frontend\src\lib\auraConfig.ts" />
     <None Remove="frontend\src\lib\auraContext.tsx" />
+    <None Remove="frontend\src\lib\AuthContext.tsx" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
     <None Remove="frontend\src\lib\playerNavigation.ts" />
     <None Remove="frontend\src\lib\scrollRestoration.ts" />
     <None Remove="frontend\src\pages\ClassementPage.tsx" />
+    <None Remove="frontend\src\pages\InscriptionPage.tsx" />
     <None Remove="frontend\src\pages\PlayerPage.tsx" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" Version="1.13.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="8.0.8" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.8">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -40,10 +43,12 @@
     <TypeScriptCompile Include="frontend\src\components\ui\AuraButton.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
+    <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />
     <TypeScriptCompile Include="frontend\src\lib\playerNavigation.ts" />
     <TypeScriptCompile Include="frontend\src\lib\scrollRestoration.ts" />
     <TypeScriptCompile Include="frontend\src\pages\ClassementPage.tsx" />
+    <TypeScriptCompile Include="frontend\src\pages\InscriptionPage.tsx" />
     <TypeScriptCompile Include="frontend\src\pages\PlayerPage.tsx" />
   </ItemGroup>
 
