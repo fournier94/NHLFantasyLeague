@@ -194,11 +194,6 @@ namespace NhlFantasyLeague.api.Models.Dtos
     }
 
     /// <summary>
-    /// One season of NHL statistics shown on a player card. Skater fields and
-    /// goalie fields are both present; the frontend displays the ones matching
-    /// the player's position.
-    /// </summary>
-    /// <summary>
     /// One season line shown on a player card. LeagueAbbreviation tells
     /// which league the stats are from (NHL, AHL, SHL, ...).
     /// </summary>
@@ -231,6 +226,24 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public int Losses { get; set; }
 
         public int OvertimeLosses { get; set; }
+
+        /// <summary>
+        /// Hat tricks recorded this season (skaters). Sourced from
+        /// PlayerSeasonStat. Zero when the season row is missing.
+        /// </summary>
+        public int HatTricks { get; set; }
+
+        /// <summary>
+        /// Shutouts recorded this season (goalies). Sourced from
+        /// PlayerSeasonStat. Zero when the season row is missing.
+        /// </summary>
+        public int Shutouts { get; set; }
+
+        /// <summary>
+        /// Total fantasy points scored this season, sourced from
+        /// PlayerSeasonStat. Zero when the season row is missing.
+        /// </summary>
+        public int FantasyPoints { get; set; }
     }
 
     /// <summary>

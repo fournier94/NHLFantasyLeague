@@ -1,9 +1,11 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { getLeagueTeams, getTeamRoster, type FantasyTeam, type RosterEntry, type TeamRoster } from '@/api/client';
 import { PlayerCard } from '@/components/roster/PlayerCard';
 import { RosterSection } from '@/components/roster/RosterSection';
+import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { useAura } from '@/lib/auraContext';
+import { getNhlTeamColor, desaturateHex } from '@/lib/nhlTeamColors';
 import {
     auraPulseClass,
     auraPulseStyle,
@@ -35,6 +37,336 @@ function compactMillions(value: number): string {
     return `${rounded}M`;
 }
 
+// =====================================================================
+// Lineup helpers
+// =====================================================================
+
+type LineupPositionGroup = 'F' | 'D' | 'G';
+
+/**
+ * Collapses any NHL / ESPN position spelling to a single-letter group
+ * (F, D or G). Unknown positions default to 'F' so a player never
+ * disappears from the lineup by accident.
+ */
+function toLineupPositionGroup(
+    rawPosition: string | null | undefined,
+): LineupPositionGroup {
+    if (!rawPosition) return 'F';
+
+    const n = rawPosition
+        .trim()
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ');
+
+    if (
+        n === 'G' ||
+        n === 'GK' ||
+        n === 'GB' ||
+        n === 'GOALIE' ||
+        n === 'GOALTENDER' ||
+        n === 'GARDIEN' ||
+        n === 'GARDIEN DE BUT'
+    ) {
+        return 'G';
+    }
+
+    if (
+        n === 'D' ||
+        n === 'LD' ||
+        n === 'RD' ||
+        n === 'DEFENSE' ||
+        n === 'DEFENCE' ||
+        n === 'DEFENSEMAN' ||
+        n === 'DEFENCEMAN' ||
+        n === 'DEFENSEUR' ||
+        n === 'ARRIERE' ||
+        n === 'LEFT DEFENSE' ||
+        n === 'RIGHT DEFENSE'
+    ) {
+        return 'D';
+    }
+
+    return 'F';
+}
+
+/**
+ * Color for the position letter. Matches the group: red for forwards,
+ * blue for defensemen, green for goalies.
+ */
+function positionTextColor(group: LineupPositionGroup): string {
+    switch (group) {
+        case 'F':
+            return 'text-[#EF4444]';
+        case 'D':
+            return 'text-[#3B82F6]';
+        case 'G':
+            return 'text-[#22C55E]';
+    }
+}
+
+/** Sort a list of roster entries by current-season fantasy points desc. */
+function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
+    return [...entries].sort((a, b) => {
+        const fa = a.currentSeason?.fantasyPoints ?? 0;
+        const fb = b.currentSeason?.fantasyPoints ?? 0;
+        return fb - fa;
+    });
+}
+
+// =====================================================================
+// Lineup components
+// =====================================================================
+
+// Single source of truth for the lineup table columns. Kept in a
+// constant so the header and the rows cannot drift apart.
+//
+// Order: Name | Pos | (logo) | GP | G/W | A/L | PTS/OTL | 3B/SO | FP
+// Column widths are sized for a ~16px row font and a 20px team logo.
+const LINEUP_GRID_COLUMNS =
+    'minmax(0, 1fr) 22px 24px 30px 28px 28px 32px 28px 36px';
+
+// Cyan separator glow, matching the segmented button accent
+// (#00E5FF). Applied to the bottom border of the last row of a
+// section so the separator takes no vertical space.
+const LINEUP_SEPARATOR_GLOW =
+    '0 2px 3px -1px rgba(0, 229, 255, 0.55), 0 3px 6px -2px rgba(0, 229, 255, 0.3)';
+
+function LineupHeader({ isGoalie }: { isGoalie: boolean }) {
+    return (
+        <div
+            className={`grid w-full items-center gap-x-0.5 border-b border-border/40 pb-0.5 uppercase tracking-wide text-white ${isGoalie ? 'mt-3 text-xs' : 'text-sm'
+                }`}
+            style={{ gridTemplateColumns: LINEUP_GRID_COLUMNS }}
+        >
+            {/* The name and position columns have no header labels on
+                purpose: the user already knows what they are. The
+                cells stay empty so the grid columns still line up
+                with the rows beneath. */}
+            <div className='text-left' />
+            <div className='text-center' />
+            <div />
+            <div className='text-center text-[#7DD3FC]'>GP</div>
+            {isGoalie ? (
+                <>
+                    <div className='text-center text-[#00F0FF]'>W</div>
+                    <div className='text-center'>L</div>
+                    <div className='text-center'>OTL</div>
+                    <div className='text-center'>SO</div>
+                </>
+            ) : (
+                <>
+                    <div className='text-center'>G</div>
+                    <div className='text-center'>A</div>
+                    <div className='text-center text-[#00F0FF]'>PTS</div>
+                    <div className='text-center'>3B</div>
+                </>
+            )}
+            <div className='text-center text-[#F59E0B]'>FP</div>
+        </div>
+    );
+}
+
+function LineupRow({
+    entry,
+    isLastOfSection,
+}: {
+    entry: RosterEntry;
+    isLastOfSection: boolean;
+}) {
+    const group = toLineupPositionGroup(entry.position);
+    const isGoalie = group === 'G';
+    const s = entry.currentSeason;
+
+    const gp = s?.gamesPlayed ?? 0;
+    const g = s?.goals ?? 0;
+    const a = s?.assists ?? 0;
+    const pts = s?.points ?? 0;
+    const ht = s?.hatTricks ?? 0;
+    const w = s?.wins ?? 0;
+    const l = s?.losses ?? 0;
+    const otl = s?.overtimeLosses ?? 0;
+    const so = s?.shutouts ?? 0;
+    const fp = s?.fantasyPoints ?? 0;
+
+    const initial = entry.firstName.trim().charAt(0).toUpperCase();
+    const shortName = initial
+        ? `${initial}. ${entry.lastName}`
+        : entry.lastName;
+
+    // Team color for the logo glow, matching the same helper used
+    // by PlayerCard and PlayerPage. Falls back to the league cyan
+    // (#00A8FF) when the abbreviation is unknown.
+    const teamColor = getNhlTeamColor(entry.nhlTeamAbbreviation);
+
+    // Faded team-colored row background, same recipe as PlayerCard:
+    // desaturate the team color, then blend it heavily into the
+    // page background (#080D1A) via a dark overlay so only a subtle
+    // hue remains. Tune the saturation scale (0.55) for more or
+    // less color, and the overlay alpha (0.82) for how strong the
+    // tint reads against the page.
+    const rowBackgroundStyle = {
+        backgroundColor: desaturateHex(teamColor, 0.55),
+        backgroundImage: `linear-gradient(rgba(8, 13, 26, 0.82), rgba(8, 13, 26, 0.82))`,
+    };
+
+    return (
+        <Link
+            to={`/joueurs/${entry.nhlPlayerId}`}
+            className='grid w-full items-center gap-x-0.5 border-b border-border/20 py-0.5 text-base tabular-nums transition-[filter] duration-150 hover:brightness-110'
+            style={{
+                gridTemplateColumns: LINEUP_GRID_COLUMNS,
+                borderBottomColor: isLastOfSection
+                    ? 'rgba(0, 229, 255, 0.6)'
+                    : undefined,
+                boxShadow: isLastOfSection
+                    ? LINEUP_SEPARATOR_GLOW
+                    : undefined,
+                ...rowBackgroundStyle,
+            }}
+        >
+            {/* Team-colored glow around the player name. The alpha
+                here is much higher than on PlayerCard because the
+                lineup row background is mostly dark and the name
+                text is near-white, so a low-alpha shadow gets
+                swallowed. Full alpha at 4px gives a tight, clearly
+                visible halo; ~60% at 8px adds the soft outer bloom.
+                The pl-0.5 on the wrapper keeps the left-side glow
+                from being clipped by truncate's overflow:hidden. */}
+            <div
+                className='truncate pl-0.5 text-left text-foreground'
+                style={{
+                    textShadow: `0 0 4px ${teamColor}, 0 0 8px ${teamColor}99`,
+                }}
+            >
+                {shortName}
+            </div>
+
+            <div
+                className={`text-center font-bold ${positionTextColor(group)}`}
+            >
+                {group}
+            </div>
+
+            {/* Small glow behind the team logo, tinted with the
+                team's own color so it reads as "belongs to X"
+                instead of a generic accent. Not wired to the aura
+                system on purpose: this is a decorative detail on
+                the lineup row, not a user-tunable channel. The
+                `8C` suffix is ~55% alpha on the 6-digit hex. */}
+            <div
+                className='flex justify-center'
+                style={{
+                    filter: `drop-shadow(0 0 3px ${teamColor}8C)`,
+                }}
+            >
+                <NhlTeamLogo
+                    abbreviation={entry.nhlTeamAbbreviation}
+                    size={20}
+                />
+            </div>
+
+            <div className='text-center text-[#7DD3FC]'>{gp}</div>
+
+            {isGoalie ? (
+                <>
+                    <div className='text-center text-[#00F0FF]'>{w}</div>
+                    <div className='text-center'>{l}</div>
+                    <div className='text-center'>{otl}</div>
+                    <div className='text-center'>{so}</div>
+                </>
+            ) : (
+                <>
+                    <div className='text-center'>{g}</div>
+                    <div className='text-center'>{a}</div>
+                    <div className='text-center text-[#00F0FF]'>{pts}</div>
+                    <div className='text-center'>{ht}</div>
+                </>
+            )}
+
+            <div className='text-center font-bold text-[#F59E0B]'>{fp}</div>
+        </Link>
+    );
+}
+
+/**
+ * One lineup block (Alignement, Banc or Prospects). Renders an inline
+ * skater header, the forwards, an optional separator, the defensemen,
+ * another optional separator, then a goalie header and the goalies.
+ *
+ * Separators are only rendered when showSeparators is true (Alignement
+ * and Banc). Prospects intentionally have none.
+ */
+function LineupTable({
+    forwards,
+    defensemen,
+    goalies,
+    showSeparators,
+}: {
+    forwards: RosterEntry[];
+    defensemen: RosterEntry[];
+    goalies: RosterEntry[];
+    showSeparators: boolean;
+}) {
+    const hasSkaters = forwards.length > 0 || defensemen.length > 0;
+    const hasGoalies = goalies.length > 0;
+
+    if (!hasSkaters && !hasGoalies) {
+        return null;
+    }
+
+    return (
+        <div className='w-full'>
+            {hasSkaters && <LineupHeader isGoalie={false} />}
+
+            {forwards.map((entry, i) => {
+                const isLast = i === forwards.length - 1;
+                const needsLine =
+                    isLast && (defensemen.length > 0 || hasGoalies);
+
+                return (
+                    <LineupRow
+                        key={entry.id}
+                        entry={entry}
+                        isLastOfSection={showSeparators && needsLine}
+                    />
+                );
+            })}
+
+            {defensemen.map((entry, i) => {
+                const isLast = i === defensemen.length - 1;
+                const needsLine = isLast && hasGoalies;
+
+                return (
+                    <LineupRow
+                        key={entry.id}
+                        entry={entry}
+                        isLastOfSection={showSeparators && needsLine}
+                    />
+                );
+            })}
+
+            {hasGoalies && (
+                <>
+                    <LineupHeader isGoalie={true} />
+                    {goalies.map((entry) => (
+                        <LineupRow
+                            key={entry.id}
+                            entry={entry}
+                            isLastOfSection={false}
+                        />
+                    ))}
+                </>
+            )}
+        </div>
+    );
+}
+
+// =====================================================================
+// The page
+// =====================================================================
+
 export default function MonEquipePage() {
     const { user, loading: authLoading } = useAuth();
 
@@ -44,8 +376,8 @@ export default function MonEquipePage() {
     const [isTeamPickerOpen, setIsTeamPickerOpen] = useState(false);
     const teamPickerRef = useRef<HTMLDivElement>(null);
 
-    const [activeView, setActiveView] = useState<'contracts' | 'cap'>(
-        'contracts',
+    const [activeView, setActiveView] = useState<'lineup' | 'cap'>(
+        'lineup',
     );
 
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
@@ -69,28 +401,32 @@ export default function MonEquipePage() {
             const selected = teams.find(
                 (t) => String(t.id) === teamIdParam,
             );
-            return selected?.name ?? 'Mon équipe';
+            return selected?.name ?? 'Mon equipe';
         }
-        return 'Mon équipe';
+        return 'Mon equipe';
     })();
 
-    const fontAura = useAura('rosterSectionTitle');
+    // Neon-sign aura for the team-picker label. Driven by the
+    // 'teamPickerLabel' channel in auraConfig.ts. Four layers, in
+    // order: tight white core, light cyan inner glow, mid blue glow,
+    // wide soft blue halo.
+    const neonAura = useAura('teamPickerLabel');
 
-    const fontAuraRest = [
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 2).toFixed(2)}px rgba(0, 168, 255, 0.5)`,
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 3).toFixed(2)}px rgba(0, 168, 255, 0.25)`,
+    const neonRest = [
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px rgba(255, 255, 255, 0.9)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px rgba(176, 229, 255, 0.85)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.4)`,
     ].join(', ');
 
-    const fontAuraPeak = [
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 2).toFixed(2)}px rgba(0, 168, 255, 0.65)`,
-        `0 0 ${auraRangeFor(fontAura, 'rosterSectionTitle', 3).toFixed(2)}px rgba(0, 168, 255, 0.4)`,
+    const neonPeak = [
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px rgba(255, 255, 255, 1)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px rgba(200, 240, 255, 1)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px rgba(0, 168, 255, 0.95)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
     ].join(', ');
 
-    const fontAuraOn = !isAuraOff(fontAura);
+    const neonAuraOn = !isAuraOff(neonAura);
 
     useEffect(() => {
         let cancelled = false;
@@ -220,11 +556,11 @@ export default function MonEquipePage() {
         return (
             <section className='space-y-4'>
                 <h2 className='text-center text-2xl font-semibold text-foreground'>
-                    Mon équipe
+                    Mon equipe
                 </h2>
                 <p className='text-center text-muted-foreground'>
-                    Aucune équipe ne vous a encore été assignée. Le
-                    commissaire doit vous assigner une équipe avant que
+                    Aucune equipe ne vous a encore été assignée. Le
+                    commissaire doit vous assigner une equipe avant que
                     vous puissiez la voir.
                 </p>
             </section>
@@ -238,17 +574,72 @@ export default function MonEquipePage() {
     if (error) return <p className='text-destructive'>{error}</p>;
     if (!roster) return null;
 
-    const forwards = roster.entries.filter(
-        (entry) => isActive(entry) && entry.position !== 'D' && entry.position !== 'G',
+    // Main/bench group membership + sort. Forwards and defensemen are
+    // sorted by FP descending; goalies are sorted by FP descending too
+    // (there is only one, but the code stays generic).
+    const activeEntries = roster.entries.filter(isActive);
+    const benchEntries = roster.entries.filter(
+        (entry) => entry.rosterStatus === 'Bench',
     );
-    const defensemen = roster.entries.filter(
-        (entry) => isActive(entry) && entry.position === 'D',
+    const prospectEntries = roster.entries.filter(
+        (entry) => entry.rosterStatus === 'Prospect',
     );
-    const goalies = roster.entries.filter(
-        (entry) => isActive(entry) && entry.position === 'G',
+
+    const mainForwards = sortByFantasyPoints(
+        activeEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'F',
+        ),
     );
-    const bench = roster.entries.filter((entry) => entry.rosterStatus === 'Bench');
-    const prospects = roster.entries.filter((entry) => entry.rosterStatus === 'Prospect');
+    const mainDefensemen = sortByFantasyPoints(
+        activeEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'D',
+        ),
+    );
+    const mainGoalies = sortByFantasyPoints(
+        activeEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'G',
+        ),
+    );
+
+    const benchForwards = sortByFantasyPoints(
+        benchEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'F',
+        ),
+    );
+    const benchDefensemen = sortByFantasyPoints(
+        benchEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'D',
+        ),
+    );
+    const benchGoalies = sortByFantasyPoints(
+        benchEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'G',
+        ),
+    );
+
+    // Prospects: sorted by position only (F, then D, then G). Within a
+    // group, the original order is preserved. No separators.
+    const prospectForwards = prospectEntries.filter(
+        (entry) => toLineupPositionGroup(entry.position) === 'F',
+    );
+    const prospectDefensemen = prospectEntries.filter(
+        (entry) => toLineupPositionGroup(entry.position) === 'D',
+    );
+    const prospectGoalies = prospectEntries.filter(
+        (entry) => toLineupPositionGroup(entry.position) === 'G',
+    );
+
+    const forwards = activeEntries.filter(
+        (entry) => entry.position !== 'D' && entry.position !== 'G',
+    );
+    const defensemen = activeEntries.filter(
+        (entry) => entry.position === 'D',
+    );
+    const goalies = activeEntries.filter(
+        (entry) => entry.position === 'G',
+    );
+    const bench = benchEntries;
+    const prospects = prospectEntries;
 
     const maxSignedPlayers =
         roster.leagueMaximumRosterSize - roster.leagueProspectCount;
@@ -285,7 +676,7 @@ export default function MonEquipePage() {
                             type='button'
                             aria-haspopup='listbox'
                             aria-expanded={isTeamPickerOpen}
-                            aria-label='Choisir une équipe'
+                            aria-label='Choisir une equipe'
                             onClick={() => setIsTeamPickerOpen((v) => !v)}
                             className='relative mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
                         >
@@ -296,13 +687,15 @@ export default function MonEquipePage() {
                                 the label off-center. */}
                             <span className='relative inline-block'>
                                 <span
-                                    className={`text-lg font-bold leading-none text-foreground ${fontAuraOn ? auraPulseClass('text') : ''
+                                    className={`text-2xl leading-none ${neonAuraOn ? auraPulseClass('text') : ''
                                         }`}
-                                    style={
-                                        fontAuraOn
-                                            ? auraPulseStyle(fontAuraRest, fontAuraPeak)
-                                            : undefined
-                                    }
+                                    style={{
+                                        fontFamily: "'Coors Script', cursive",
+                                        color: '#B0E0FF',
+                                        ...(neonAuraOn
+                                            ? auraPulseStyle(neonRest, neonPeak)
+                                            : {}),
+                                    }}
                                 >
                                     {selectedTeamLabel}
                                 </span>
@@ -339,11 +732,11 @@ export default function MonEquipePage() {
                                                 setIsTeamPickerOpen(false);
                                             }}
                                             className={`w-full cursor-pointer border-b border-[#00E5FF]/15 px-4 py-2.5 text-center text-lg font-semibold transition-colors ${teamIdParam == null
-                                                    ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
-                                                    : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
+                                                ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
+                                                : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
                                                 }`}
                                         >
-                                            Mon équipe
+                                            Mon equipe
                                         </button>
                                     </li>
                                 )}
@@ -363,8 +756,8 @@ export default function MonEquipePage() {
                                                     setIsTeamPickerOpen(false);
                                                 }}
                                                 className={`w-full cursor-pointer px-4 py-2.5 text-center text-lg font-semibold transition-colors ${isSelected
-                                                        ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
-                                                        : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
+                                                    ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
+                                                    : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
                                                     }`}
                                             >
                                                 {team.name}
@@ -381,21 +774,21 @@ export default function MonEquipePage() {
                     <div className='flex w-full items-center rounded-full border border-[#00E5FF] bg-[#080D1A] p-0.5'>
                         <button
                             type='button'
-                            onClick={() => setActiveView('contracts')}
-                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-colors ${activeView === 'contracts'
-                                    ? 'bg-[#00E5FF] text-[#080D1A]'
-                                    : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
+                            onClick={() => setActiveView('lineup')}
+                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-colors ${activeView === 'lineup'
+                                ? 'bg-[#00E5FF] text-[#080D1A]'
+                                : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
                                 }`}
                         >
-                            Contrats
+                            Lineup
                         </button>
 
                         <button
                             type='button'
                             onClick={() => setActiveView('cap')}
                             className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-colors ${activeView === 'cap'
-                                    ? 'bg-[#00E5FF] text-[#080D1A]'
-                                    : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
+                                ? 'bg-[#00E5FF] text-[#080D1A]'
+                                : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
                                 }`}
                         >
                             Masse salariale
@@ -404,9 +797,34 @@ export default function MonEquipePage() {
                 </div>
             </div>
 
-            {/* "Contrats" tab is intentionally empty below the
-                segmented button. All roster content lives under the
-                "Masse salariale" tab instead. */}
+            {activeView === 'lineup' && (
+                <>
+                    <LineupTable
+                        forwards={mainForwards}
+                        defensemen={mainDefensemen}
+                        goalies={mainGoalies}
+                        showSeparators
+                    />
+
+                    <RosterSection title='Banc'>
+                        <LineupTable
+                            forwards={benchForwards}
+                            defensemen={benchDefensemen}
+                            goalies={benchGoalies}
+                            showSeparators
+                        />
+                    </RosterSection>
+
+                    <RosterSection title='Prospects'>
+                        <LineupTable
+                            forwards={prospectForwards}
+                            defensemen={prospectDefensemen}
+                            goalies={prospectGoalies}
+                            showSeparators={false}
+                        />
+                    </RosterSection>
+                </>
+            )}
 
             {activeView === 'cap' && (
                 <>
@@ -426,8 +844,8 @@ export default function MonEquipePage() {
 
                                                 <div
                                                     className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} ${!isAuraOff(trackAura)
-                                                            ? auraPulseClass('box')
-                                                            : ''
+                                                        ? auraPulseClass('box')
+                                                        : ''
                                                         }`}
                                                     style={
                                                         !isAuraOff(trackAura)

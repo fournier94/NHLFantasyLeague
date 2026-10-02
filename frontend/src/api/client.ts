@@ -266,6 +266,12 @@ export interface SeasonStatLine {
     wins: number;
     losses: number;
     overtimeLosses: number;
+    /** Hat tricks recorded this season (skaters). */
+    hatTricks: number;
+    /** Shutouts recorded this season (goalies). */
+    shutouts: number;
+    /** Total fantasy points scored this season. */
+    fantasyPoints: number;
 }
 
 /** One contract line on a player card: salary + seasons left. */

@@ -35,6 +35,7 @@ export type AuraChannel =
     | 'mobileMenuIcon'
     | 'leagueLogo'
     | 'rosterSectionTitle'
+    | 'teamPickerLabel'
     | 'playerCardBackgroundColor'
     | 'playerCardBackground'
     | 'playerCardName'
@@ -60,6 +61,7 @@ export const AURA_DEFAULTS: Record<AuraChannel, number> = {
     mobileMenuIcon: 7,
     leagueLogo: 6,
     rosterSectionTitle: 5,
+    teamPickerLabel: 6,
     playerCardBackgroundColor: 2,
     playerCardBackground: 0,    // 6
     playerCardName: 5,          // 3
@@ -109,6 +111,7 @@ export const AURA_CHANNELS: {
         { key: 'leagueLogo', label: 'Logo de la ligue', group: 'Général' },
 
         { key: 'rosterSectionTitle', label: 'Titres de section roster', group: 'Mon équipe' },
+        { key: 'teamPickerLabel', label: 'Étiquette équipe (Mon équipe)', group: 'Mon équipe' },
         { key: 'playerCardBackgroundColor', label: 'Carte · couleur de fond', group: 'Mon équipe' },
         { key: 'playerCardBackground', label: 'Carte · fond (auras équipe)', group: 'Mon équipe' },
         { key: 'playerCardName', label: 'Carte · nom + position', group: 'Mon équipe' },
@@ -167,6 +170,23 @@ export const AURA_RANGES: Record<AuraChannel, AuraChannelRanges> = {
             { min: 3, max: 6 },
             { min: 6, max: 12 },
             { min: 10, max: 22 },
+        ],
+    },
+
+    // Neon-sign label for the team picker on the Mon équipe page.
+    // Four layers, in order:
+    //   0 = tight white core
+    //   1 = light cyan inner glow
+    //   2 = mid blue glow
+    //   3 = wide soft blue halo
+    // Tuned to look like a classic neon sign; the pulse between rest
+    // and peak is subtle (alpha-only) so it breathes without flickering.
+    teamPickerLabel: {
+        layers: [
+            { min: 0.5, max: 1.2 },
+            { min: 2, max: 5 },
+            { min: 5, max: 12 },
+            { min: 8, max: 22 },
         ],
     },
 

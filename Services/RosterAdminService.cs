@@ -864,6 +864,47 @@ namespace NhlFantasyLeague.api.Services
                      .ToListAsync();
             }
 
+            // Load PlayerSeasonStat rows for the same three card
+            // seasons so the lineup section can surface fantasy
+            // points, hat tricks and shutouts, which are not on
+            // PlayerCareerStat.
+            var cardSeasonIds = new Dictionary<int, int>();
+
+            if (twoSeasonsAgoSeason != null)
+                cardSeasonIds[TwoSeasonsAgoNhlCode] = twoSeasonsAgoSeason.Id;
+
+            if (previousSeason != null)
+                cardSeasonIds[PreviousSeasonNhlCode] = previousSeason.Id;
+
+            if (currentSeason != null)
+                cardSeasonIds[CurrentSeasonNhlCode] = currentSeason.Id;
+
+            var seasonStatByPlayerAndSeasonCode =
+                new Dictionary<(int PlayerId, int SeasonCode), PlayerSeasonStat>();
+
+            if (playerIds.Count > 0 && cardSeasonIds.Count > 0)
+            {
+                var cardSeasonIdList = cardSeasonIds.Values.ToList();
+
+                var seasonStatRows = await _dbContext.PlayerSeasonStats
+                    .AsNoTracking()
+                    .Where(s =>
+                        playerIds.Contains(s.PlayerId) &&
+                        cardSeasonIdList.Contains(s.SeasonId))
+                    .ToListAsync();
+
+                var seasonIdToCode = cardSeasonIds
+                    .ToDictionary(kv => kv.Value, kv => kv.Key);
+
+                foreach (var row in seasonStatRows)
+                {
+                    if (seasonIdToCode.TryGetValue(row.SeasonId, out var code))
+                    {
+                        seasonStatByPlayerAndSeasonCode[(row.PlayerId, code)] = row;
+                    }
+                }
+            }
+
             var leagueLines = careerRows
                 .GroupBy(s => new
                 {
@@ -1034,13 +1075,19 @@ namespace NhlFantasyLeague.api.Services
                             e,
                             ToSeasonStatLineDto(
                                 twoSeasonsAgoSeason,
-                                twoSeasonsAgoStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
+                                twoSeasonsAgoStatsByPlayerId.GetValueOrDefault(e.PlayerId),
+                                seasonStatByPlayerAndSeasonCode.GetValueOrDefault(
+                                    (e.PlayerId, TwoSeasonsAgoNhlCode))),
                             ToSeasonStatLineDto(
                                 previousSeason,
-                                lastStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
+                                lastStatsByPlayerId.GetValueOrDefault(e.PlayerId),
+                                seasonStatByPlayerAndSeasonCode.GetValueOrDefault(
+                                    (e.PlayerId, PreviousSeasonNhlCode))),
                             ToSeasonStatLineDto(
                                 currentSeason,
-                                currentStatsByPlayerId.GetValueOrDefault(e.PlayerId)),
+                                currentStatsByPlayerId.GetValueOrDefault(e.PlayerId),
+                                seasonStatByPlayerAndSeasonCode.GetValueOrDefault(
+                                    (e.PlayerId, CurrentSeasonNhlCode))),
                             currentContract,
                             secondContract);
                     })
@@ -1240,8 +1287,9 @@ namespace NhlFantasyLeague.api.Services
         }
 
         private static SeasonStatLineDto? ToSeasonStatLineDto(
-            Season? season,
-            CardStatLine? line)
+     Season? season,
+     CardStatLine? line,
+     PlayerSeasonStat? seasonStat = null)
         {
             if (season == null || line == null)
             {
@@ -1263,7 +1311,13 @@ namespace NhlFantasyLeague.api.Services
                 Points = line.Points,
                 Wins = line.Wins,
                 Losses = line.Losses,
-                OvertimeLosses = line.OvertimeLosses
+                OvertimeLosses = line.OvertimeLosses,
+
+                // From PlayerSeasonStat: the lineup section displays
+                // these. Zero when the row is missing.
+                HatTricks = seasonStat?.HatTricks ?? 0,
+                Shutouts = seasonStat?.Shutouts ?? 0,
+                FantasyPoints = seasonStat?.FantasyPoints ?? 0
             };
         }
 
