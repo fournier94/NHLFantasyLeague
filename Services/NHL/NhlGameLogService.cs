@@ -518,8 +518,8 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         /// <summary>
-        /// Recomputes FantasyTeamSeason.TotalFantasyPoints from scratch
-        /// for one season, then returns a per-team summary.
+        /// Recomputes every FantasyTeamSeason aggregate from scratch for
+        /// one season, then returns a per-team summary.
         ///
         /// For each PlayerGameLog in the season:
         ///   1. Look up the player's RosterStatusHistory row that was
@@ -527,15 +527,18 @@ namespace NhlFantasyLeague.api.Services.NHL
         ///      (EffectiveAt &lt;= GameDate 00:00 UTC, most recent wins).
         ///   2. If that row's RosterStatus is Active, add the game's
         ///      FantasyPoints to the FantasyTeamSeason row of the team
-        ///      on the history row.
-        ///   3. Otherwise, drop the points.
+        ///      on the history row, and route the game's individual
+        ///      stats to either the skater or the goalie segment
+        ///      depending on the player's position.
+        ///   3. Otherwise, drop the game entirely.
         ///
         /// Because history is append-only and includes a row for every
         /// trade (against the new team), the "which team and status at
         /// time T" question is answered by a single ordered lookup with
         /// no special cases.
         ///
-        /// Idempotent: every run resets each team's total to 0 first.
+        /// Idempotent: every run resets each team's aggregates to 0
+        /// first.
         /// </summary>
         public async Task<RecomputeTeamTotalsResult> RecomputeTeamSeasonTotalsAsync(
             int seasonCode,
@@ -560,8 +563,8 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             // 1. Load every FantasyTeamSeason for the season and zero
-            //    the totals. If any of them are missing, we still want
-            //    to detect that and report it.
+            //    every aggregate. Idempotent: the recompute always
+            //    starts from zero.
             var teamSeasons = await _dbContext.FantasyTeamSeasons
                 .Where(fts => fts.SeasonId == season.Id)
                 .ToListAsync(ct);
@@ -586,6 +589,19 @@ namespace NhlFantasyLeague.api.Services.NHL
             {
                 fts.TotalFantasyPoints = 0;
                 fts.TotalFantasyPointsComputedAt = now;
+
+                fts.SkaterGamesPlayed = 0;
+                fts.SkaterGoals = 0;
+                fts.SkaterAssists = 0;
+                fts.SkaterPoints = 0;
+                fts.SkaterHatTricks = 0;
+
+                fts.GoalieGamesPlayed = 0;
+                fts.GoalieWins = 0;
+                fts.GoalieLosses = 0;
+                fts.GoalieOvertimeLosses = 0;
+                fts.GoalieShutouts = 0;
+                fts.GoaliePoints = 0;
             }
 
             // 2. Load the whole season's history, grouped by player and
@@ -604,20 +620,41 @@ namespace NhlFantasyLeague.api.Services.NHL
                         .ThenBy(h => h.Id)
                         .ToList());
 
-            // 3. Load every game log row in the season. At ~350 players
-            //    * 82 games this is fine as a materialized list; if it
-            //    ever becomes a problem, switch to a streaming query.
+            // 3. Load every game log row in the season, plus the fields
+            //    we need to route stats to the skater / goalie segment.
             var games = await _dbContext.PlayerGameLogs
                 .Where(g => g.SeasonId == season.Id)
                 .Select(g => new
                 {
                     g.PlayerId,
                     g.GameDate,
-                    g.FantasyPoints
+                    g.FantasyPoints,
+                    g.Goals,
+                    g.Assists,
+                    g.Points,
+                    g.HatTrick,
+                    g.GoalieWin,
+                    g.GoalieOvertimeLoss,
+                    g.Shutout
                 })
                 .ToListAsync(ct);
 
             result.TotalGamesScanned = games.Count;
+
+            // Map PlayerId -> Position, one query. Needed to decide
+            // skater vs goalie segment for each game log row.
+            var playerIds = games
+                .Select(g => g.PlayerId)
+                .Distinct()
+                .ToList();
+
+            var positionsByPlayerId = await _dbContext.Players
+                .Where(p => playerIds.Contains(p.Id))
+                .Select(p => new { p.Id, p.Position })
+                .ToDictionaryAsync(
+                    p => p.Id,
+                    p => p.Position,
+                    ct);
 
             var playersWithoutHistory = new HashSet<int>();
 
@@ -646,7 +683,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 RosterStatusHistory? effective = null;
 
-                // Last row with EffectiveAt <= game day.
                 for (var i = 0; i < playerHistory.Count; i++)
                 {
                     if (playerHistory[i].EffectiveAt <= gameDayUtc)
@@ -663,7 +699,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 {
                     // Player had no status before this game (e.g. a
                     // game played before the season-start backfill).
-                    // Skip: no team owned him in a countable state.
                     continue;
                 }
 
@@ -684,6 +719,44 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 target.TotalFantasyPoints += game.FantasyPoints;
                 result.GamesCredited++;
+
+                // Route the game's individual stats to the skater or
+                // goalie segment. Unknown positions count as skaters on
+                // purpose, so no row is ever silently dropped.
+                positionsByPlayerId.TryGetValue(
+                    game.PlayerId, out var position);
+
+                var group = PositionGroupHelper.Classify(position);
+
+                if (group == PositionGroup.Goalie)
+                {
+                    target.GoalieGamesPlayed++;
+                    target.GoalieWins += game.GoalieWin ? 1 : 0;
+                    target.GoalieOvertimeLosses +=
+                        game.GoalieOvertimeLoss ? 1 : 0;
+                    target.GoalieShutouts += game.Shutout ? 1 : 0;
+
+                    // Regulation loss: the goalie played (a goalie game
+                    // log row only exists if he appeared), did not get
+                    // the win, and did not get the OT loss.
+                    var isLoss =
+                        !game.GoalieWin &&
+                        !game.GoalieOvertimeLoss;
+
+                    target.GoalieLosses += isLoss ? 1 : 0;
+
+                    // Goalie G + A. For goalies, PlayerGameLog.Points is
+                    // stored as Goals + Assists (see SavePlayerGameLogsAsync).
+                    target.GoaliePoints += game.Points;
+                }
+                else
+                {
+                    target.SkaterGamesPlayed++;
+                    target.SkaterGoals += game.Goals;
+                    target.SkaterAssists += game.Assists;
+                    target.SkaterPoints += game.Points;
+                    target.SkaterHatTricks += game.HatTrick ? 1 : 0;
+                }
             }
 
             result.PlayersWithoutHistory = playersWithoutHistory.Count;

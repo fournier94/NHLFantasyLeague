@@ -142,9 +142,43 @@ export interface TeamRoster {
     entries: RosterEntry[];
 }
 
+/** One row of the season standings (GET /api/Standings). */
+export interface StandingsRow {
+    /** 1-based rank, sorted by totalFantasyPoints descending. */
+    rank: number;
+    fantasyTeamId: number;
+    fantasyTeamName: string;
+
+    // Skater segment
+    skaterGamesPlayed: number;
+    skaterGoals: number;
+    skaterAssists: number;
+    skaterPoints: number;
+    skaterHatTricks: number;
+
+    // Goalie segment
+    goalieGamesPlayed: number;
+    goalieWins: number;
+    goalieLosses: number;
+    goalieOvertimeLosses: number;
+    goalieShutouts: number;
+    goaliePoints: number;
+
+    // Overall
+    totalFantasyPoints: number;
+    /** ISO 8601 UTC, or null when never computed. */
+    totalFantasyPointsComputedAt: string | null;
+}
+
 /** Fetches the full roster (with totals and stat lines) of one fantasy team. */
 export const getTeamRoster = (fantasyTeamId: number) =>
     apiGet<TeamRoster>(`/Roster/team/${fantasyTeamId}`);
+
+/** Fetches the season standings, sorted by FP descending. */
+export function getStandings(seasonId?: number): Promise<StandingsRow[]> {
+    const query = seasonId != null ? `?seasonId=${seasonId}` : '';
+    return apiGet<StandingsRow[]>(`/Standings${query}`);
+}
 
 /** One player row returned by the roster search (GET /api/Roster/search). */
 export interface PlayerSearchResult {

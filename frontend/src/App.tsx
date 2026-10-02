@@ -2,6 +2,7 @@
 import { Layout } from '@/components/layout/Layout';
 import { AuraProvider } from '@/lib/auraContext';
 import MonEquipePage from '@/pages/MonEquipePage';
+import ClassementPage from '@/pages/ClassementPage';
 import LiguePage from '@/pages/LiguePage';
 import JoueursPage from '@/pages/JoueursPage';
 import PlayerPage from '@/pages/PlayerPage';
@@ -17,6 +18,7 @@ export default function App() {
                 <Route element={<Layout />}>
                     <Route path='/' element={<Navigate to='/mon-equipe' replace />} />
                     <Route path='/mon-equipe' element={<MonEquipePage />} />
+                    <Route path='/classement' element={<ClassementPage />} />
                     <Route path='/ligue' element={<LiguePage />} />
                     <Route path='/joueurs' element={<JoueursPage />} />
                     <Route path='/joueurs/:nhlPlayerId' element={<PlayerPage />} />
