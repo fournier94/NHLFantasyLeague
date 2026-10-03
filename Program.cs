@@ -14,12 +14,8 @@ var builder = WebApplication.CreateBuilder(args);
 // requires the app to bind to 0.0.0.0 on that port. Configuring
 // Kestrel explicitly here avoids any ambiguity with environment
 // variables like ASPNETCORE_URLS or ASPNETCORE_HTTP_PORTS.
-var renderPort = Environment.GetEnvironmentVariable("PORT");
-var listenPort = int.TryParse(renderPort, out var p) ? p : 10000;
-builder.WebHost.ConfigureKestrel(options =>
-{
-    options.ListenAnyIP(listenPort);
-});
+var renderPort = Environment.GetEnvironmentVariable("PORT") ?? "10000";
+builder.WebHost.UseUrls($"http://0.0.0.0:{renderPort}");
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(
@@ -137,33 +133,73 @@ builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
     client.Timeout = TimeSpan.FromSeconds(90);
 });
 
-// Bootstraps the Commissioner role from appsettings on startup.
-builder.Services.AddHostedService<CommissionerBootstrapService>();
+// ---------------------------------------------------------------------
+// NOTE: CommissionerBootstrapService is intentionally NOT registered
+// as a hosted service anymore. Its work (EnsureCommissionersAsync) is
+// now run from the background initialization task below, AFTER the
+// database migrations have completed. Running it as a hosted service
+// would race with migrations and fail on a fresh database.
+// ---------------------------------------------------------------------
 
 var app = builder.Build();
 
-// Apply any pending EF Core migrations to the database at startup.
-// On the first deploy this creates every table. On subsequent
-// deploys it applies only the new migrations. Safe to run multiple
-// times (EF tracks applied migrations in __EFMigrationsHistory).
-using (var scope = app.Services.CreateScope())
+// ---------------------------------------------------------------------
+// BACKGROUND INITIALIZATION
+//
+// The HTTP server starts listening immediately when app.Run() is
+// called below. Migrations and the commissioner bootstrap then run in
+// parallel on a background task. This is critical for Render: their
+// edge router opens a TCP health check on the assigned port and only
+// routes real traffic once the port is open. Running migrations
+// synchronously BEFORE app.Run() would delay the port from opening
+// for 10-30+ seconds, which is exactly what caused the
+// X-Render-Routing: no-server responses.
+//
+// The trade-off is a small window (a few seconds) at cold start where
+// the port is open but the database tables may not yet exist. For a
+// 12-person fantasy league this is acceptable; Render retries failed
+// requests, and the first real user request usually arrives well after
+// migrations complete.
+// ---------------------------------------------------------------------
+
+_ = Task.Run(async () =>
 {
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
-}
+    try
+    {
+        using var scope = app.Services.CreateScope();
+
+        // 1. Apply pending EF Core migrations.
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await db.Database.MigrateAsync();
+
+        Console.WriteLine("[BOOTSTRAP] Database migrations applied.");
+
+        // 2. Ensure the Commissioner role exists and is assigned to
+        //    every username listed in appsettings
+        //    (Auth:CommissionerUsernames). Idempotent.
+        var authService = scope.ServiceProvider.GetRequiredService<AuthService>();
+        await authService.EnsureCommissionersAsync();
+
+        Console.WriteLine("[BOOTSTRAP] Commissioner bootstrap completed.");
+    }
+    catch (Exception ex)
+    {
+        // Log and swallow: the app is already running and serving
+        // requests. We do not want a migration failure to crash the
+        // container and trigger a redeploy loop.
+        Console.WriteLine($"[BOOTSTRAP] FAILED: {ex.GetType().Name}: {ex.Message}");
+        Console.WriteLine(ex.StackTrace);
+    }
+});
+
+// ---------------------------------------------------------------------
+// HTTP PIPELINE
+// ---------------------------------------------------------------------
 
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
-}
-
-// Skip HTTPS redirection in production: Render terminates SSL at
-// its edge and forwards plain HTTP to the container, so the app
-// can't determine the redirect port and logs a warning every
-// request. Redirecting here would also cause an infinite loop.
-if (app.Environment.IsDevelopment())
-{
     app.UseHttpsRedirection();
 }
 
