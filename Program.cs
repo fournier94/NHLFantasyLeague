@@ -131,13 +131,30 @@ builder.Services.AddHostedService<CommissionerBootstrapService>();
 
 var app = builder.Build();
 
+// Apply any pending EF Core migrations to the database at startup.
+// On the first deploy this creates every table. On subsequent
+// deploys it applies only the new migrations. Safe to run multiple
+// times (EF tracks applied migrations in __EFMigrationsHistory).
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// Skip HTTPS redirection in production: Render terminates SSL at
+// its edge and forwards plain HTTP to the container, so the app
+// can't determine the redirect port and logs a warning every
+// request. Redirecting here would also cause an infinite loop.
+if (app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseAuthentication();
 app.UseAuthorization();
