@@ -18,7 +18,7 @@ import {
     AURA_STRIP_PULSE_REST_SCALE,
     AURA_STRIP_PULSE_PEAK_SCALE,
 } from '@/lib/auraConfig';
-import { getNhlTeamColor } from '@/lib/nhlTeamColors';
+import { getNhlTeamAuraColor } from '@/lib/nhlTeamColors';
 import { getLastNonPlayerLocation } from '@/lib/playerNavigation';
 import ReactCountryFlag from 'react-country-flag';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
@@ -1980,7 +1980,10 @@ export default function PlayerPage() {
         `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 3).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
     ].join(', ');
 
-    const pageTeamLogoColor = getNhlTeamColor(
+    // Use the aura-only color so the logo glow stays visible for
+    // teams with a dark primary (UTA, SEA, TBL, etc.). The base
+    // team color is intentionally not used here.
+    const pageTeamLogoColor = getNhlTeamAuraColor(
         player?.nhlTeamAbbreviation ?? undefined,
     );
 

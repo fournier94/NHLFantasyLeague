@@ -6,7 +6,11 @@ import type {
 } from '@/api/client';
 import { cn } from '@/lib/utils';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
-import { getNhlTeamColor, desaturateHex } from '@/lib/nhlTeamColors';
+import {
+    getNhlTeamColor,
+    getNhlTeamAuraColor,
+    desaturateHex,
+} from '@/lib/nhlTeamColors';
 import { useAura } from '@/lib/auraContext';
 import {
     auraAlphaHex,
@@ -61,9 +65,6 @@ function shortSeasonLabel(label: string): string {
     //   "2026-2027"  -> "26-27"
     //   "26-27"      -> "26-27" (already short)
     //   anything else -> returned unchanged
-    //
-    // (?:20)? makes the entire "20" optional, unlike 20? which
-    // only makes the final "0" optional.
     return label.replace(/^20(\d{2})-(?:20)?(\d{2})$/, '$1-$2');
 }
 
@@ -175,14 +176,21 @@ export function PlayerCard({
 
     const hasTwoContracts = Boolean(secondContractLabel);
 
+    // Two colors per card:
+    //   - playerTeamColor    -> base team color, drives the flat
+    //                           background tint (bgTintColor) only.
+    //   - playerTeamAuraColor -> aura-only color, drives every glow
+    //                           (background radial gradients, name,
+    //                           position, logo, picture, text).
     const playerTeamColor = getNhlTeamColor(
         entry.nhlTeamAbbreviation,
     );
 
+    const playerTeamAuraColor = getNhlTeamAuraColor(
+        entry.nhlTeamAbbreviation,
+    );
+
     // Flat desaturated team color for the card background.
-    // - bgColorAura = 0  -> no tint, card falls back to bg-card.
-    // - bgColorAura 1-10 -> saturation scales from 0.2 to 1.0,
-    //                       and the tint fades in from 0 to 1 alpha.
     const bgTintSaturation = auraRangeFor(
         bgColorAura,
         'playerCardBackgroundColor',
@@ -201,7 +209,7 @@ export function PlayerCard({
             }
             : undefined;
 
-    // --- Background auras (team color) -----------------------------------
+    // --- Background auras (team aura color) ------------------------------
     const bgInnerAlpha = auraAlphaHex(bgAura, 0x14, 0x48);
     const bgMidAlpha = auraAlphaHex(bgAura, 0x08, 0x28);
     const bgCenterInnerAlpha = auraAlphaHex(bgAura, 0x0c, 0x30);
@@ -215,100 +223,100 @@ export function PlayerCard({
             background: `
                 radial-gradient(
                     circle at 100% 0%,
-                    ${playerTeamColor}${bgInnerAlpha} 0%,
-                    ${playerTeamColor}${bgMidAlpha} 10%,
+                    ${playerTeamAuraColor}${bgInnerAlpha} 0%,
+                    ${playerTeamAuraColor}${bgMidAlpha} 10%,
                     transparent ${bgCornerSpread}%
                 ),
                 radial-gradient(
                     circle at 100% 100%,
-                    ${playerTeamColor}${bgInnerAlpha} 0%,
-                    ${playerTeamColor}${bgMidAlpha} 10%,
+                    ${playerTeamAuraColor}${bgInnerAlpha} 0%,
+                    ${playerTeamAuraColor}${bgMidAlpha} 10%,
                     transparent ${bgCornerSpread}%
                 ),
                 radial-gradient(
                     ellipse at 50% 0%,
-                    ${playerTeamColor}${bgCenterInnerAlpha} 0%,
-                    ${playerTeamColor}${bgCenterMidAlpha} 12%,
+                    ${playerTeamAuraColor}${bgCenterInnerAlpha} 0%,
+                    ${playerTeamAuraColor}${bgCenterMidAlpha} 12%,
                     transparent ${bgCenterSpread}%
                 ),
                 radial-gradient(
                     ellipse at 50% 100%,
-                    ${playerTeamColor}${bgCenterInnerAlpha} 0%,
-                    ${playerTeamColor}${bgCenterMidAlpha} 12%,
+                    ${playerTeamAuraColor}${bgCenterInnerAlpha} 0%,
+                    ${playerTeamAuraColor}${bgCenterMidAlpha} 12%,
                     transparent ${bgCenterSpread}%
                 )
             `,
         }
         : undefined;
 
-    // --- Name aura (team color) -----------------------------------------
+    // --- Name aura (team aura color) -------------------------------------
     const nameRest = [
-        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 0).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x66, 0xCC)}`,
-        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 1).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x33, 0xAA)}`,
-        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 2).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x1A, 0x77)}`,
+        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 0).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x66, 0xCC)}`,
+        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 1).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x33, 0xAA)}`,
+        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 2).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x1A, 0x77)}`,
     ].join(', ');
 
     const namePeak = [
-        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 0).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x88, 0xFF)}`,
-        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 1).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x55, 0xDD)}`,
-        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 2).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x33, 0xCC)}`,
+        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 0).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x88, 0xFF)}`,
+        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 1).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x55, 0xDD)}`,
+        `0 0 ${auraRangeFor(nameAura, 'playerCardName', 2).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x33, 0xCC)}`,
     ].join(', ');
 
-    // Position: same channel, team color, sizes scaled to 40%.
+    // Position: same channel, team aura color, sizes scaled to 40%.
     const positionRest = [
-        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 0) * 0.4).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x66, 0xCC)}`,
-        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 1) * 0.4).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x33, 0xAA)}`,
-        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 2) * 0.4).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x1A, 0x77)}`,
+        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 0) * 0.4).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x66, 0xCC)}`,
+        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 1) * 0.4).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x33, 0xAA)}`,
+        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 2) * 0.4).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x1A, 0x77)}`,
     ].join(', ');
 
     const positionPeak = [
-        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 0) * 0.4).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x88, 0xFF)}`,
-        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 1) * 0.4).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x55, 0xDD)}`,
-        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 2) * 0.4).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(nameAura, 0x33, 0xCC)}`,
+        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 0) * 0.4).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x88, 0xFF)}`,
+        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 1) * 0.4).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x55, 0xDD)}`,
+        `0 0 ${(auraRangeFor(nameAura, 'playerCardName', 2) * 0.4).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(nameAura, 0x33, 0xCC)}`,
     ].join(', ');
 
-    // --- Logo aura (team color, filter drop-shadow) -----------------------
+    // --- Logo aura (team aura color, filter drop-shadow) -----------------
     const logoRest = [
-        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 0).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(logoAura, 0x88, 0xFF)})`,
-        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 1).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(logoAura, 0x44, 0xEE)})`,
-        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 2).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(logoAura, 0x22, 0xBB)})`,
+        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 0).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(logoAura, 0x88, 0xFF)})`,
+        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 1).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(logoAura, 0x44, 0xEE)})`,
+        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 2).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(logoAura, 0x22, 0xBB)})`,
     ].join(' ');
 
     const logoPeak = [
-        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 0).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(logoAura, 0xAA, 0xFF)})`,
-        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 1).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(logoAura, 0x55, 0xEE)})`,
-        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 2).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(logoAura, 0x33, 0xBB)})`,
+        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 0).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(logoAura, 0xAA, 0xFF)})`,
+        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 1).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(logoAura, 0x55, 0xEE)})`,
+        `drop-shadow(0 0 ${auraRangeFor(logoAura, 'playerCardLogo', 2).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(logoAura, 0x33, 0xBB)})`,
     ].join(' ');
 
-    // --- Picture aura (team color, box-shadow) ----------------------------
+    // --- Picture aura (team aura color, box-shadow) ----------------------
     const pictureRest = [
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 0).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0x88, 0xFF)}`,
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 1).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0x44, 0xDD)}`,
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 2).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0x22, 0xAA)}`,
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 3).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0x00, 0x88)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 0).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0x88, 0xFF)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 1).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0x44, 0xDD)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 2).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0x22, 0xAA)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 3).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0x00, 0x88)}`,
     ].join(', ');
 
     const picturePeak = [
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 0).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0xAA, 0xFF)}`,
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 1).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0x55, 0xEE)}`,
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 2).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0x33, 0xEE)}`,
-        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 3).toFixed(2)}px ${playerTeamColor}${auraAlphaHex(pictureAura, 0x00, 0xBB)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 0).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0xAA, 0xFF)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 1).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0x55, 0xEE)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 2).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0x33, 0xEE)}`,
+        `0 0 ${auraRangeFor(pictureAura, 'playerCardPicture', 3).toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(pictureAura, 0x00, 0xBB)}`,
     ].join(', ');
 
-    // --- Text aura (team color, used for the stats table + contracts) ----
+    // --- Text aura (team aura color, used for the stats table + contracts)
     const textInnerRest = auraRangeFor(textAura, 'playerCardText', 0);
     const textMidRest = auraRangeFor(textAura, 'playerCardText', 1);
     const textInnerPeak = auraRangeFor(textAura, 'playerCardText', 0);
     const textMidPeak = auraRangeFor(textAura, 'playerCardText', 1);
 
     const textRest = [
-        `0 0 ${textInnerRest.toFixed(2)}px ${playerTeamColor}${auraAlphaHex(textAura, 0x66, 0xCC)}`,
-        `0 0 ${textMidRest.toFixed(2)}px ${playerTeamColor}${auraAlphaHex(textAura, 0x33, 0x99)}`,
+        `0 0 ${textInnerRest.toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(textAura, 0x66, 0xCC)}`,
+        `0 0 ${textMidRest.toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(textAura, 0x33, 0x99)}`,
     ].join(', ');
 
     const textPeak = [
-        `0 0 ${textInnerPeak.toFixed(2)}px ${playerTeamColor}${auraAlphaHex(textAura, 0x88, 0xFF)}`,
-        `0 0 ${textMidPeak.toFixed(2)}px ${playerTeamColor}${auraAlphaHex(textAura, 0x55, 0xBB)}`,
+        `0 0 ${textInnerPeak.toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(textAura, 0x88, 0xFF)}`,
+        `0 0 ${textMidPeak.toFixed(2)}px ${playerTeamAuraColor}${auraAlphaHex(textAura, 0x55, 0xBB)}`,
     ].join(', ');
 
     return (
@@ -413,7 +421,7 @@ export function PlayerCard({
 
                         <div className='pl-46 flex flex-1 flex-col'>
                             <div className='flex flex-1 flex-col justify-center'>
-                                <table className='mx-auto w-full max-w-md text-xs tabular-nums'>
+                                <table className='mx-auto w-full max-w-md table-fixed text-xs tabular-nums'>
                                     <thead>
                                         <tr className='text-white'>
                                             <th className='w-1/6 px-1 text-left font-normal' />
@@ -455,7 +463,7 @@ export function PlayerCard({
                                                     </td>
 
                                                     <td
-                                                        className={`px-1 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                        className={`truncate px-1 text-left text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
                                                         style={
                                                             !isAuraOff(textAura)
                                                                 ? auraPulseStyle(textRest, textPeak)
@@ -617,7 +625,7 @@ export function PlayerCard({
                         </div>
 
                         <div className='pt-9'>
-                            <table className='relative top-[-6px] w-full text-xs tabular-nums'>
+                            <table className='relative top-[-6px] w-full table-fixed text-xs tabular-nums'>
                                 <thead>
                                     <tr className='text-white'>
                                         <th className='whitespace-nowrap px-0.5 text-left font-normal' />
@@ -659,7 +667,7 @@ export function PlayerCard({
                                                 </td>
 
                                                 <td
-                                                    className={`px-0.5 text-center text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
+                                                    className={`truncate px-0.5 text-center text-white ${!isAuraOff(textAura) ? auraPulseClass('text') : ''}`}
                                                     style={
                                                         !isAuraOff(textAura)
                                                             ? auraPulseStyle(textRest, textPeak)

@@ -1,5 +1,7 @@
 ﻿/**
- * Primary NHL team colors used for the neon glow around team logos.
+ * Primary NHL team colors used for the neon glow around team logos,
+ * player card backgrounds, row tints, and anywhere else the app
+ * needs to identify a team by color.
  */
 export const NHL_TEAM_COLORS: Record<string, string> = {
     MTL: '#AF1E2D',
@@ -36,11 +38,71 @@ export const NHL_TEAM_COLORS: Record<string, string> = {
     SEA: '#001628',
 };
 
+/**
+ * Aura-only color overrides. Used by `getNhlTeamAuraColor` when the
+ * base team color in NHL_TEAM_COLORS produces an aura that is too
+ * dark / washed out to read on the dark UI, or when the aura should
+ * be a different hue than the team's primary color.
+ *
+ * Strength adjustments are made by blending the hex toward white
+ * (add strength) or black (reduce strength). The glow radius and
+ * alpha are unchanged by these tweaks: a "reduce 20% strength" entry
+ * is a 20% darker color at the same radius and opacity as before.
+ *
+ * Teams not listed here fall back to their NHL_TEAM_COLORS entry.
+ * Changing a value here does NOT change the base team color used
+ * for card backgrounds, row tints, or any other non-aura surface.
+ */
+export const NHL_TEAM_AURA_COLORS: Record<string, string> = {
+    // Brighter aura variants (base color unchanged).
+    TBL: '#4A90E2',
+    MIN: '#2E9E6A',
+    DAL: '#009A63',
+    VAN: '#3A78D0',
+    TOR: '#3A78D0',
+    UTA: '#B4B4B4',
+    SEA: '#3FA9E0',
+    COL: '#BD7990',
+    CBJ: '#3A78C8',
+    EDM: '#D1501A',
+    WPG: '#4A90E2',
+    SJS: '#338A91',   // new: #006D75 @ +20%
+
+    // Full aura-only overrides (base color unchanged).
+    STL: '#E3A312',
+    BUF: '#CC9316',
+    NYI: '#FC4C02',
+    LAK: '#CCCCCC',
+    PIT: '#B07F0E',
+    CHI: '#BA0928',
+    NSH: '#CC9316',
+    NYR: '#1A4CB1',
+    ANA: '#E34402',
+};
+
 export function getNhlTeamColor(
     abbreviation: string | null | undefined,
 ): string {
     return (
         NHL_TEAM_COLORS[abbreviation?.toUpperCase() ?? ''] ??
+        '#00A8FF'
+    );
+}
+
+/**
+ * Returns the color to use for team-tinted auras (glows, text
+ * shadows, drop-shadows, radial gradients). Falls back to the base
+ * team color when no aura override exists, and to the league cyan
+ * when neither is known.
+ */
+export function getNhlTeamAuraColor(
+    abbreviation: string | null | undefined,
+): string {
+    const key = abbreviation?.toUpperCase() ?? '';
+
+    return (
+        NHL_TEAM_AURA_COLORS[key] ??
+        NHL_TEAM_COLORS[key] ??
         '#00A8FF'
     );
 }

@@ -5,7 +5,7 @@ import { PlayerCard } from '@/components/roster/PlayerCard';
 import { RosterSection } from '@/components/roster/RosterSection';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { useAura } from '@/lib/auraContext';
-import { getNhlTeamColor, desaturateHex } from '@/lib/nhlTeamColors';
+import { getNhlTeamAuraColor } from '@/lib/nhlTeamColors';
 import {
     auraPulseClass,
     auraPulseStyle,
@@ -95,14 +95,14 @@ function toLineupPositionGroup(
  * Color for the position letter. Matches the group: red for forwards,
  * blue for defensemen, green for goalies.
  */
-function positionTextColor(group: LineupPositionGroup): string {
+function positionBorderColor(group: LineupPositionGroup): string {
     switch (group) {
         case 'F':
-            return 'text-[#EF4444]';
+            return '#EF4444';
         case 'D':
-            return 'text-[#3B82F6]';
+            return '#3B82F6';
         case 'G':
-            return 'text-[#22C55E]';
+            return '#22C55E';
     }
 }
 
@@ -125,7 +125,7 @@ function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
 // Order: Name | Pos | (logo) | GP | G/W | A/L | PTS/OTL | 3B/SO | FP
 // Column widths are sized for a ~16px row font and a 20px team logo.
 const LINEUP_GRID_COLUMNS =
-    'minmax(0, 1fr) 22px 24px 30px 28px 28px 32px 28px 36px';
+    'minmax(0, 1fr) 24px 30px 28px 28px 32px 28px 36px';
 
 // Cyan separator glow, matching the segmented button accent
 // (#00E5FF). Applied to the bottom border of the last row of a
@@ -136,16 +136,18 @@ const LINEUP_SEPARATOR_GLOW =
 function LineupHeader({ isGoalie }: { isGoalie: boolean }) {
     return (
         <div
-            className={`grid w-full items-center gap-x-0.5 border-b border-border/40 pb-0.5 uppercase tracking-wide text-white ${isGoalie ? 'mt-3 text-xs' : 'text-sm'
+            className={`grid w-full items-center gap-x-0.5 border-b border-border/40 pb-0.5 pl-1 uppercase tracking-wide text-white ${isGoalie ? 'mt-3 text-xs' : 'text-sm'
                 }`}
-            style={{ gridTemplateColumns: LINEUP_GRID_COLUMNS }}
+            style={{
+                gridTemplateColumns: LINEUP_GRID_COLUMNS,
+                borderLeft: '2px solid transparent',
+            }}
         >
-            {/* The name and position columns have no header labels on
+            {/* The name and logo columns have no header labels on
                 purpose: the user already knows what they are. The
                 cells stay empty so the grid columns still line up
                 with the rows beneath. */}
             <div className='text-left' />
-            <div className='text-center' />
             <div />
             <div className='text-center text-[#7DD3FC]'>GP</div>
             {isGoalie ? (
@@ -195,70 +197,40 @@ function LineupRow({
         ? `${initial}. ${entry.lastName}`
         : entry.lastName;
 
-    // Team color for the logo glow, matching the same helper used
-    // by PlayerCard and PlayerPage. Falls back to the league cyan
-    // (#00A8FF) when the abbreviation is unknown.
-    const teamColor = getNhlTeamColor(entry.nhlTeamAbbreviation);
-
-    // Faded team-colored row background, same recipe as PlayerCard:
-    // desaturate the team color, then blend it heavily into the
-    // page background (#080D1A) via a dark overlay so only a subtle
-    // hue remains. Tune the saturation scale (0.55) for more or
-    // less color, and the overlay alpha (0.82) for how strong the
-    // tint reads against the page.
-    const rowBackgroundStyle = {
-        backgroundColor: desaturateHex(teamColor, 0.55),
-        backgroundImage: `linear-gradient(rgba(8, 13, 26, 0.82), rgba(8, 13, 26, 0.82))`,
-    };
+    // Aura-only color for this row: drives the logo glow and the
+    // name text-shadow. Falls back to the base team color for teams
+    // with no aura override, and to the league cyan when the
+    // abbreviation is unknown. The row background uses the default
+    // page color; only the glows are team-tinted.
+    const teamAuraColor = getNhlTeamAuraColor(entry.nhlTeamAbbreviation);
 
     return (
         <Link
             to={`/joueurs/${entry.nhlPlayerId}`}
-            className='grid w-full items-center gap-x-0.5 border-b border-border/20 py-0.5 text-base tabular-nums transition-[filter] duration-150 hover:brightness-110'
+            className='grid w-full items-center gap-x-0.5 border-b border-border/20 py-0.5 pl-1 text-base tabular-nums transition-colors odd:bg-white/[0.015] hover:bg-secondary/30'
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
+                borderLeft: `2px solid ${positionBorderColor(group)}`,
                 borderBottomColor: isLastOfSection
                     ? 'rgba(0, 229, 255, 0.6)'
                     : undefined,
                 boxShadow: isLastOfSection
                     ? LINEUP_SEPARATOR_GLOW
                     : undefined,
-                ...rowBackgroundStyle,
             }}
         >
-            {/* Team-colored glow around the player name. The alpha
-                here is much higher than on PlayerCard because the
-                lineup row background is mostly dark and the name
-                text is near-white, so a low-alpha shadow gets
-                swallowed. Full alpha at 4px gives a tight, clearly
-                visible halo; ~60% at 8px adds the soft outer bloom.
-                The pl-0.5 on the wrapper keeps the left-side glow
-                from being clipped by truncate's overflow:hidden. */}
-            <div
-                className='truncate pl-0.5 text-left text-foreground'
-                style={{
-                    textShadow: `0 0 4px ${teamColor}, 0 0 8px ${teamColor}99`,
-                }}
-            >
+            <div className='truncate pl-0.5 text-left text-foreground'>
                 {shortName}
             </div>
 
-            <div
-                className={`text-center font-bold ${positionTextColor(group)}`}
-            >
-                {group}
-            </div>
-
             {/* Small glow behind the team logo, tinted with the
-                team's own color so it reads as "belongs to X"
-                instead of a generic accent. Not wired to the aura
-                system on purpose: this is a decorative detail on
-                the lineup row, not a user-tunable channel. The
-                `8C` suffix is ~55% alpha on the 6-digit hex. */}
+                team's AURA color (brighter than the base color for
+                dark teams like UTA / SEA / TBL). The `8C` suffix is
+                ~55% alpha on the 6-digit hex. */}
             <div
                 className='flex justify-center'
                 style={{
-                    filter: `drop-shadow(0 0 3px ${teamColor}8C)`,
+                    filter: `drop-shadow(0 0 3px ${teamAuraColor}8C)`,
                 }}
             >
                 <NhlTeamLogo
