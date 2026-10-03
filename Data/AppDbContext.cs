@@ -63,9 +63,16 @@ namespace NhlFantasyLeague.api.Data
             // unique index: rows with FantasyTeamId IS NULL are ignored,
             // so any number of users can be unassigned at the same time.
             modelBuilder.Entity<ApplicationUser>()
-                .HasIndex(u => u.FantasyTeamId)
-                .HasFilter("\"FantasyTeamId\" IS NOT NULL")
-                .IsUnique();
+         .HasIndex(u => u.FantasyTeamId)
+         .HasFilter("\"FantasyTeamId\" IS NOT NULL")
+         .IsUnique();
+
+            // Store PlayerPageStyle as its string name so the DB stays
+            // readable and enum reordering never breaks existing rows.
+            modelBuilder.Entity<ApplicationUser>()
+       .Property(u => u.PlayerPageStyle)
+       .HasConversion<string>()
+       .HasDefaultValue(PlayerPageStyle.Neon);
 
             // -----------------------------------------------------------------
             // Existing model configuration, unchanged below.

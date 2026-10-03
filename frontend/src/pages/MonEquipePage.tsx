@@ -137,18 +137,13 @@ function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
 // Lineup components
 // =====================================================================
 
-// Single source of truth for the lineup table columns. Kept in a
-// constant so the header and the rows cannot drift apart.
-//
-// Order: Name | Pos | (logo) | GP | G/W | A/L | PTS/OTL | 3B/SO | FP
-// Column widths are sized for a ~16px row font and a 20px team logo.
 // Grid layout per lineup row. The name column is `1fr` so it
-// absorbs whatever is left after the fixed columns; widening the
-// stat columns shrinks the name column, which closes the gap the
-// user sees between the name text (left-aligned) and the team logo
-// sitting at the start of the logo column.
+// absorbs whatever is left after the fixed columns. Shrinking
+// each stat column by 1px hands the name column 8px more room,
+// which is enough to fit longer names without touching the row
+// height.
 const LINEUP_GRID_COLUMNS =
-    'minmax(0, 1fr) 22px 30px 26px 26px 30px 26px 32px 32px 36px';
+    'minmax(0, 1fr) 22px 29px 25px 25px 29px 25px 31px 31px 35px';
 
 // Cyan separator glow, matching the segmented button accent
 // (#00E5FF). Applied to the bottom border of the last row of a
@@ -721,6 +716,12 @@ export default function MonEquipePage() {
                             top of the label's text-shadow gets
                             painted under the header's opaque
                             background instead of over it. */}
+                        {/* z-[60] lifts the picker (and its aura)
+                            above the sticky header in Layout.tsx,
+                            which sits at z-50. The portalized
+                            search popup (z-70) and the Sheet
+                            (z-70) still render above the picker,
+                            so both remain usable. */}
                         <button
                             type='button'
                             aria-haspopup='listbox'

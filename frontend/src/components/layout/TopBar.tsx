@@ -1,11 +1,10 @@
 ﻿import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-    Bell,
     LogIn,
     LogOut,
     Menu,
-    MessageSquare,
     Search,
     ShieldCheck,
     Trophy,
@@ -35,24 +34,32 @@ import {
     LEAGUE_LOGO_PULSE_REST_SCALE,
 } from '@/lib/auraConfig';
 
-const NAV_ITEMS = [
+/** Nav items rendered inside the mobile hamburger. */
+const MOBILE_NAV_ITEMS = [
     { to: '/mon-equipe', label: 'Mon equipe', icon: Users },
     { to: '/classement', label: 'Classement', icon: Trophy },
-    { to: '/stats', label: 'Stats', icon: Trophy },
-    { to: '/transactions', label: 'Transactions', icon: null },
 ];
+
+/** Color used for the golden Classement shortcut icon. */
+const GOLD = '#FFC72C';
 
 export function TopBar() {
     const location = useLocation();
     const navigate = useNavigate();
     const [mobileOpen, setMobileOpen] = useState(false);
 
-    const { user, isAuthenticated, isCommissioner, logout } = useAuth();
+    const {
+        user,
+        isAuthenticated,
+        isCommissioner,
+        playerPageStyle,
+        updatePlayerPageStyle,
+        logout,
+    } = useAuth();
 
     async function handleLogout() {
         await logout();
         setMobileOpen(false);
-        navigate('/connexion', { replace: true });
     }
 
     // Player search state
@@ -168,6 +175,16 @@ export function TopBar() {
         `drop-shadow(0 0 ${(logoLayer(3) * LEAGUE_LOGO_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.5))`,
     ].join(' ');
 
+    // --- Golden trophy aura -------------------------------------------
+    // Fixed, not tied to the aura system: this is a small shortcut
+    // icon, not a user-tunable element. Three layers of gold at
+    // decreasing opacity sell the "glowing medal" look.
+    const trophyAura = [
+        `drop-shadow(0 0 3px rgba(255, 199, 44, 0.95))`,
+        `drop-shadow(0 0 6px rgba(255, 199, 44, 0.6))`,
+        `drop-shadow(0 0 10px rgba(255, 184, 0, 0.35))`,
+    ].join(' ');
+
     function handlePickResult(p: PlayerSearchResult) {
         setSearchModalOpen(false);
         setSearchQuery('');
@@ -197,38 +214,24 @@ export function TopBar() {
                     />
                 </Link>
 
-                {/* Mobile page title is intentionally not rendered here;
-                    the search icon and hamburger occupy the right side. */}
-
+                {/*
+                 * Desktop nav. Reduced to Classement + Admin +
+                 * Profil + username. Déconnexion lives in the
+                 * right-side group next to the search icon.
+                 */}
                 <div className='hidden flex-1 items-center justify-around md:flex'>
-                    {NAV_ITEMS.map((item) => {
-                        const isActive = location.pathname === item.to;
-
-                        return (
-                            <Link
-                                key={item.to}
-                                to={item.to}
-                                className={`relative flex items-center gap-1.5 text-sm transition-colors ${isActive
-                                    ? 'font-medium text-primary'
-                                    : 'text-muted-foreground hover:text-foreground'
-                                    }`}
-                            >
-                                {item.icon && <item.icon className='h-4 w-4' />}
-                                <span>{item.label}</span>
-
-                                {item.to === '/transactions' && (
-                                    <span
-                                        className='h-2 w-2 rounded-full bg-primary'
-                                        aria-label='Nouvelle activité'
-                                    />
-                                )}
-                            </Link>
-                        );
-                    })}
+                    <Link
+                        to='/classement'
+                        className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/classement'
+                            ? 'font-medium text-primary'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                    >
+                        <Trophy className='h-4 w-4' />
+                        <span>Classement</span>
+                    </Link>
 
                     <div className='flex items-center gap-4'>
-                        {/* Admin link only rendered for commissioners.
-                            Non-commissioners never see this entry. */}
                         {isCommissioner && (
                             <Link
                                 to='/admin'
@@ -243,55 +246,26 @@ export function TopBar() {
                             </Link>
                         )}
 
-                        <Link
-                            to='/messages'
-                            aria-label='Messages'
-                            className={`relative transition-colors ${location.pathname === '/messages'
-                                ? 'text-primary'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            <MessageSquare className='h-5 w-5' />
-                        </Link>
+                        {isAuthenticated && (
+                            <Link
+                                to='/profil'
+                                aria-label='Profil'
+                                className={`transition-colors ${location.pathname === '/profil'
+                                    ? 'text-primary'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                <User className='h-5 w-5' />
+                            </Link>
+                        )}
 
-                        <Link
-                            to='/notifications'
-                            aria-label='Notifications'
-                            className={`relative transition-colors ${location.pathname === '/notifications'
-                                ? 'text-primary'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            <Bell className='h-5 w-5' />
-                        </Link>
+                        {isAuthenticated && (
+                            <span className='text-sm text-foreground'>
+                                {user?.displayName ?? user?.userName}
+                            </span>
+                        )}
 
-                        {isAuthenticated ? (
-                            <>
-                                <Link
-                                    to='/profil'
-                                    aria-label='Profil'
-                                    className={`transition-colors ${location.pathname === '/profil'
-                                        ? 'text-primary'
-                                        : 'text-muted-foreground hover:text-foreground'
-                                        }`}
-                                >
-                                    <User className='h-5 w-5' />
-                                </Link>
-
-                                <span className='text-sm text-foreground'>
-                                    {user?.displayName ?? user?.userName}
-                                </span>
-
-                                <button
-                                    type='button'
-                                    onClick={handleLogout}
-                                    className='flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground'
-                                >
-                                    <LogOut className='h-4 w-4' />
-                                    <span>Déconnexion</span>
-                                </button>
-                            </>
-                        ) : (
+                        {!isAuthenticated && (
                             <Link
                                 to='/connexion'
                                 className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/connexion'
@@ -306,8 +280,30 @@ export function TopBar() {
                     </div>
                 </div>
 
-                {/* Search icon + hamburger — always visible, right-aligned */}
-                <div className='ml-auto flex items-center gap-1'>
+                {/*
+                 * Right-aligned group: Trophy (mobile) + Search +
+                 * Déconnexion (desktop) + Hamburger (mobile).
+                 * gap-3 gives each icon 12px of breathing room.
+                 */}
+                <div className='ml-auto flex items-center gap-3'>
+                    {/* Golden Classement shortcut — mobile only. */}
+                    <Link
+                        to='/classement'
+                        aria-label='Classement'
+                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/classement'
+                            ? 'text-primary'
+                            : 'text-foreground'
+                            }`}
+                    >
+                        <Trophy
+                            className='h-5 w-5'
+                            style={{
+                                color: GOLD,
+                                filter: trophyAura,
+                            }}
+                        />
+                    </Link>
+
                     <button
                         type='button'
                         aria-label='Rechercher un joueur'
@@ -316,6 +312,17 @@ export function TopBar() {
                     >
                         <Search className='h-5 w-5' />
                     </button>
+
+                    {isAuthenticated && (
+                        <button
+                            type='button'
+                            onClick={handleLogout}
+                            className='hidden cursor-pointer items-center gap-1.5 rounded-lg bg-transparent p-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground md:flex'
+                        >
+                            <LogOut className='h-4 w-4' />
+                            <span>Déconnexion</span>
+                        </button>
+                    )}
 
                     <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
                         <SheetTrigger
@@ -338,7 +345,7 @@ export function TopBar() {
                             </SheetHeader>
 
                             <div className='flex flex-col gap-1 p-4 pt-0'>
-                                {NAV_ITEMS.map((item) => {
+                                {MOBILE_NAV_ITEMS.map((item) => {
                                     const isActive = location.pathname === item.to;
 
                                     return (
@@ -353,20 +360,11 @@ export function TopBar() {
                                         >
                                             {item.icon && <item.icon className='h-4 w-4' />}
                                             <span>{item.label}</span>
-
-                                            {item.to === '/transactions' && (
-                                                <span
-                                                    className='ml-auto h-2 w-2 rounded-full bg-primary'
-                                                    aria-label='Nouvelle activité'
-                                                />
-                                            )}
                                         </Link>
                                     );
                                 })}
 
                                 <div className='mt-2 border-t border-border pt-2'>
-                                    {/* Admin entry in the mobile drawer is
-                                        also gated on isCommissioner. */}
                                     {isCommissioner && (
                                         <Link
                                             to='/admin'
@@ -378,38 +376,47 @@ export function TopBar() {
                                         </Link>
                                     )}
 
-                                    <Link
-                                        to='/messages'
-                                        onClick={() => setMobileOpen(false)}
-                                        className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
-                                    >
-                                        <MessageSquare className='h-4 w-4' />
-                                        <span>Messages</span>
-                                    </Link>
+                                    {isAuthenticated && (
+                                        <div className='mt-2 border-t border-border pt-2'>
+                                            <p className='px-3 py-1 text-xs uppercase tracking-wide text-white'>
+                                                Style page joueur
+                                            </p>
 
-                                    <Link
-                                        to='/notifications'
-                                        onClick={() => setMobileOpen(false)}
-                                        className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
-                                    >
-                                        <Bell className='h-4 w-4' />
-                                        <span>Notifications</span>
-                                    </Link>
+                                            <div className='flex gap-1 px-2 py-1'>
+                                                <button
+                                                    type='button'
+                                                    onClick={() => {
+                                                        void updatePlayerPageStyle('Neon');
+                                                    }}
+                                                    className={`flex-1 cursor-pointer rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${playerPageStyle === 'Neon'
+                                                        ? 'bg-[#00A8FF] text-[#080D1A]'
+                                                        : 'bg-transparent text-foreground hover:bg-secondary'
+                                                        }`}
+                                                >
+                                                    Neon
+                                                </button>
 
-                                    <Link
-                                        to='/profil'
-                                        onClick={() => setMobileOpen(false)}
-                                        className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
-                                    >
-                                        <User className='h-4 w-4' />
-                                        <span>Profil</span>
-                                    </Link>
+                                                <button
+                                                    type='button'
+                                                    onClick={() => {
+                                                        void updatePlayerPageStyle('Classic');
+                                                    }}
+                                                    className={`flex-1 cursor-pointer rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${playerPageStyle === 'Classic'
+                                                        ? 'bg-[#00A8FF] text-[#080D1A]'
+                                                        : 'bg-transparent text-foreground hover:bg-secondary'
+                                                        }`}
+                                                >
+                                                    Classic
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
 
                                     {isAuthenticated ? (
                                         <button
                                             type='button'
                                             onClick={handleLogout}
-                                            className='flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-secondary'
+                                            className='mt-3 flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-secondary'
                                         >
                                             <LogOut className='h-4 w-4' />
                                             <span>Déconnexion ({user?.displayName ?? user?.userName})</span>
@@ -442,87 +449,90 @@ export function TopBar() {
                 </div>
             </nav>
 
-            {/* Search modal — centered on screen, stays on the current page */}
-            {searchModalOpen && (
-                <div
-                    className='fixed inset-0 z-[100] flex items-start justify-center bg-black/60 px-4 pt-24 sm:pt-32'
-                    onClick={closeSearchModal}
-                    role='dialog'
-                    aria-modal='true'
-                    aria-label='Rechercher un joueur'
-                >
+            {/* Search modal — portaled to document.body so it lives
+                outside the header's stacking context. */}
+            {searchModalOpen &&
+                createPortal(
                     <div
-                        className='w-full max-w-md rounded-lg border border-border bg-card shadow-2xl'
-                        onClick={(event) => event.stopPropagation()}
+                        className='fixed inset-0 z-[70] flex items-start justify-center bg-black/60 px-4 pt-24 sm:pt-32'
+                        onClick={closeSearchModal}
+                        role='dialog'
+                        aria-modal='true'
+                        aria-label='Rechercher un joueur'
                     >
-                        <div className='flex items-center gap-2 border-b border-border px-3 py-2'>
-                            <Search className='h-4 w-4 shrink-0 text-muted-foreground' />
+                        <div
+                            className='w-full max-w-md rounded-lg border border-border bg-card shadow-2xl'
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <div className='flex items-center gap-2 border-b border-border px-3 py-2'>
+                                <Search className='h-4 w-4 shrink-0 text-muted-foreground' />
 
-                            <input
-                                ref={searchInputRef}
-                                type='text'
-                                value={searchQuery}
-                                autoComplete='off'
-                                placeholder='Rechercher un joueur'
-                                onChange={(event) =>
-                                    setSearchQuery(event.target.value)
-                                }
-                                className='w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none'
-                            />
+                                <input
+                                    ref={searchInputRef}
+                                    type='text'
+                                    value={searchQuery}
+                                    autoComplete='off'
+                                    placeholder='Rechercher un joueur'
+                                    onChange={(event) =>
+                                        setSearchQuery(event.target.value)
+                                    }
+                                    className='w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none'
+                                />
 
-                            <button
-                                type='button'
-                                aria-label='Fermer la recherche'
-                                onClick={closeSearchModal}
-                                className='cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground'
-                            >
-                                <X className='h-4 w-4' />
-                            </button>
-                        </div>
-
-                        <div className='max-h-80 overflow-y-auto'>
-                            {searchQuery.trim().length < 2 && (
-                                <p className='px-3 py-3 text-sm text-muted-foreground'>
-                                    Tapez au moins 2 caractères pour rechercher.
-                                </p>
-                            )}
-
-                            {searchQuery.trim().length >= 2 &&
-                                searching &&
-                                searchResults.length === 0 && (
-                                    <p className='px-3 py-3 text-sm text-muted-foreground'>
-                                        Recherche...
-                                    </p>
-                                )}
-
-                            {searchQuery.trim().length >= 2 &&
-                                !searching &&
-                                searchResults.length === 0 && (
-                                    <p className='px-3 py-3 text-sm text-muted-foreground'>
-                                        Aucun joueur trouvé.
-                                    </p>
-                                )}
-
-                            {searchResults.map((p) => (
                                 <button
-                                    key={p.playerId}
                                     type='button'
-                                    onClick={() => handlePickResult(p)}
-                                    className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                    aria-label='Fermer la recherche'
+                                    onClick={closeSearchModal}
+                                    className='cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground'
                                 >
-                                    <span className='text-foreground'>
-                                        {p.firstName} {p.lastName}
-                                    </span>
-
-                                    <span className='text-xs text-muted-foreground'>
-                                        {p.nhlTeamAbbreviation} · {p.position}
-                                    </span>
+                                    <X className='h-4 w-4' />
                                 </button>
-                            ))}
+                            </div>
+
+                            <div className='max-h-80 overflow-y-auto'>
+                                {searchQuery.trim().length < 2 && (
+                                    <p className='px-3 py-3 text-sm text-muted-foreground'>
+                                        Tapez au moins 2 caractères pour rechercher.
+                                    </p>
+                                )}
+
+                                {searchQuery.trim().length >= 2 &&
+                                    searching &&
+                                    searchResults.length === 0 && (
+                                        <p className='px-3 py-3 text-sm text-muted-foreground'>
+                                            Recherche...
+                                        </p>
+                                    )}
+
+                                {searchQuery.trim().length >= 2 &&
+                                    !searching &&
+                                    searchResults.length === 0 && (
+                                        <p className='px-3 py-3 text-sm text-muted-foreground'>
+                                            Aucun joueur trouvé.
+                                        </p>
+                                    )}
+
+                                {searchResults.map((p) => (
+                                    <button
+                                        key={p.playerId}
+                                        type='button'
+                                        onClick={() => handlePickResult(p)}
+                                        className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                    >
+                                        <span className='text-foreground'>
+                                            {p.firstName} {p.lastName}
+                                        </span>
+
+                                        <span className='text-xs text-muted-foreground'>
+                                            {p.nhlTeamAbbreviation} · {p.position}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                    </div>
-                </div>
-            )}
+                    </div>,
+                    document.body,
+                )}
         </>
     );
 }

@@ -1,4 +1,5 @@
 ﻿import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getStandings, type StandingsRow } from '@/api/client';
 import { cn } from '@/lib/utils';
 import { NeonTitle } from '@/components/ui/NeonTitle';
@@ -9,6 +10,10 @@ import { NeonTitle } from '@/components/ui/NeonTitle';
  * Read-only view of GET /api/Standings. Every number comes from the
  * backend; this page never computes anything. The standings are
  * refreshed by the recompute step of the NHL refresh pipeline.
+ *
+ * Team names are clickable and open that team's page via
+ * /mon-equipe?teamId=X, the same read-only view that PlayerPage
+ * links to when a player is on someone else's roster.
  */
 export default function ClassementPage() {
     const [rows, setRows] = useState<StandingsRow[]>([]);
@@ -125,7 +130,12 @@ export default function ClassementPage() {
                                     </td>
 
                                     <td className='px-2 py-3 text-center font-medium'>
-                                        {row.fantasyTeamName}
+                                        <Link
+                                            to={`/mon-equipe?teamId=${row.fantasyTeamId}`}
+                                            className='transition-colors hover:text-[#00A8FF] hover:underline'
+                                        >
+                                            {row.fantasyTeamName}
+                                        </Link>
                                     </td>
 
                                     <td className='px-2 py-3 text-center'>

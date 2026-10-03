@@ -38,6 +38,23 @@ namespace NhlFantasyLeague.api.Models.Auth
         public int? FantasyTeamId { get; set; }
         public string? FantasyTeamName { get; set; }
         public bool IsCommissioner { get; set; }
+
+        /// <summary>
+        /// PlayerPage visual style: "Neon" or "Classic". Sent back to
+        /// the SPA so the page renders with the user's chosen look on
+        /// every visit.
+        /// </summary>
+        public string PlayerPageStyle { get; set; } = "Neon";
+    }
+
+    /// <summary>
+    /// Request body for POST /api/Auth/player-page-style: updates the
+    /// player page style preference.
+    /// </summary>
+    public class SetPlayerPageStyleRequest
+    {
+        [Required]
+        public string Style { get; set; } = string.Empty;
     }
 
     /// <summary>Row of the commissioner's Users page.</summary>

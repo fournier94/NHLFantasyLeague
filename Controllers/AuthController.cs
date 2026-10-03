@@ -205,8 +205,46 @@ namespace NhlFantasyLeague.api.Controllers
                 DisplayName = user.DisplayName,
                 FantasyTeamId = user.FantasyTeamId,
                 FantasyTeamName = teamName,
-                IsCommissioner = await _authService.IsCommissionerAsync(user)
+                IsCommissioner = await _authService.IsCommissionerAsync(user),
+                PlayerPageStyle = user.PlayerPageStyle.ToString()
             };
+        }
+
+        // -----------------------------------------------------------------
+        // Player page style preference
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Updates the current user's PlayerPage visual style. Returns
+        /// the refreshed AuthUserDto so the SPA can swap its cached
+        /// user object in one round trip.
+        /// </summary>
+        [HttpPost("player-page-style")]
+        public async Task<IActionResult> SetPlayerPageStyle(
+            [FromBody] SetPlayerPageStyleRequest request)
+        {
+            var user = await _userManager.GetUserAsync(User);
+
+            if (user == null)
+            {
+                return Unauthorized();
+            }
+
+            if (!Enum.TryParse<PlayerPageStyle>(
+                    request.Style?.Trim(),
+                    ignoreCase: true,
+                    out var parsed))
+            {
+                return BadRequest(new
+                {
+                    message = "Style invalide. Utilisez 'Neon' ou 'Classic'."
+                });
+            }
+
+            user.PlayerPageStyle = parsed;
+            await _userManager.UpdateAsync(user);
+
+            return Ok(await BuildAuthUserAsync(user));
         }
     }
 }

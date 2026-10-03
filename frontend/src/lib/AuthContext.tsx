@@ -7,40 +7,38 @@
     useState,
     type ReactNode,
 } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     getCurrentUser,
     login as apiLogin,
     logout as apiLogout,
     onUnauthorized,
     register as apiRegister,
+    setPlayerPageStyle as apiSetPlayerPageStyle,
     type AuthUser,
     type LoginRequest,
+    type PlayerPageStyle,
     type RegisterRequest,
 } from '@/api/client';
 
 interface AuthContextValue {
-    /** The current user, or null when logged out / not yet loaded. */
     user: AuthUser | null;
-
-    /** True while we're fetching the current user for the first time. */
     loading: boolean;
-
-    /** True when the user is logged in. */
     isAuthenticated: boolean;
-
-    /** True when the user has the Commissioner role. */
     isCommissioner: boolean;
 
-    /** Logs in; throws on failure. */
+    /**
+     * PlayerPage visual style for the current user. Defaults to
+     * 'Neon' when logged out or before the user has chosen one.
+     */
+    playerPageStyle: PlayerPageStyle;
+
+    /** Updates the style, persists it, and refreshes the cached user. */
+    updatePlayerPageStyle: (style: PlayerPageStyle) => Promise<void>;
+
     login: (request: LoginRequest) => Promise<AuthUser>;
-
-    /** Registers; throws on failure. */
     register: (request: RegisterRequest) => Promise<AuthUser>;
-
-    /** Logs out. Never throws. */
     logout: () => Promise<void>;
-
-    /** Re-fetches the current user (used after changing something). */
     refreshUser: () => Promise<void>;
 }
 
@@ -48,16 +46,19 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 /**
  * Wraps the app and keeps the current user in memory. On mount it
- * calls GET /api/Auth/me; if the auth cookie is present and valid, the
- * user loads. If it 401s, we treat that as "logged out".
+ * calls GET /api/Auth/me; if the auth cookie is present and valid,
+ * the user loads. If it 401s, we treat that as "logged out".
  *
- * Also subscribes to the shared 401 handler in client.ts, so if any
- * API call later returns 401, the context clears its user and the UI
- * flips to logged-out.
+ * Logout always redirects to /connexion. The redirect is fired
+ * BEFORE clearing the user so that any auth-aware wrapper
+ * (AdminRoute, etc.) cannot race the navigation and land the user
+ * somewhere else.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<AuthUser | null>(null);
     const [loading, setLoading] = useState(true);
+
+    const navigate = useNavigate();
 
     const refreshUser = useCallback(async () => {
         try {
@@ -68,7 +69,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
-    // Initial load: fetch the current user once.
     useEffect(() => {
         let cancelled = false;
 
@@ -94,7 +94,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
     }, []);
 
-    // Any 401 from any API call clears the cached user.
     useEffect(() => {
         return onUnauthorized(() => {
             setUser(null);
@@ -117,11 +116,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
             await apiLogout();
         } catch {
-            // Ignore network errors on logout: the local state is what
-            // matters.
+            // Ignore network errors on logout.
         }
+
+        // Redirect first, then clear the user. Doing it in this
+        // order prevents auth-aware wrappers (like AdminRoute) from
+        // reacting to the null user and redirecting to a fallback
+        // route before we get to /connexion.
+        navigate('/connexion', { replace: true });
         setUser(null);
-    }, []);
+    }, [navigate]);
+
+    const updatePlayerPageStyle = useCallback(
+        async (style: PlayerPageStyle) => {
+            const me = await apiSetPlayerPageStyle(style);
+            setUser(me);
+        },
+        [],
+    );
 
     const value = useMemo<AuthContextValue>(
         () => ({
@@ -129,12 +141,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             loading,
             isAuthenticated: user != null,
             isCommissioner: user?.isCommissioner ?? false,
+            playerPageStyle: user?.playerPageStyle ?? 'Neon',
+            updatePlayerPageStyle,
             login,
             register,
             logout,
             refreshUser,
         }),
-        [user, loading, login, register, logout, refreshUser],
+        [
+            user,
+            loading,
+            updatePlayerPageStyle,
+            login,
+            register,
+            logout,
+            refreshUser,
+        ],
     );
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

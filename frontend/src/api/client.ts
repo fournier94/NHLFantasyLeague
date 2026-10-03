@@ -148,6 +148,8 @@ export async function apiDelete<T>(path: string): Promise<T> {
 // Auth
 // ---------------------------------------------------------------------
 
+export type PlayerPageStyle = 'Neon' | 'Classic';
+
 export interface AuthUser {
     id: number;
     userName: string;
@@ -155,6 +157,7 @@ export interface AuthUser {
     fantasyTeamId: number | null;
     fantasyTeamName: string | null;
     isCommissioner: boolean;
+    playerPageStyle: PlayerPageStyle;
 }
 
 export interface LoginRequest {
@@ -205,6 +208,9 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
         currentPassword,
         newPassword,
     });
+
+export const setPlayerPageStyle = (style: PlayerPageStyle) =>
+    apiPost<AuthUser>('/Auth/player-page-style', { style });
 
 // ---------------------------------------------------------------------
 // Users (commissioner only)
