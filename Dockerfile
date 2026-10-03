@@ -16,6 +16,6 @@ WORKDIR /app
 COPY --from=build /app/publish .
 
 # .NET 8 ASP.NET Core images listen on port 8080 by default.
-EXPOSE 8080
+EXPOSE 10000
 
 ENTRYPOINT ["dotnet", "NhlFantasyLeague.api.dll"]
