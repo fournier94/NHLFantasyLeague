@@ -10,6 +10,12 @@
     /// TotalFantasyPoints is the sum of both segments plus any bonus
     /// points the league rules add (hat trick, win, OTL, shutout),
     /// already computed by the recompute.
+    ///
+    /// YesterdayFantasyPoints and TodayFantasyPoints are computed on
+    /// the fly from PlayerGameLog + RosterStatusHistory. They show
+    /// what the team's Active-at-game-time players produced in the
+    /// games that started yesterday / today. They are NOT part of the
+    /// season total.
     /// </summary>
     public class StandingsRowDto
     {
@@ -35,6 +41,20 @@
         public int GoaliePoints { get; set; }
 
         // Overall
+        /// <summary>
+        /// FP credited to this team from games that started yesterday
+        /// (UTC calendar day). Zero when the team scored nothing or
+        /// had no active players in any game that day.
+        /// </summary>
+        public int YesterdayFantasyPoints { get; set; }
+
+        /// <summary>
+        /// FP credited to this team from games that started today
+        /// (UTC calendar day). Zero when no games have started yet or
+        /// the team scored nothing.
+        /// </summary>
+        public int TodayFantasyPoints { get; set; }
+
         public int TotalFantasyPoints { get; set; }
 
         /// <summary>UTC timestamp of the last recompute, or null when never computed.</summary>

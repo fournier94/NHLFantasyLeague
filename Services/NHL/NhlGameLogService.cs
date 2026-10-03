@@ -44,6 +44,12 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// Upserts one player's game logs for one season, then recomputes
         /// his PlayerSeasonStat (FantasyPoints + HatTricks).
         ///
+        /// Fantasy points per game:
+        ///   Skater: 1 point per G/A, +3 bonus for a hat trick (3+ goals).
+        ///   Goalie: 2 per win, 1 per overtime loss, 3 per shutout, plus
+        ///   any G/A the goalie recorded.
+        /// </summary>
+        ///
         /// The optional <paramref name="preloadedTeams"/> dictionary lets a
         /// batch caller (refresh-all, backfill-all) avoid re-querying the
         /// same NhlTeams table for every player. When null, the teams are
@@ -199,7 +205,8 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 if (shutout)
                 {
-                    fantasyPoints += 1;
+                    // League rule: a shutout is worth a +3 bonus.
+                    fantasyPoints += 3;
                 }
 
                 if (!existingLogsByGameId.TryGetValue(
@@ -584,6 +591,126 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Returns a dictionary keyed on FantasyTeamId containing the
+        /// total FP credited to each team from games that started on
+        /// the given calendar day (UTC).
+        ///
+        /// Uses the same "effective RosterStatusHistory row at game
+        /// day 00:00 UTC" logic as the season-total recompute, so a
+        /// trade mid-season slices cleanly. Only games on the exact
+        /// date are counted, which means a game that starts late on
+        /// that day and finishes after midnight is still attributed
+        /// to the day it started (that is how PlayerGameLog.GameDate
+        /// is populated).
+        ///
+        /// Read-only: does not touch FantasyTeamSeason or any other
+        /// persisted row.
+        /// </summary>
+        public async Task<Dictionary<int, int>> ComputeTeamDailyTotalsAsync(
+            int seasonCode,
+            DateOnly date,
+            CancellationToken ct = default)
+        {
+            var season = await _dbContext.Seasons
+                .AsNoTracking()
+                .FirstOrDefaultAsync(
+                    s => s.NhlSeasonCode == seasonCode,
+                    ct);
+
+            if (season == null)
+            {
+                return new Dictionary<int, int>();
+            }
+
+            // Every game log row on that date. Small projection so EF
+            // never tracks it.
+            var games = await _dbContext.PlayerGameLogs
+                .Where(g =>
+                    g.SeasonId == season.Id &&
+                    g.GameDate == date)
+                .Select(g => new
+                {
+                    g.PlayerId,
+                    g.FantasyPoints
+                })
+                .ToListAsync(ct);
+
+            if (games.Count == 0)
+            {
+                return new Dictionary<int, int>();
+            }
+
+            // Whole-season history, grouped by player and sorted by
+            // EffectiveAt. Same shape as the season-total recompute.
+            var historyRows = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Where(h => h.SeasonId == season.Id)
+                .OrderBy(h => h.EffectiveAt)
+                .ThenBy(h => h.Id)
+                .ToListAsync(ct);
+
+            var historyByPlayerId = historyRows
+                .GroupBy(h => h.PlayerId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .OrderBy(h => h.EffectiveAt)
+                        .ThenBy(h => h.Id)
+                        .ToList());
+
+            // Day-start UTC, matching the granularity used by the
+            // season-total recompute.
+            var dayStartUtc = new DateTime(
+                date.Year,
+                date.Month,
+                date.Day,
+                0, 0, 0,
+                DateTimeKind.Utc);
+
+            var totals = new Dictionary<int, int>();
+
+            foreach (var game in games)
+            {
+                if (!historyByPlayerId.TryGetValue(
+                        game.PlayerId,
+                        out var playerHistory) ||
+                    playerHistory.Count == 0)
+                {
+                    continue;
+                }
+
+                RosterStatusHistory? effective = null;
+
+                for (var i = 0; i < playerHistory.Count; i++)
+                {
+                    if (playerHistory[i].EffectiveAt <= dayStartUtc)
+                    {
+                        effective = playerHistory[i];
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                if (effective == null ||
+                    effective.RosterStatus != RosterStatus.Active)
+                {
+                    continue;
+                }
+
+                totals.TryGetValue(
+                    effective.FantasyTeamId,
+                    out var current);
+
+                totals[effective.FantasyTeamId] =
+                    current + game.FantasyPoints;
+            }
+
+            return totals;
         }
 
         /// <summary>

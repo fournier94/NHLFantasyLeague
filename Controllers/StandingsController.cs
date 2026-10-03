@@ -2,24 +2,35 @@
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models.Dtos;
+using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers
 {
     /// <summary>
-    /// Season standings. Read-only: every number is written by the
-    /// recompute step of POST /api/NhlGameLog/season/{season}/refresh-all
-    /// (and by POST .../recompute-team-totals). This controller never
-    /// computes anything on the fly.
+    /// Season standings. Read-only from the caller's perspective:
+    /// every season-aggregate number is written by the recompute step
+    /// of POST /api/NhlGameLog/season/{season}/refresh-all (and by
+    /// POST .../recompute-team-totals). This controller never
+    /// modifies anything.
+    ///
+    /// YesterdayFantasyPoints and TodayFantasyPoints are computed on
+    /// the fly from PlayerGameLog + RosterStatusHistory so the
+    /// standings always reflect the last two days even before the
+    /// next recompute runs.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class StandingsController : ControllerBase
     {
         private readonly AppDbContext _dbContext;
+        private readonly NhlGameLogService _nhlGameLogService;
 
-        public StandingsController(AppDbContext dbContext)
+        public StandingsController(
+            AppDbContext dbContext,
+            NhlGameLogService nhlGameLogService)
         {
             _dbContext = dbContext;
+            _nhlGameLogService = nhlGameLogService;
         }
 
         /// <summary>
@@ -33,14 +44,15 @@ namespace NhlFantasyLeague.api.Controllers
         /// </param>
         [HttpGet]
         public async Task<IActionResult> GetStandings(
-            [FromQuery] int? seasonId)
+            [FromQuery] int? seasonId,
+            CancellationToken ct = default)
         {
             var season = seasonId.HasValue
                 ? await _dbContext.Seasons
-                    .FirstOrDefaultAsync(s => s.Id == seasonId.Value)
+                    .FirstOrDefaultAsync(s => s.Id == seasonId.Value, ct)
                 : await _dbContext.Seasons
                     .OrderByDescending(s => s.StartDate)
-                    .FirstOrDefaultAsync();
+                    .FirstOrDefaultAsync(ct);
 
             if (season == null)
             {
@@ -76,7 +88,34 @@ namespace NhlFantasyLeague.api.Controllers
                     TotalFantasyPoints = fts.TotalFantasyPoints,
                     TotalFantasyPointsComputedAt = fts.TotalFantasyPointsComputedAt
                 })
-                .ToListAsync();
+                .ToListAsync(ct);
+
+            // Yesterday / today totals, computed on the fly. UTC
+            // calendar days to match the PlayerGameLog.GameDate
+            // convention used everywhere else.
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var yesterday = today.AddDays(-1);
+
+            var yesterdayTotals = await _nhlGameLogService
+                .ComputeTeamDailyTotalsAsync(
+                    season.NhlSeasonCode,
+                    yesterday,
+                    ct);
+
+            var todayTotals = await _nhlGameLogService
+                .ComputeTeamDailyTotalsAsync(
+                    season.NhlSeasonCode,
+                    today,
+                    ct);
+
+            foreach (var row in rows)
+            {
+                row.YesterdayFantasyPoints = yesterdayTotals
+                    .GetValueOrDefault(row.FantasyTeamId);
+
+                row.TodayFantasyPoints = todayTotals
+                    .GetValueOrDefault(row.FantasyTeamId);
+            }
 
             var ranked = rows
                 .OrderByDescending(r => r.TotalFantasyPoints)

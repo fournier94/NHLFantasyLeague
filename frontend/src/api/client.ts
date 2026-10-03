@@ -566,6 +566,12 @@ export interface StandingsRow {
     goalieShutouts: number;
     goaliePoints: number;
 
+    /** FP from games that started yesterday (UTC). */
+    yesterdayFantasyPoints: number;
+
+    /** FP from games that started today (UTC). */
+    todayFantasyPoints: number;
+
     totalFantasyPoints: number;
     totalFantasyPointsComputedAt: string | null;
 }

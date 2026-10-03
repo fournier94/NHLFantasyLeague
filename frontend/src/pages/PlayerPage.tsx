@@ -1682,11 +1682,11 @@ function GoalieCareerTable({
                                                     //   goals + assists
                                                     //   + 2 per win
                                                     //   + 1 per OTL
-                                                    //   + 1 per shutout
+                                                    //   + 3 per shutout
                                                     row.points +
                                                     row.wins * 2 +
                                                     row.overtimeLosses +
-                                                    row.shutouts
+                                                    row.shutouts * 3
                                                 }
                                             </td>
                                         )}
