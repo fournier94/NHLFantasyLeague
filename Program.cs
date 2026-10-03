@@ -113,7 +113,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseAuthentication();
 app.UseAuthorization();
-
+app.MapGet("/api/test", () => "Minimal API is working");
 app.MapControllers();
 
 app.Run();
