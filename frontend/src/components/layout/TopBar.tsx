@@ -47,7 +47,7 @@ export function TopBar() {
     const navigate = useNavigate();
     const [mobileOpen, setMobileOpen] = useState(false);
 
-    const { user, isAuthenticated, logout } = useAuth();
+    const { user, isAuthenticated, isCommissioner, logout } = useAuth();
 
     async function handleLogout() {
         await logout();
@@ -227,7 +227,9 @@ export function TopBar() {
                     })}
 
                     <div className='flex items-center gap-4'>
-                        {isAuthenticated && (
+                        {/* Admin link only rendered for commissioners.
+                            Non-commissioners never see this entry. */}
+                        {isCommissioner && (
                             <Link
                                 to='/admin'
                                 aria-label='Administration'
@@ -363,6 +365,19 @@ export function TopBar() {
                                 })}
 
                                 <div className='mt-2 border-t border-border pt-2'>
+                                    {/* Admin entry in the mobile drawer is
+                                        also gated on isCommissioner. */}
+                                    {isCommissioner && (
+                                        <Link
+                                            to='/admin'
+                                            onClick={() => setMobileOpen(false)}
+                                            className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
+                                        >
+                                            <ShieldCheck className='h-4 w-4' />
+                                            <span>Admin</span>
+                                        </Link>
+                                    )}
+
                                     <Link
                                         to='/messages'
                                         onClick={() => setMobileOpen(false)}

@@ -22,6 +22,7 @@ import { getNhlTeamAuraColor } from '@/lib/nhlTeamColors';
 import { getLastNonPlayerLocation } from '@/lib/playerNavigation';
 import ReactCountryFlag from 'react-country-flag';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
+import { NeonTitle } from '@/components/ui/NeonTitle';
 import { Banknote, Ruler } from 'lucide-react';
 
 // ---------------------------------------------------------------------
@@ -673,18 +674,42 @@ function careerRowClass(row: CareerRow, index: number): string {
 // Small components
 // ---------------------------------------------------------------------
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
+function SectionTitle({
+    children,
+    auraColor,
+}: {
+    children: React.ReactNode;
+    auraColor: string;
+}) {
     return (
-        <h2 className='mt-6 mb-2 text-center text-lg font-semibold text-foreground md:text-xl'>
-            {children}
+        <h2 className='mt-4 mb-5 text-center'>
+            <NeonTitle
+                variant='section'
+                showStroke={false}
+                auraColor={auraColor}
+            >
+                {children}
+            </NeonTitle>
         </h2>
     );
 }
 
-function SubSectionTitle({ children }: { children: React.ReactNode }) {
+function SubSectionTitle({
+    children,
+    auraColor,
+}: {
+    children: React.ReactNode;
+    auraColor: string;
+}) {
     return (
-        <h3 className='mb-1 text-center text-base font-medium text-white'>
-            {children}
+        <h3 className='mt-2 mb-4 text-center'>
+            <NeonTitle
+                variant='subsection'
+                showStroke={false}
+                auraColor={auraColor}
+            >
+                {children}
+            </NeonTitle>
         </h3>
     );
 }
@@ -700,6 +725,7 @@ function SubSectionTitle({ children }: { children: React.ReactNode }) {
 function CurrentSeasonStrip({
     stats,
     isGoalie,
+    auraColor,
 }: {
     stats: {
         gamesPlayed: number;
@@ -714,6 +740,8 @@ function CurrentSeasonStrip({
         shutouts?: number;
     } | null;
     isGoalie: boolean;
+    /** Team aura color, matching the player name and logo. */
+    auraColor: string;
 }) {
     const s = {
         gamesPlayed: stats?.gamesPlayed ?? 0,
@@ -733,20 +761,25 @@ function CurrentSeasonStrip({
     const sizeAt = (layer: number) =>
         auraRangeFor(aura, 'playerSeasonStrip', layer);
 
+    // Aura chain uses the same team-color approach as the player
+    // name and logo: five layers of one color at decreasing alpha.
+    // The two-3px innermost stop is a bright edge; the four outer
+    // stops scale with the playerSeasonStrip aura channel just like
+    // before, so the admin slider still controls the size.
     const auraRest = [
-        `0 0 2px rgba(180, 230, 255, 0.9)`,
-        `0 0 ${(sizeAt(0) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
-        `0 0 ${(sizeAt(1) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
-        `0 0 ${(sizeAt(2) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.6)`,
-        `0 0 ${(sizeAt(3) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
+        `0 0 2px ${auraColor}`,
+        `0 0 ${(sizeAt(0) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px ${auraColor}`,
+        `0 0 ${(sizeAt(1) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px ${auraColor}E6`,
+        `0 0 ${(sizeAt(2) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px ${auraColor}99`,
+        `0 0 ${(sizeAt(3) * AURA_STRIP_PULSE_REST_SCALE).toFixed(2)}px ${auraColor}4D`,
     ].join(', ');
 
     const auraPeak = [
-        `0 0 3px rgba(200, 240, 255, 1)`,
-        `0 0 ${(sizeAt(0) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
-        `0 0 ${(sizeAt(1) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 1)`,
-        `0 0 ${(sizeAt(2) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
-        `0 0 ${(sizeAt(3) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
+        `0 0 3px ${auraColor}`,
+        `0 0 ${(sizeAt(0) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px ${auraColor}`,
+        `0 0 ${(sizeAt(1) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px ${auraColor}`,
+        `0 0 ${(sizeAt(2) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px ${auraColor}D9`,
+        `0 0 ${(sizeAt(3) * AURA_STRIP_PULSE_PEAK_SCALE).toFixed(2)}px ${auraColor}8C`,
     ].join(', ');
 
     const auraOn = !isAuraOff(aura);
@@ -844,14 +877,15 @@ function CurrentSeasonStrip({
     return (
         <div
             className={cn(
-                'w-full rounded-lg border border-[#00A8FF]/40 bg-[#080D1A] p-1.5',
+                'w-full rounded-lg border bg-[#080D1A] p-1.5',
                 auraOn ? auraPulseClass('box') : '',
             )}
-            style={
-                auraOn
-                    ? auraPulseStyle(auraRest, auraPeak)
-                    : undefined
-            }
+            style={{
+                /* Border picks up the team color at the same 40%
+                   alpha the old cyan border used. */
+                borderColor: `${auraColor}66`,
+                ...(auraOn ? auraPulseStyle(auraRest, auraPeak) : {}),
+            }}
         >
             <div className='flex w-full gap-1.5'>
                 {cells.map((cell) => (
@@ -2144,8 +2178,27 @@ export default function PlayerPage() {
                     <div className='min-w-0 space-y-1 sm:flex-1'>
                         <div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 sm:justify-start'>
                             <span className='relative inline-block'>
-                                <h1 className='text-xl font-bold text-foreground'>
-                                    {player.firstName} {player.lastName}
+                                {/* my-[9px] — midpoint between the
+                                    original my-3 (12px) and the
+                                    reduced my-1.5 (6px). Splits the
+                                    difference: more breathing room
+                                    than the reduced version, without
+                                    pushing the bio rows all the way
+                                    back down. */}
+                                <h1 className='mt-[9px] mb-[14px] leading-none'>
+                                    {/* Same Grindy Brush font as the
+                                        section titles, but with no
+                                        red stroke and a team-colored
+                                        aura. White fill stays so the
+                                        name stays legible against
+                                        the page background. */}
+                                    <NeonTitle
+                                        variant='section'
+                                        auraColor={pageTeamLogoColor}
+                                        showStroke={false}
+                                    >
+                                        {player.firstName} {player.lastName}
+                                    </NeonTitle>
                                 </h1>
 
                                 {player.isInjured && (
@@ -2320,8 +2373,18 @@ export default function PlayerPage() {
                         <img
                             src={player.headshotUrl}
                             alt={`${player.firstName} ${player.lastName}`}
-                            className='absolute right-0 top-[2.5rem] h-29 w-29 shrink-0 rounded-md bg-white object-cover sm:static sm:mt-0 sm:h-32 sm:w-32'
+                            className='absolute right-3 top-[3.5rem] h-29 w-29 shrink-0 rounded-md bg-white object-cover sm:static sm:mt-0 sm:h-32 sm:w-32'
                             loading='lazy'
+                            /* Team-colored halo around the headshot
+                               frame. Two layers: a tight ring for
+                               edge definition, then a softer wide
+                               bloom. Uses the same color as the
+                               team logo aura and the name. The
+                               `CC` suffix is ~80% alpha, `66` is
+                               ~40%. */
+                            style={{
+                                boxShadow: `0 0 12px ${pageTeamLogoColor}FF, 0 0 26px ${pageTeamLogoColor}99`,
+                            }}
                         />
                     )}
                 </div>
@@ -2330,13 +2393,16 @@ export default function PlayerPage() {
                     <CurrentSeasonStrip
                         stats={player.currentSeasonStats}
                         isGoalie={isGoalie}
+                        auraColor={pageTeamLogoColor}
                     />
                 </div>
 
                 <div className='grid grid-cols-1 gap-y-4 md:grid-cols-2 md:gap-x-1'>
                     <div>
                         <div>
-                            <SubSectionTitle>Saison régulière</SubSectionTitle>
+                            <SubSectionTitle auraColor={pageTeamLogoColor}>
+                                Saison régulière
+                            </SubSectionTitle>
                             {isGoalie ? (
                                 <GoalieCareerTable
                                     rows={combineNhlSeasonRows(
@@ -2397,7 +2463,9 @@ export default function PlayerPage() {
 
                     <div>
                         <div>
-                            <SubSectionTitle>Séries</SubSectionTitle>
+                            <SubSectionTitle auraColor={pageTeamLogoColor}>
+                                Séries
+                            </SubSectionTitle>
                             {isGoalie ? (
                                 <GoalieCareerTable
                                     rows={careerRowsForDisplay(
@@ -2444,7 +2512,7 @@ export default function PlayerPage() {
 
                 {player.seasonMonths.length > 0 && (
                     <>
-                        <SectionTitle>
+                        <SectionTitle auraColor={pageTeamLogoColor}>
                             Par mois (saison courante)
                         </SectionTitle>
                         <MonthTable
@@ -2454,7 +2522,9 @@ export default function PlayerPage() {
                     </>
                 )}
 
-                <SectionTitle>Fiches de match</SectionTitle>
+                <SectionTitle auraColor={pageTeamLogoColor}>
+                    Fiches de match
+                </SectionTitle>
                 <button
                     type='button'
                     onClick={() => setShowGameLog((v) => !v)}
@@ -2473,7 +2543,9 @@ export default function PlayerPage() {
                     </div>
                 )}
 
-                <SectionTitle>Historique des blessures</SectionTitle>
+                <SectionTitle auraColor={pageTeamLogoColor}>
+                    Historique des blessures
+                </SectionTitle>
 
                 {player.injuryHistory.length === 0 ? (
                     <p className='text-sm text-muted-foreground'>
@@ -2529,7 +2601,9 @@ export default function PlayerPage() {
                     </TableShell>
                 )}
 
-                <SubSectionTitle>Tournois</SubSectionTitle>
+                <SubSectionTitle auraColor={pageTeamLogoColor}>
+                    Tournois
+                </SubSectionTitle>
                 {isGoalie ? (
                     <GoalieCareerTable rows={player.tournaments} plainRows />
                 ) : (
@@ -2537,7 +2611,9 @@ export default function PlayerPage() {
                 )}
 
                 <div className='mt-6'>
-                    <SubSectionTitle>Youth / Minor</SubSectionTitle>
+                    <SubSectionTitle auraColor={pageTeamLogoColor}>
+                        Youth / Minor
+                    </SubSectionTitle>
                     {isGoalie ? (
                         <GoalieCareerTable
                             rows={player.youthMinor}

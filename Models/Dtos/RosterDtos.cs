@@ -153,6 +153,13 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// <summary>Player headshot photo url, or null when unavailable.</summary>
         public string? HeadshotUrl { get; set; }
 
+        /// <summary>
+        /// Where the player currently sits within his NHL club, or null
+        /// when the roster-status feature has never run for him. One of
+        /// "NhlRoster", "AhlRoster", "Injured", "NotOnActiveRoster".
+        /// </summary>
+        public string? RosterLocation { get; set; }
+
         /// <summary>True when ESPN currently lists the player as injured or suspended.</summary>
         public bool IsInjured { get; set; }
 
@@ -191,6 +198,18 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// first two contracts are surfaced on the card.
         /// </summary>
         public PlayerContractLineDto? SecondContract { get; set; }
+
+        /// <summary>
+        /// Fantasy points scored yesterday, or null when the player did
+        /// not play. Zero means he played and scored no points.
+        /// </summary>
+        public int? YesterdayFantasyPoints { get; set; }
+
+        /// <summary>
+        /// Fantasy points scored today, or null when the player has not
+        /// played yet. Zero means he played and scored no points.
+        /// </summary>
+        public int? TodayFantasyPoints { get; set; }
     }
 
     /// <summary>

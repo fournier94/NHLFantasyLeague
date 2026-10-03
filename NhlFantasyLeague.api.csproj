@@ -18,6 +18,7 @@
   <ItemGroup>
     <None Remove="frontend\src\components\layout\HealthBanner.tsx" />
     <None Remove="frontend\src\components\ui\AuraButton.tsx" />
+    <None Remove="frontend\src\components\ui\NeonTitle.tsx" />
     <None Remove="frontend\src\lib\auraConfig.ts" />
     <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\AuthContext.tsx" />
@@ -43,6 +44,7 @@
   <ItemGroup>
     <TypeScriptCompile Include="frontend\src\components\layout\HealthBanner.tsx" />
     <TypeScriptCompile Include="frontend\src\components\ui\AuraButton.tsx" />
+    <TypeScriptCompile Include="frontend\src\components\ui\NeonTitle.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />

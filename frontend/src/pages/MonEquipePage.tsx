@@ -106,6 +106,24 @@ function positionBorderColor(group: LineupPositionGroup): string {
     }
 }
 
+/**
+ * Renders a daily FP value (hier / ajd) in the lineup tables.
+ *   - null / undefined -> did not play. Rendered as "X" (muted grey).
+ *   - 0               -> played, no points. Rendered as "0" (muted grey).
+ *   - > 0             -> points scored. Rendered as "+N" (green).
+ */
+function renderDailyPoints(value: number | null | undefined) {
+    if (value == null) {
+        return <span className='text-muted-foreground'>X</span>;
+    }
+
+    if (value === 0) {
+        return <span className='text-muted-foreground'>0</span>;
+    }
+
+    return <span className='text-[#22C55E]'>+{value}</span>;
+}
+
 /** Sort a list of roster entries by current-season fantasy points desc. */
 function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
     return [...entries].sort((a, b) => {
@@ -124,14 +142,33 @@ function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
 //
 // Order: Name | Pos | (logo) | GP | G/W | A/L | PTS/OTL | 3B/SO | FP
 // Column widths are sized for a ~16px row font and a 20px team logo.
+// Grid layout per lineup row. The name column is `1fr` so it
+// absorbs whatever is left after the fixed columns; widening the
+// stat columns shrinks the name column, which closes the gap the
+// user sees between the name text (left-aligned) and the team logo
+// sitting at the start of the logo column.
 const LINEUP_GRID_COLUMNS =
-    'minmax(0, 1fr) 24px 30px 28px 28px 32px 28px 36px';
+    'minmax(0, 1fr) 22px 30px 26px 26px 30px 26px 32px 32px 36px';
 
 // Cyan separator glow, matching the segmented button accent
 // (#00E5FF). Applied to the bottom border of the last row of a
 // section so the separator takes no vertical space.
 const LINEUP_SEPARATOR_GLOW =
     '0 2px 3px -1px rgba(0, 229, 255, 0.55), 0 3px 6px -2px rgba(0, 229, 255, 0.3)';
+
+// Row background tints for the lineup tables. Applied via inline
+// backgroundColor so they layer above the odd-row stripe. All three
+// are desaturated and low-opacity so the row stays legible and the
+// team-colored left border still reads.
+//
+//   injured   -> muted red     (player is injured or suspended)
+//   ahl       -> muted blue    (player is on the AHL affiliate)
+//   outOfNhl  -> muted grey    (player is not on any active NHL/AHL roster)
+const LINEUP_ROW_TINT = {
+    injured: 'rgba(220, 95, 95, 0.22)',
+    ahl: 'rgba(125, 190, 240, 0.30)',
+    outOfNhl: 'rgba(155, 155, 162, 0.22)',
+} as const;
 
 function LineupHeader({ isGoalie }: { isGoalie: boolean }) {
     return (
@@ -165,6 +202,14 @@ function LineupHeader({ isGoalie }: { isGoalie: boolean }) {
                     <div className='text-center'>3B</div>
                 </>
             )}
+            {/* Hier / Ajd headers are one step smaller than the
+                rest of the header row so the daily columns feel
+                secondary to the season columns. text-[0.7rem] is
+                smaller than both text-sm (skater header) and
+                text-xs (goalie header), so the reduction shows in
+                both tables. */}
+            <div className='text-center text-[0.7rem]'>Hier</div>
+            <div className='text-center text-[0.7rem]'>Ajd</div>
             <div className='text-center text-[#F59E0B]'>FP</div>
         </div>
     );
@@ -204,10 +249,27 @@ function LineupRow({
     // page color; only the glows are team-tinted.
     const teamAuraColor = getNhlTeamAuraColor(entry.nhlTeamAbbreviation);
 
+    // Row background tint, chosen from the player's current status.
+    // Priority (top wins):
+    //   1. Injured   -> muted red
+    //   2. AhlRoster -> muted blue
+    //   3. NotOnActiveRoster -> muted grey
+    //   4. otherwise (NHL roster, or RosterLocation null) -> no tint,
+    //      falls back to the default row background.
+    let rowTint: string | undefined;
+
+    if (entry.isInjured) {
+        rowTint = LINEUP_ROW_TINT.injured;
+    } else if (entry.rosterLocation === 'AhlRoster') {
+        rowTint = LINEUP_ROW_TINT.ahl;
+    } else if (entry.rosterLocation === 'NotOnActiveRoster') {
+        rowTint = LINEUP_ROW_TINT.outOfNhl;
+    }
+
     return (
         <Link
             to={`/joueurs/${entry.nhlPlayerId}`}
-            className='grid w-full items-center gap-x-0.5 border-b border-border/20 py-0.5 pl-1 text-base tabular-nums transition-colors odd:bg-white/[0.015] hover:bg-secondary/30'
+            className='grid w-full items-center gap-x-0.5 border-b border-border/20 py-0.5 pl-1 text-base tabular-nums transition-[filter] duration-150 hover:brightness-110'
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
                 borderLeft: `2px solid ${positionBorderColor(group)}`,
@@ -217,6 +279,7 @@ function LineupRow({
                 boxShadow: isLastOfSection
                     ? LINEUP_SEPARATOR_GLOW
                     : undefined,
+                backgroundColor: rowTint,
             }}
         >
             <div className='truncate pl-0.5 text-left text-foreground'>
@@ -256,6 +319,13 @@ function LineupRow({
                     <div className='text-center'>{ht}</div>
                 </>
             )}
+
+            <div className='text-center'>
+                {renderDailyPoints(entry.yesterdayFantasyPoints)}
+            </div>
+            <div className='text-center'>
+                {renderDailyPoints(entry.todayFantasyPoints)}
+            </div>
 
             <div className='text-center font-bold text-[#F59E0B]'>{fp}</div>
         </Link>
@@ -378,24 +448,25 @@ export default function MonEquipePage() {
         return 'Mon equipe';
     })();
 
-    // Neon-sign aura for the team-picker label. Driven by the
-    // 'teamPickerLabel' channel in auraConfig.ts. Four layers, in
-    // order: tight white core, light cyan inner glow, mid blue glow,
-    // wide soft blue halo.
+    // Same palette as the league logo aura in TopBar.tsx: white core
+    // -> league cyan (#00A8FF) -> cyan -> soft cyan bleed. Alphas are
+    // pushed to full at the rest side of the pulse so the aura reads
+    // as clearly on as it does at the peak, rather than fading away
+    // halfway through the cycle.
     const neonAura = useAura('teamPickerLabel');
 
     const neonRest = [
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px rgba(255, 255, 255, 0.9)`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px rgba(176, 229, 255, 0.85)`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.4)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px #F2F5FA`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px #00A8FF`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
     ].join(', ');
 
     const neonPeak = [
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px rgba(255, 255, 255, 1)`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px rgba(200, 240, 255, 1)`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px rgba(0, 168, 255, 0.95)`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px #F2F5FA`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px #00A8FF`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px #00A8FF`,
+        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
     ].join(', ');
 
     const neonAuraOn = !isAuraOff(neonAura);
@@ -644,13 +715,19 @@ export default function MonEquipePage() {
                         ref={teamPickerRef}
                         className='relative w-full'
                     >
+                        {/* z-[60] lifts the picker (and its aura)
+                            above the sticky header in Layout.tsx,
+                            which sits at z-50. Without this, the
+                            top of the label's text-shadow gets
+                            painted under the header's opaque
+                            background instead of over it. */}
                         <button
                             type='button'
                             aria-haspopup='listbox'
                             aria-expanded={isTeamPickerOpen}
                             aria-label='Choisir une equipe'
                             onClick={() => setIsTeamPickerOpen((v) => !v)}
-                            className='relative mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
+                            className='relative z-[60] mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
                         >
                             {/* Label is the only flex child, so it
                                 centers on the button width. The caret
@@ -658,30 +735,70 @@ export default function MonEquipePage() {
                                 edge of the label, so it never shifts
                                 the label off-center. */}
                             <span className='relative inline-block'>
+                                {/* Neon-outline label: the fill is the
+                                    page background color so the glow
+                                    only shows around the outside of
+                                    each glyph, and the stroke draws
+                                    the tube itself. `paintOrder:
+                                    stroke fill` makes the stroke
+                                    render on top of the fill so the
+                                    outline stays crisp at every
+                                    zoom level.
+
+                                    Geist Variable at weight 900
+                                    (Black) is heavier than Rajdhani
+                                    700 and gives the tube more
+                                    horizontal mass, which reads
+                                    closer to a real bar-sign. The
+                                    stroke is backed off to 1.5px
+                                    because the glyphs are already
+                                    thick enough to hollow out. */}
                                 <span
-                                    className={`text-2xl leading-none ${neonAuraOn ? auraPulseClass('text') : ''
+                                    className={`text-2xl leading-none tracking-[0.02em] ${neonAuraOn ? auraPulseClass('text') : ''
                                         }`}
                                     style={{
-                                        fontFamily: "'Coors Script', cursive",
-                                        color: '#B0E0FF',
+                                        fontFamily: "'Grindy Brush', sans-serif",
+                                        fontWeight: 400,
+                                        color: '#FFFFFF',
+                                        WebkitTextStrokeWidth: '3.5px',
+                                        WebkitTextStrokeColor: '#AF1E2D',
+                                        paintOrder: 'stroke fill',
                                         ...(neonAuraOn
                                             ? auraPulseStyle(neonRest, neonPeak)
                                             : {}),
-                                    }}
+                                    } as React.CSSProperties}
                                 >
                                     {selectedTeamLabel}
                                 </span>
 
+                                {/* Full solid yellow triangle (▼).
+                                    Same yellow and same two-layer
+                                    drop-shadow as the label, so
+                                    the caret reads as part of the
+                                    same tube. */}
+                                {/* Caret matches the label: white fill,
+                                    red stroke, same pulsing aura. The
+                                    stroke is thinner than the label's
+                                    (1px vs 1.5px) because the caret
+                                    renders at text-sm, and 1.5px
+                                    would close the triangle up at
+                                    that size. */}
                                 <span
                                     aria-hidden='true'
-                                    className='pointer-events-none absolute left-full top-1/2 ml-2 inline-block text-sm leading-none text-[#00E5FF] transition-transform duration-200'
+                                    className={`pointer-events-none absolute left-full top-1/2 ml-2 inline-block text-sm leading-none transition-transform duration-200 ${neonAuraOn ? auraPulseClass('text') : ''
+                                        }`}
                                     style={{
                                         transform: isTeamPickerOpen
                                             ? 'translateY(-50%) rotate(180deg)'
                                             : 'translateY(-50%) rotate(0deg)',
-                                        filter:
-                                            'drop-shadow(0 0 4px rgba(0, 229, 255, 0.7))',
-                                    }}
+                                        color: '#FFFFFF',
+                                        WebkitTextStrokeWidth: '1px',
+                                        WebkitTextStrokeColor: '#AF1E2D',
+                                        paintOrder: 'stroke fill',
+                                        ...(neonAuraOn
+                                            ? auraPulseStyle(neonRest, neonPeak)
+                                            : {}),
+                                    } as React.CSSProperties}
                                 >
                                     ▼
                                 </span>
@@ -743,14 +860,37 @@ export default function MonEquipePage() {
                 </div>
 
                 <div className='flex w-full flex-col items-center gap-2'>
-                    <div className='flex w-full items-center rounded-full border border-[#00E5FF] bg-[#080D1A] p-0.5'>
+                    {/* Same palette as the dropdown label:
+                        container -> cyan border + cyan aura (matches
+                        the label's glow chain, #F2F5FA / #00A8FF).
+                        Active button -> white fill + deep navy text
+                        (#1D1B61) with a small cyan aura around the
+                        label so the two read as the same material.
+                        Inactive button -> white text, cyan hover. */}
+                    <div
+                        className='flex w-full items-center rounded-full border border-[#00A8FF] bg-[#050A18] p-0.5'
+                        style={{
+                            boxShadow:
+                                '0 0 8px rgba(0, 168, 255, 0.7), 0 0 18px rgba(0, 168, 255, 0.45), 0 0 30px rgba(0, 168, 255, 0.2), inset 0 0 8px rgba(0, 168, 255, 0.15)',
+                        }}
+                    >
                         <button
                             type='button'
                             onClick={() => setActiveView('lineup')}
-                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-colors ${activeView === 'lineup'
-                                ? 'bg-[#00E5FF] text-[#080D1A]'
-                                : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
+                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-all duration-200 ${activeView === 'lineup'
+                                ? 'bg-white text-[#1D1B61]'
+                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
+                            style={
+                                activeView === 'lineup'
+                                    ? {
+                                        boxShadow:
+                                            '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                        textShadow:
+                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                    }
+                                    : undefined
+                            }
                         >
                             Lineup
                         </button>
@@ -758,10 +898,20 @@ export default function MonEquipePage() {
                         <button
                             type='button'
                             onClick={() => setActiveView('cap')}
-                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-colors ${activeView === 'cap'
-                                ? 'bg-[#00E5FF] text-[#080D1A]'
-                                : 'bg-transparent text-[#8DE5FF] hover:bg-[#00E5FF]/10'
+                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-all duration-200 ${activeView === 'cap'
+                                ? 'bg-white text-[#1D1B61]'
+                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
+                            style={
+                                activeView === 'cap'
+                                    ? {
+                                        boxShadow:
+                                            '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                        textShadow:
+                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                    }
+                                    : undefined
+                            }
                         >
                             Masse salariale
                         </button>
@@ -801,7 +951,7 @@ export default function MonEquipePage() {
             {activeView === 'cap' && (
                 <>
                     {roster.futureCapBySeason.length > 0 && (
-                        <RosterSection title='Masse salariale'>
+                        <div className='w-full'>
                             <div className='space-y-2'>
                                 {roster.futureCapBySeason.map((row) => {
                                     const pct = capPercentage(row.capSalary, row.salaryCap);
@@ -849,10 +999,10 @@ export default function MonEquipePage() {
                                     );
                                 })}
                             </div>
-                        </RosterSection>
+                        </div>
                     )}
 
-                    <RosterSection title='Attaquants' count={forwards.length}>
+                    <RosterSection title='Attaquants' count={forwards.length} spacing='compact'>
                         <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
                             {forwards.map((entry) => (
                                 <PlayerCard key={entry.id} entry={entry} />
@@ -860,7 +1010,7 @@ export default function MonEquipePage() {
                         </div>
                     </RosterSection>
 
-                    <RosterSection title='Défenseurs' count={defensemen.length}>
+                    <RosterSection title='Défenseurs' count={defensemen.length} spacing='large'>
                         <div className='mx-auto grid w-full grid-cols-1 gap-3 md:w-2/3 md:grid-cols-2'>
                             {defensemen.map((entry) => (
                                 <PlayerCard key={entry.id} entry={entry} />
@@ -868,7 +1018,7 @@ export default function MonEquipePage() {
                         </div>
                     </RosterSection>
 
-                    <RosterSection title='Gardiens' count={goalies.length}>
+                    <RosterSection title='Gardiens' count={goalies.length} spacing='large'>
                         <div className='mx-auto w-full md:w-1/3 md:min-w-[260px]'>
                             {goalies.map((entry) => (
                                 <PlayerCard
@@ -879,7 +1029,7 @@ export default function MonEquipePage() {
                         </div>
                     </RosterSection>
 
-                    <RosterSection title='Banc' count={bench.length}>
+                    <RosterSection title='Banc' count={bench.length} spacing='large'>
                         <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
                             {bench.map((entry) => (
                                 <PlayerCard key={entry.id} entry={entry} />
@@ -887,7 +1037,7 @@ export default function MonEquipePage() {
                         </div>
                     </RosterSection>
 
-                    <RosterSection title='Prospects' count={prospects.length}>
+                    <RosterSection title='Prospects' count={prospects.length} spacing='large'>
                         <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
                             {prospects.map((entry) => (
                                 <PlayerCard key={entry.id} entry={entry} />

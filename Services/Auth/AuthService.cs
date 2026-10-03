@@ -38,6 +38,38 @@ namespace NhlFantasyLeague.api.Services.Auth
         public string InviteCode =>
             _configuration["Auth:InviteCode"] ?? string.Empty;
 
+        /// <summary>
+        /// Usernames that can never be demoted from the Commissioner
+        /// role. Set in appsettings under
+        /// Auth:ProtectedCommissionerUsernames. The creator account is
+        /// normally listed here so a misclick can never lock him out
+        /// of the admin page.
+        /// </summary>
+        public IReadOnlyList<string> ProtectedCommissionerUsernames =>
+            _configuration
+                .GetSection("Auth:ProtectedCommissionerUsernames")
+                .Get<string[]>() ?? Array.Empty<string>();
+
+        /// <summary>
+        /// True when the given username is in the protected list.
+        /// Comparison is case-insensitive and trims whitespace.
+        /// </summary>
+        public bool IsProtectedCommissioner(string? userName)
+        {
+            if (string.IsNullOrWhiteSpace(userName))
+            {
+                return false;
+            }
+
+            var trimmed = userName.Trim();
+
+            return ProtectedCommissionerUsernames.Any(u =>
+                string.Equals(
+                    u?.Trim(),
+                    trimmed,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
         // -----------------------------------------------------------------
         // Registration
         // -----------------------------------------------------------------

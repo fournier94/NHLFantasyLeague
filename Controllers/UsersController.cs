@@ -23,13 +23,16 @@ namespace NhlFantasyLeague.api.Controllers
     {
         private readonly AppDbContext _dbContext;
         private readonly UserManager<ApplicationUser> _userManager;
+        private readonly AuthService _authService;
 
         public UsersController(
             AppDbContext dbContext,
-            UserManager<ApplicationUser> userManager)
+            UserManager<ApplicationUser> userManager,
+            AuthService authService)
         {
             _dbContext = dbContext;
             _userManager = userManager;
+            _authService = authService;
         }
 
         /// <summary>Every user with his team and commissioner flag.</summary>
@@ -54,6 +57,8 @@ namespace NhlFantasyLeague.api.Controllers
                     FantasyTeamName = user.FantasyTeam?.Name,
                     IsCommissioner = await _userManager.IsInRoleAsync(
                         user, AuthService.CommissionerRole),
+                    IsProtected = _authService.IsProtectedCommissioner(
+                        user.UserName),
                     CreatedAt = user.CreatedAt
                 });
             }
@@ -87,6 +92,35 @@ namespace NhlFantasyLeague.api.Controllers
             if (user == null)
             {
                 return NotFound(new { message = "Utilisateur introuvable." });
+            }
+
+            // Self-protection: a commissioner can never demote himself.
+            // This is what prevents the accidental lockout where the
+            // only commissioner removes his own role.
+            var currentUserId = _userManager.GetUserId(User);
+
+            if (currentUserId == user.Id.ToString())
+            {
+                return BadRequest(new
+                {
+                    message =
+                        "Vous ne pouvez pas retirer votre propre rôle " +
+                        "de commissaire."
+                });
+            }
+
+            // Config-based protection: usernames in
+            // Auth:ProtectedCommissionerUsernames can never be demoted
+            // by anyone. The creator account is normally listed there.
+            if (_authService.IsProtectedCommissioner(user.UserName))
+            {
+                return BadRequest(new
+                {
+                    message =
+                        $"{user.UserName} est un commissaire protégé et " +
+                        "ne peut pas être rétrogradé. Retirez-le d'abord " +
+                        "de Auth:ProtectedCommissionerUsernames."
+                });
             }
 
             if (await _userManager.IsInRoleAsync(user, AuthService.CommissionerRole))

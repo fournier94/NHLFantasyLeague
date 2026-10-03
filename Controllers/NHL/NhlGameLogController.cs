@@ -123,7 +123,7 @@ int season)
         [HttpPost("season/{season}/refresh-all")]
         public async Task<IActionResult> RefreshCurrentSeasonForAllPlayers(
             int season,
-            [FromQuery] int delayMsBetweenPlayers = 350,
+            [FromQuery] int delayMsBetweenPlayers = 500,
             CancellationToken ct = default)
         {
             if (delayMsBetweenPlayers < 0)

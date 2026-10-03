@@ -969,6 +969,41 @@ namespace NhlFantasyLeague.api.Services
                     .ToDictionary(g => g.Key, g => g.ToList());
             }
 
+            // Yesterday / today fantasy points per player. Today and
+            // yesterday are UTC calendar days matching the stored
+            // PlayerGameLog.GameDate. Null = did not play; 0 = played,
+            // no points; positive = points scored.
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var yesterday = today.AddDays(-1);
+
+            var recentLogs = new List<RecentGameLogRow>();
+
+            if (playerIds.Count > 0)
+            {
+                recentLogs = await _dbContext.PlayerGameLogs
+                     .AsNoTracking()
+                     .Where(g =>
+                         playerIds.Contains(g.PlayerId) &&
+                         (g.GameDate == today || g.GameDate == yesterday))
+                     .Select(g => new RecentGameLogRow
+                     {
+                         PlayerId = g.PlayerId,
+                         GameDate = g.GameDate,
+                         FantasyPoints = g.FantasyPoints
+                     })
+                     .ToListAsync();
+            }
+
+            var yesterdayFpByPlayerId = recentLogs
+                .Where(g => g.GameDate == yesterday)
+                .GroupBy(g => g.PlayerId)
+                .ToDictionary(g => g.Key, g => g.Sum(x => x.FantasyPoints));
+
+            var todayFpByPlayerId = recentLogs
+                .Where(g => g.GameDate == today)
+                .GroupBy(g => g.PlayerId)
+                .ToDictionary(g => g.Key, g => g.Sum(x => x.FantasyPoints));
+
             var salaryChanged = false;
 
             foreach (var entry in entries)
@@ -1242,12 +1277,14 @@ namespace NhlFantasyLeague.api.Services
         }
 
         private static RosterEntryDto ToRosterEntryDto(
-            RosterEntry entry,
-            SeasonStatLineDto? twoSeasonsAgo = null,
-            SeasonStatLineDto? lastSeason = null,
-            SeasonStatLineDto? currentSeason = null,
-            PlayerContractLineDto? currentContract = null,
-            PlayerContractLineDto? secondContract = null)
+      RosterEntry entry,
+      SeasonStatLineDto? twoSeasonsAgo = null,
+      SeasonStatLineDto? lastSeason = null,
+      SeasonStatLineDto? currentSeason = null,
+      PlayerContractLineDto? currentContract = null,
+      PlayerContractLineDto? secondContract = null,
+      int? yesterdayFantasyPoints = null,
+      int? todayFantasyPoints = null)
         {
             return new RosterEntryDto
             {
@@ -1263,6 +1300,12 @@ namespace NhlFantasyLeague.api.Services
                 RosterSlot = entry.RosterSlot,
                 FantasySalary = entry.FantasySalary,
                 HeadshotUrl = entry.Player?.HeadshotUrl,
+
+                // Roster location from Player: NhlRoster / AhlRoster /
+                // Injured / NotOnActiveRoster, or null when the
+                // roster-status feature has never run for this player.
+                // The lineup rows use it to tint the row background.
+                RosterLocation = entry.Player?.RosterLocation?.ToString(),
 
                 // Injury fields. Copied straight from Player so the card
                 // and the future injuries page can render without a
@@ -1282,7 +1325,10 @@ namespace NhlFantasyLeague.api.Services
                 LastSeason = lastSeason,
                 CurrentSeason = currentSeason,
                 CurrentContract = currentContract,
-                SecondContract = secondContract
+                SecondContract = secondContract,
+
+                YesterdayFantasyPoints = yesterdayFantasyPoints,
+                TodayFantasyPoints = todayFantasyPoints
             };
         }
 
@@ -1687,6 +1733,13 @@ namespace NhlFantasyLeague.api.Services
             public int Wins { get; set; }
             public int Losses { get; set; }
             public int OvertimeLosses { get; set; }
+        }
+
+        private sealed class RecentGameLogRow
+        {
+            public int PlayerId { get; set; }
+            public DateOnly GameDate { get; set; }
+            public int FantasyPoints { get; set; }
         }
     }
 }

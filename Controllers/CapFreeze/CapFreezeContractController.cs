@@ -15,6 +15,17 @@ namespace NhlFantasyLeague.api.Controllers.CapFreeze
     {
         private readonly CapFreezeContractService _capFreezeContractService;
         private readonly CapFreezePageService _capFreezePageService;
+        private readonly AppDbContext _dbContext;
+
+        public CapFreezeContractController(
+CapFreezeContractService capFreezeContractService,
+CapFreezePageService capFreezePageService,
+AppDbContext dbContext)
+        {
+            _capFreezeContractService = capFreezeContractService;
+            _capFreezePageService = capFreezePageService;
+            _dbContext = dbContext;
+        }
 
         public class CapFreezePlayerContractReview
         {
@@ -37,14 +48,6 @@ namespace NhlFantasyLeague.api.Controllers.CapFreeze
 
             public string? ErrorType { get; set; }
             public string? ErrorMessage { get; set; }
-        }
-
-        public CapFreezeContractController(
-CapFreezeContractService capFreezeContractService,
-CapFreezePageService capFreezePageService)
-        {
-            _capFreezeContractService = capFreezeContractService;
-            _capFreezePageService = capFreezePageService;
         }
 
         [HttpGet("capfreeze/test-cap-hits")]
@@ -275,6 +278,95 @@ CapFreezePageService capFreezePageService)
                         r.GeneratedContractCount != 2),
 
                 Players = results
+            });
+        }
+
+        /// <summary>
+        /// Returns every manually locked contract, with the player's
+        /// name and NHL team filled in. `IsActive` is false when the
+        /// current season has already moved past the lock's last
+        /// season, at which point the lock is purely historical and
+        /// the admin page hides it.
+        /// </summary>
+        [HttpGet("capfreeze/protected-contracts")]
+        public async Task<IActionResult> GetProtectedContracts()
+        {
+            // Kept in sync with the current-season constants used by
+            // PlayerDetailService / RosterAdminService. Bump this each
+            // October when the new season starts.
+            const int CurrentSeasonNhlCode = 20262027;
+
+            var locked = CapFreezeContractService
+                .GetProtectedContracts()
+                .ToList();
+
+            if (locked.Count == 0)
+            {
+                return Ok(new
+                {
+                    CurrentSeasonNhlCode,
+                    ProtectedContracts = Array.Empty<object>()
+                });
+            }
+
+            var nhlIds = locked
+                .Select(l => l.NhlPlayerId)
+                .Distinct()
+                .ToList();
+
+            var players = await _dbContext.Players
+                .AsNoTracking()
+                .Where(p => nhlIds.Contains(p.NhlPlayerId))
+                .Select(p => new
+                {
+                    p.NhlPlayerId,
+                    p.FirstName,
+                    p.LastName,
+                    TeamAbbreviation = p.NhlTeam != null
+                        ? p.NhlTeam.Abbreviation
+                        : null
+                })
+                .ToListAsync();
+
+            var byNhlId = players
+                .GroupBy(p => p.NhlPlayerId)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var result = locked
+                .GroupBy(l => l.NhlPlayerId)
+                .Select(g =>
+                {
+                    byNhlId.TryGetValue(g.Key, out var player);
+
+                    var maxEnd = g.Max(c => c.EndSeason);
+
+                    return new
+                    {
+                        NhlPlayerId = g.Key,
+                        PlayerName = player != null
+                            ? $"{player.FirstName} {player.LastName}"
+                            : "(unknown)",
+                        TeamAbbreviation = player?.TeamAbbreviation,
+                        Contracts = g
+                            .OrderBy(c => c.StartSeason)
+                            .Select(c => new
+                            {
+                                c.StartSeason,
+                                c.EndSeason,
+                                c.Salary
+                            })
+                            .ToList(),
+                        ExpiresAfterSeason = maxEnd,
+                        IsActive = maxEnd >= CurrentSeasonNhlCode
+                    };
+                })
+                .OrderBy(x => x.PlayerName)
+                .ToList();
+
+            return Ok(new
+            {
+                CurrentSeasonNhlCode,
+                ProtectedContracts = result
             });
         }
     }

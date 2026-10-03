@@ -17,7 +17,9 @@ import {
     getRosterStatusHistory,
     recomputeTeamTotals,
     updateStatusHistory,
+    getProtectedContracts,
     type RosterStatusHistoryRow,
+    type ProtectedPlayerContract,
     type AdminUserRow,
     type FantasyTeam,
     type PlayerSearchResult,
@@ -27,6 +29,7 @@ import {
 import { useAuraAll } from '@/lib/auraContext';
 import { AURA_CHANNELS } from '@/lib/auraConfig';
 import { AuraButton } from '@/components/ui/AuraButton';
+import { useAuth } from '@/lib/AuthContext';
 
 // ---------------------------------------------------------------------
 // Position grouping (mirrors the backend PositionGroup helper).
@@ -150,6 +153,36 @@ function statusLabel(status: string): string {
     return ROSTER_STATUSES.find((entry) => entry.value === status)?.label ?? status;
 }
 
+/**
+ * Formats a season code like 20262027 as "2026-27".
+ * Used by the protected-contracts section.
+ */
+function formatSeasonCode(code: number): string {
+    const startYear = Math.floor(code / 10000);
+    const endYear = code % 100;
+    return `${startYear}-${String(endYear).padStart(2, '0')}`;
+}
+
+/**
+ * Sort order used by the ROSTERS export: forwards first, then
+ * defensemen, then goalies, then by last name within each group.
+ */
+function sortRosterForExport(entries: RosterEntry[]): RosterEntry[] {
+    const order: Record<PositionGroup, number> = {
+        F: 0,
+        D: 1,
+        G: 2,
+        U: 3,
+    };
+
+    return [...entries].sort((a, b) => {
+        const ga = order[positionGroup(a.position)] ?? 9;
+        const gb = order[positionGroup(b.position)] ?? 9;
+        if (ga !== gb) return ga - gb;
+        return a.lastName.localeCompare(b.lastName);
+    });
+}
+
 const selectClass =
     'w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/50';
 
@@ -219,6 +252,17 @@ export default function AdminPage() {
 
     const [showAppearance, setShowAppearance] = useState(false);
 
+    // Export rosters section state.
+    const [exportingRosters, setExportingRosters] = useState(false);
+    const [exportRostersError, setExportRostersError] = useState<string | null>(null);
+
+    // Protected contracts section state.
+    const [protectedContracts, setProtectedContracts] = useState<
+        ProtectedPlayerContract[]
+    >([]);
+    const [protectedLoading, setProtectedLoading] = useState(false);
+    const [protectedError, setProtectedError] = useState<string | null>(null);
+
     // --- Swap section state ---
     const [swapTeamId, setSwapTeamId] = useState('');
     const [swapTeamRoster, setSwapTeamRoster] = useState<TeamRoster | null>(null);
@@ -239,6 +283,9 @@ export default function AdminPage() {
     const [swapSuccess, setSwapSuccess] = useState<string | null>(null);
 
     const { intensities, setIntensity, reset } = useAuraAll();
+
+    // Current user, used to hide the demote button on our own row.
+    const { user: authUser } = useAuth();
 
     useEffect(() => {
         let cancelled = false;
@@ -263,6 +310,11 @@ export default function AdminPage() {
     // Load the users list once on mount.
     useEffect(() => {
         void loadUsers();
+    }, []);
+
+    // Load protected contracts once on mount.
+    useEffect(() => {
+        void loadProtectedContracts();
     }, []);
 
     useEffect(() => {
@@ -778,6 +830,28 @@ export default function AdminPage() {
         }
     }
 
+    async function loadProtectedContracts() {
+        setProtectedLoading(true);
+        setProtectedError(null);
+
+        try {
+            const data = await getProtectedContracts();
+
+            // Only keep the still-active locks. A lock whose last
+            // season is behind the current one is historical and
+            // would only confuse the commissioner.
+            setProtectedContracts(
+                data.protectedContracts.filter((c) => c.isActive),
+            );
+        } catch (err) {
+            setProtectedError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setProtectedLoading(false);
+        }
+    }
+
     async function handlePromote(userId: number) {
         setUsersBusyId(userId);
         setUsersError(null);
@@ -878,6 +952,117 @@ export default function AdminPage() {
             );
         } finally {
             setUsersBusyId(null);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Export rosters
+    // ---------------------------------------------------------------
+
+    /**
+     * Fetches every fantasy team's roster, builds a plain-text report
+     * grouping each team's players by status (Alignement / Banc /
+     * Prospects), and downloads it as a .txt file named
+     * "ROSTERS YYYY-MM-DD.txt".
+     */
+    async function handleExportRosters() {
+        if (teams.length === 0) {
+            setExportRostersError('Aucune équipe à exporter.');
+            return;
+        }
+
+        setExportingRosters(true);
+        setExportRostersError(null);
+
+        try {
+            const now = new Date();
+            const dateLabel =
+                `${now.getFullYear()}-` +
+                `${String(now.getMonth() + 1).padStart(2, '0')}-` +
+                `${String(now.getDate()).padStart(2, '0')}`;
+
+            const timeLabel =
+                `${String(now.getHours()).padStart(2, '0')}:` +
+                `${String(now.getMinutes()).padStart(2, '0')}`;
+
+            const lines: string[] = [];
+
+            lines.push(`ROSTERS ${dateLabel}`);
+            lines.push(`Généré le ${dateLabel} à ${timeLabel}`);
+            lines.push('');
+
+            for (const team of teams) {
+                const roster = await getTeamRoster(team.id);
+
+                lines.push('='.repeat(60));
+                lines.push(`ÉQUIPE: ${team.name}`);
+                lines.push(`Joueurs: ${roster.totalPlayers}`);
+                lines.push(`Masse salariale: ${(roster.totalSalary / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`);
+                lines.push('='.repeat(60));
+                lines.push('');
+
+                const active = roster.entries.filter(
+                    (e) => e.rosterStatus === 'Active',
+                );
+                const bench = roster.entries.filter(
+                    (e) => e.rosterStatus === 'Bench',
+                );
+                const prospects = roster.entries.filter(
+                    (e) => e.rosterStatus === 'Prospect',
+                );
+
+                const sections: Array<[string, RosterEntry[]]> = [
+                    ['ALIGNEMENT PRINCIPAL', sortRosterForExport(active)],
+                    ['BANC', sortRosterForExport(bench)],
+                    ['PROSPECTS', sortRosterForExport(prospects)],
+                ];
+
+                for (const [title, entries] of sections) {
+                    lines.push(`--- ${title} (${entries.length}) ---`);
+
+                    if (entries.length === 0) {
+                        lines.push('  (vide)');
+                    } else {
+                        for (const entry of entries) {
+                            const group = positionGroup(entry.position);
+
+                            const salary = (entry.fantasySalary / 1_000_000)
+                                .toFixed(2)
+                                .replace(/\.?0+$/, '');
+
+                            lines.push(
+                                `  ${entry.firstName} ${entry.lastName} | ${group} | ${entry.nhlTeamAbbreviation} | ${salary}M`,
+                            );
+                        }
+                    }
+
+                    lines.push('');
+                }
+
+                lines.push('');
+            }
+
+            const blob = new Blob(
+                [lines.join('\n')],
+                { type: 'text/plain;charset=utf-8' },
+            );
+
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `ROSTERS ${dateLabel}.txt`;
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            setExportRostersError(
+                err instanceof Error ? err.message : 'Erreur lors de l\'export.',
+            );
+        } finally {
+            setExportingRosters(false);
         }
     }
 
@@ -1816,16 +2001,38 @@ export default function AdminPage() {
                                         </td>
                                         <td className='px-2 py-2 text-center align-top'>
                                             <div className='flex flex-wrap items-center justify-center gap-2'>
-                                                {/* Promote / demote */}
+                                                {/* Promote / demote.
+                                                    Demote is hidden for
+                                                    protected commissioners
+                                                    and for our own row; the
+                                                    backend refuses both
+                                                    anyway, this just avoids
+                                                    a dead button. */}
                                                 {u.isCommissioner ? (
-                                                    <button
-                                                        type='button'
-                                                        onClick={() => void handleDemote(u.id)}
-                                                        disabled={usersBusyId === u.id}
-                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
-                                                    >
-                                                        Retirer commissaire
-                                                    </button>
+                                                    u.isProtected ? (
+                                                        <span
+                                                            className='cursor-default rounded border border-border bg-secondary/40 px-2 py-0.5 text-xs italic text-muted-foreground'
+                                                            title='Commissaire protégé : ne peut pas être rétrogradé'
+                                                        >
+                                                            🔒 Protégé
+                                                        </span>
+                                                    ) : authUser?.id === u.id ? (
+                                                        <span
+                                                            className='cursor-default rounded border border-border bg-secondary/40 px-2 py-0.5 text-xs italic text-muted-foreground'
+                                                            title='Vous ne pouvez pas retirer votre propre rôle'
+                                                        >
+                                                            Vous-même
+                                                        </span>
+                                                    ) : (
+                                                        <button
+                                                            type='button'
+                                                            onClick={() => void handleDemote(u.id)}
+                                                            disabled={usersBusyId === u.id}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            Retirer commissaire
+                                                        </button>
+                                                    )
                                                 ) : (
                                                     <button
                                                         type='button'
@@ -1959,6 +2166,117 @@ export default function AdminPage() {
                 )}
             </div>
 
+
+            {/* ============================================================
+                Contrats verrouillés
+                ============================================================ */}
+            <div className='max-w-2xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Contrats verrouillés
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Joueurs dont le contrat est manuellement figé et ne
+                    sera jamais écrasé par la synchronisation CapFreeze.
+                    Les contrats dont la dernière saison est passée
+                    disparaissent automatiquement de cette liste.
+                </p>
+
+                {protectedError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {protectedError}
+                    </p>
+                )}
+
+                {protectedLoading && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {!protectedLoading &&
+                    protectedContracts.length === 0 &&
+                    !protectedError && (
+                        <p className='text-sm text-muted-foreground'>
+                            Aucun contrat verrouillé actif.
+                        </p>
+                    )}
+
+                {!protectedLoading && protectedContracts.length > 0 && (
+                    <ul className='space-y-2'>
+                        {protectedContracts.map((pc) => (
+                            <li
+                                key={pc.nhlPlayerId}
+                                className='rounded-lg border border-border bg-card px-3 py-2 text-sm'
+                            >
+                                <div className='flex items-baseline justify-between gap-2'>
+                                    <span className='font-medium text-foreground'>
+                                        {pc.playerName}
+                                    </span>
+
+                                    {pc.teamAbbreviation && (
+                                        <span className='text-xs text-muted-foreground'>
+                                            {pc.teamAbbreviation}
+                                        </span>
+                                    )}
+                                </div>
+
+                                <ul className='mt-1 space-y-0.5 text-xs text-muted-foreground'>
+                                    {pc.contracts.map((c) => (
+                                        <li
+                                            key={`${pc.nhlPlayerId}-${c.startSeason}`}
+                                        >
+                                            {formatSeasonCode(c.startSeason)}{' '}
+                                            → {formatSeasonCode(c.endSeason)}
+                                            {' · '}
+                                            {(c.salary / 1_000_000)
+                                                .toFixed(2)
+                                                .replace(/\.?0+$/, '')}
+                                            M
+                                        </li>
+                                    ))}
+                                </ul>
+
+                                <p className='mt-1 text-[0.65rem] text-muted-foreground'>
+                                    Expire après {formatSeasonCode(pc.expiresAfterSeason)}
+                                </p>
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </div>
+
+            {/* ============================================================
+                Export des alignements
+                ============================================================ */}
+            <div className='max-w-2xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Export des alignements
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Télécharge un fichier texte contenant l'alignement
+                    actuel de chaque équipe (Alignement principal, Banc,
+                    Prospects) avec les positions et les salaires.
+                </p>
+
+                {exportRostersError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {exportRostersError}
+                    </p>
+                )}
+
+                <button
+                    type='button'
+                    onClick={() => void handleExportRosters()}
+                    disabled={exportingRosters || teams.length === 0}
+                    className={primaryButtonClass}
+                >
+                    {exportingRosters
+                        ? 'Préparation du fichier...'
+                        : 'Télécharger ROSTERS'}
+                </button>
+            </div>
 
             {/* Appearance settings (hidden behind a toggle) */}
             <div className='max-w-2xl space-y-3'>

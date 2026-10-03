@@ -49,6 +49,14 @@ namespace NhlFantasyLeague.api.Models.Auth
         public int? FantasyTeamId { get; set; }
         public string? FantasyTeamName { get; set; }
         public bool IsCommissioner { get; set; }
+
+        /// <summary>
+        /// True when the user is in Auth:ProtectedCommissionerUsernames.
+        /// Protected commissioners can never be demoted, so the admin
+        /// page hides the "Retirer commissaire" button for them.
+        /// </summary>
+        public bool IsProtected { get; set; }
+
         public DateTime CreatedAt { get; set; }
     }
 

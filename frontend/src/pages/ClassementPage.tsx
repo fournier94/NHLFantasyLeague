@@ -1,13 +1,7 @@
 ﻿import { useEffect, useState } from 'react';
 import { getStandings, type StandingsRow } from '@/api/client';
 import { cn } from '@/lib/utils';
-import { useAura } from '@/lib/auraContext';
-import {
-    auraPulseClass,
-    auraPulseStyle,
-    auraRangeFor,
-    isAuraOff,
-} from '@/lib/auraConfig';
+import { NeonTitle } from '@/components/ui/NeonTitle';
 
 /**
  * Classement (standings) page.
@@ -15,19 +9,11 @@ import {
  * Read-only view of GET /api/Standings. Every number comes from the
  * backend; this page never computes anything. The standings are
  * refreshed by the recompute step of the NHL refresh pipeline.
- *
- * Columns: Rank, Team, GP (skaters + goalies), PTS (skater points +
- * goalie points), 3B (skater hat tricks), W / OTL / SO (goalies),
- * and FP (the total that decides the standings).
- *
- * Every cell and header is centered.
  */
 export default function ClassementPage() {
     const [rows, setRows] = useState<StandingsRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-
-    const titleAura = useAura('rosterSectionTitle');
 
     useEffect(() => {
         let cancelled = false;
@@ -43,9 +29,7 @@ export default function ClassementPage() {
             })
             .catch(() => {
                 if (!cancelled) {
-                    setError(
-                        'Vérifiez que le serveur API est démarré.',
-                    );
+                    setError('Vérifiez que le serveur API est démarré.');
                 }
             })
             .finally(() => {
@@ -59,20 +43,6 @@ export default function ClassementPage() {
         };
     }, []);
 
-    const titleRest = [
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 2).toFixed(2)}px rgba(0, 168, 255, 0.5)`,
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 3).toFixed(2)}px rgba(0, 168, 255, 0.25)`,
-    ].join(', ');
-
-    const titlePeak = [
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 2).toFixed(2)}px rgba(0, 168, 255, 0.65)`,
-        `0 0 ${auraRangeFor(titleAura, 'rosterSectionTitle', 3).toFixed(2)}px rgba(0, 168, 255, 0.4)`,
-    ].join(', ');
-
     if (loading) {
         return <p className='text-muted-foreground'>Chargement...</p>;
     }
@@ -84,8 +54,8 @@ export default function ClassementPage() {
     if (rows.length === 0) {
         return (
             <section className='w-full space-y-4'>
-                <h2 className='text-center text-2xl font-semibold text-foreground'>
-                    Classement
+                <h2 className='text-center'>
+                    <NeonTitle>Classement</NeonTitle>
                 </h2>
                 <p className='text-center text-muted-foreground'>
                     Aucune donnée de classement pour le moment.
@@ -96,18 +66,8 @@ export default function ClassementPage() {
 
     return (
         <section className='w-full space-y-4'>
-            <h2
-                className={cn(
-                    'text-center text-2xl font-semibold text-white',
-                    !isAuraOff(titleAura) ? auraPulseClass('text') : '',
-                )}
-                style={
-                    !isAuraOff(titleAura)
-                        ? auraPulseStyle(titleRest, titlePeak)
-                        : undefined
-                }
-            >
-                Classement
+            <h2 className='text-center'>
+                <NeonTitle>Classement</NeonTitle>
             </h2>
 
             <div className='w-full rounded-lg border border-border bg-card'>

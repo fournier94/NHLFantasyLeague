@@ -181,6 +181,8 @@ export interface AdminUserRow {
     fantasyTeamId: number | null;
     fantasyTeamName: string | null;
     isCommissioner: boolean;
+    /** True when the user is in the protected list and can't be demoted. */
+    isProtected: boolean;
     createdAt: string;
 }
 
@@ -310,6 +312,15 @@ export interface RosterEntry {
     currentSeason: SeasonStatLine | null;
     currentContract: PlayerContractLine | null;
     secondContract: PlayerContractLine | null;
+
+    /** "NhlRoster" | "AhlRoster" | "Injured" | "NotOnActiveRoster" | null */
+    rosterLocation: string | null;
+
+    /** FP yesterday; null = didn't play, 0 = played, no points. */
+    yesterdayFantasyPoints: number | null;
+
+    /** FP today; null = hasn't played yet, 0 = played, no points. */
+    todayFantasyPoints: number | null;
 
     isInjured: boolean;
     injuryStatus: string | null;
@@ -809,4 +820,34 @@ export interface ExternalSourceHealthResponse {
 
 export function getExternalSourceHealth(): Promise<ExternalSourceHealthResponse> {
     return apiGet<ExternalSourceHealthResponse>('/Health/external-sources');
+}
+
+// ---------------------------------------------------------------------
+// Protected contracts (commissioner only view)
+// ---------------------------------------------------------------------
+
+export interface ProtectedContractLine {
+    startSeason: number;
+    endSeason: number;
+    salary: number;
+}
+
+export interface ProtectedPlayerContract {
+    nhlPlayerId: number;
+    playerName: string;
+    teamAbbreviation: string | null;
+    contracts: ProtectedContractLine[];
+    expiresAfterSeason: number;
+    isActive: boolean;
+}
+
+export interface ProtectedContractsResponse {
+    currentSeasonNhlCode: number;
+    protectedContracts: ProtectedPlayerContract[];
+}
+
+export function getProtectedContracts(): Promise<ProtectedContractsResponse> {
+    return apiGet<ProtectedContractsResponse>(
+        '/CapFreezeContract/capfreeze/protected-contracts',
+    );
 }
