@@ -10,6 +10,17 @@ using NhlFantasyLeague.api.Services.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Render injects a PORT environment variable (default 10000) and
+// requires the app to bind to 0.0.0.0 on that port. Configuring
+// Kestrel explicitly here avoids any ambiguity with environment
+// variables like ASPNETCORE_URLS or ASPNETCORE_HTTP_PORTS.
+var renderPort = Environment.GetEnvironmentVariable("PORT");
+var listenPort = int.TryParse(renderPort, out var p) ? p : 10000;
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(listenPort);
+});
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("DefaultConnection")));
