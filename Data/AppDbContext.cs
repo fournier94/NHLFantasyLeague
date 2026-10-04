@@ -70,9 +70,8 @@ namespace NhlFantasyLeague.api.Data
             // Store PlayerPageStyle as its string name so the DB stays
             // readable and enum reordering never breaks existing rows.
             modelBuilder.Entity<ApplicationUser>()
-         .Property(u => u.PlayerPageStyle)
-         .HasConversion<string>()
-         .HasDefaultValue(PlayerPageStyle.Classic);
+      .Property(u => u.PlayerPageStyle)
+      .HasConversion<string>();
 
             // -----------------------------------------------------------------
             // Existing model configuration, unchanged below.
@@ -216,8 +215,14 @@ namespace NhlFantasyLeague.api.Data
                 .IsUnique();
 
             modelBuilder.Entity<PlayerGameLog>()
-                .HasIndex(x => new { x.PlayerId, x.NhlGameId })
-                .IsUnique();
+     .HasIndex(x => new { x.PlayerId, x.NhlGameId })
+     .IsUnique();
+
+            // Performance: the daily-totals and season-recompute queries filter
+            // by (SeasonId, GameDate). Without this index, each call scans every
+            // game log in the table.
+            modelBuilder.Entity<PlayerGameLog>()
+                .HasIndex(x => new { x.SeasonId, x.GameDate });
 
             modelBuilder.Entity<PlayerCareerStat>()
                 .HasIndex(x => new
@@ -323,9 +328,18 @@ namespace NhlFantasyLeague.api.Data
                 .OnDelete(DeleteBehavior.Restrict);
 
             modelBuilder.Entity<RosterStatusHistory>()
+      .HasIndex(h => new
+      {
+          h.PlayerId,
+          h.SeasonId,
+          h.EffectiveAt
+      });
+
+            // Performance: standings and daily totals load every history row for
+            // a season. Without this index, PostgreSQL scans the whole table.
+            modelBuilder.Entity<RosterStatusHistory>()
                 .HasIndex(h => new
                 {
-                    h.PlayerId,
                     h.SeasonId,
                     h.EffectiveAt
                 });
