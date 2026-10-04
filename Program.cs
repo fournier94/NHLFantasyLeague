@@ -230,7 +230,12 @@ app.UseResponseCompression();
 
 app.UseAuthentication();
 app.UseAuthorization();
-
+// Lightweight warm-up endpoint for the cron job. Returns 200 with
+// no DB access and no auth, so it can't fail for reasons unrelated
+// to the container being alive. Point cron-job.org at:
+//   https://nhl-fantasy-api-w0jw.onrender.com/ping
+app.MapGet("/ping", () => Results.Ok("pong"))
+   .AllowAnonymous();
 app.MapControllers();
 
 app.Run();
