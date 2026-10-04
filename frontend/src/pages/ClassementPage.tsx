@@ -131,7 +131,7 @@ export default function ClassementPage() {
         return (
             <section className='w-full space-y-4'>
                 <h2 className='text-center'>
-                    <NeonTitle>Classement</NeonTitle>
+                    <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
                 </h2>
                 <p className='text-center text-muted-foreground'>
                     Aucune donnée de classement pour le moment.
@@ -164,7 +164,7 @@ export default function ClassementPage() {
     return (
         <section className='w-full space-y-4'>
             <h2 className='text-center'>
-                <NeonTitle>Classement</NeonTitle>
+                <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
             </h2>
 
             <div className='w-full rounded-lg border border-border bg-card'>

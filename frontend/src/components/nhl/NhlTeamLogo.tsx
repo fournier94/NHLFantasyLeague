@@ -13,16 +13,18 @@ interface NhlTeamLogoProps {
  * The URL format is stable and used by nhl.com itself:
  *   https://assets.nhle.com/logos/nhl/svg/{TEAM}_light.svg
  *
- * The browser fetches each logo on demand (only the teams that
- * actually appear on screen), then caches them indefinitely.
+ * Sizing: width/height are set as inline styles, not just HTML
+ * attributes. Tailwind v4's preflight applies `height: auto` and
+ * `max-width: 100%` to every <img>, which silently overrides the
+ * width/height attributes and lets the logo shrink to whatever the
+ * parent's flex algorithm decides. Inline styles have higher
+ * specificity than the preflight rule, so the size is enforced.
+ * minWidth/minHeight + flexShrink: 0 prevent the flex parent from
+ * squeezing the image below its intended size.
  *
- * Wrapped in React.memo: an unchanged (abbreviation, size) pair
- * short-circuits the render entirely. This matters a lot because
- * NhlTeamLogo is rendered inside nearly every lineup row and every
- * player card, so on a full Mon équipe page there are 30+ instances
- * of it. Without memo, opening the team picker (or any other
- * unrelated parent re-render) would schedule 30+ brand-new <img>
- * elements. With memo, React reuses the previous subtree.
+ * Wrapped in React.memo so an unchanged (abbreviation, size) pair
+ * short-circuits the render entirely. This matters because the
+ * component is used inside every lineup row and every player card.
  */
 export const NhlTeamLogo = memo(function NhlTeamLogo({
     abbreviation,
@@ -38,12 +40,15 @@ export const NhlTeamLogo = memo(function NhlTeamLogo({
         <img
             src={`https://assets.nhle.com/logos/nhl/svg/${abbr}_light.svg`}
             alt={abbr}
-            width={size}
-            height={size}
             loading='lazy'
             decoding='async'
             style={{
                 display: 'block',
+                width: size,
+                height: size,
+                minWidth: size,
+                minHeight: size,
+                flexShrink: 0,
                 objectFit: 'contain',
             }}
         />

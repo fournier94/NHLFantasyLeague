@@ -858,7 +858,7 @@ export default function MonEquipePage() {
                                     because the glyphs are already
                                     thick enough to hollow out. */}
                                 <span
-                                    className={`text-2xl leading-none tracking-[0.02em] ${neonAuraOn ? auraPulseClass('text') : ''
+                                    className={`text-2xl leading-none tracking-[0.02em] ${neonAuraOn ? `${auraPulseClass('text')} aura-mobile-keep` : ''
                                         }`}
                                     style={{
                                         fontFamily: "'Grindy Brush', sans-serif",
@@ -889,7 +889,7 @@ export default function MonEquipePage() {
                                     that size. */}
                                 <span
                                     aria-hidden='true'
-                                    className={`pointer-events-none absolute left-full top-1/2 ml-2 inline-block text-sm leading-none transition-transform duration-200 ${neonAuraOn ? auraPulseClass('text') : ''
+                                    className={`pointer-events-none absolute left-full top-1/2 ml-2 inline-block text-sm leading-none transition-transform duration-200 ${neonAuraOn ? `${auraPulseClass('text')} aura-mobile-keep` : ''
                                         }`}
                                     style={{
                                         transform: isTeamPickerOpen
