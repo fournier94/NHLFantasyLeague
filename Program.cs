@@ -8,6 +8,7 @@ using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.Auth;
+using NhlFantasyLeague.api.Services.Cache;
 using NhlFantasyLeague.api.Services.CapFreeze;
 using NhlFantasyLeague.api.Services.Health;
 using NhlFantasyLeague.api.Services.Jobs;
@@ -16,20 +17,10 @@ using System.IO.Compression;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------------------------------------------------------------------
-// Kestrel binding
-//
-// On Render, a PORT environment variable is injected and the app must
-// bind to 0.0.0.0 on that port. Locally, PORT is undefined, so we do
-// NOT call UseUrls: this lets launchSettings.json drive the binding
-// (https://localhost:7081 by default), which is what the Vite dev
+// Render injects a PORT environment variable. Locally, PORT is
+// undefined, so we do NOT call UseUrls: launchSettings.json drives
+// the binding (https://localhost:7081), which is what the Vite dev
 // proxy targets.
-//
-// Calling UseUrls unconditionally would override launchSettings and
-// force the API onto port 10000 with HTTP only, breaking both the
-// Vite proxy and Swagger during local development.
-// ---------------------------------------------------------------------
-
 var renderPort = Environment.GetEnvironmentVariable("PORT");
 
 if (!string.IsNullOrEmpty(renderPort))
@@ -39,15 +30,6 @@ if (!string.IsNullOrEmpty(renderPort))
 
 // ---------------------------------------------------------------------
 // Response compression
-//
-// Every JSON response over the size threshold is compressed with Brotli
-// (falling back to Gzip on clients that don't support Brotli). For a
-// team roster payload this typically cuts the wire size by 70-85%.
-// On slow mobile connections this is the single biggest win available.
-//
-// EnableForHttps is required because Render terminates TLS at its edge
-// and forwards HTTP to us, but the browser-visible response is HTTPS.
-// Without this flag ASP.NET refuses to compress over HTTPS.
 // ---------------------------------------------------------------------
 
 builder.Services.AddResponseCompression(options =>
@@ -66,9 +48,6 @@ builder.Services.AddResponseCompression(options =>
 
 builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
 {
-    // Fastest is a good tradeoff: ~70% reduction for minimal CPU cost.
-    // Optimal would be slightly smaller but noticeably more expensive
-    // per response, which matters on Render Free's shared 0.5 CPU.
     options.Level = CompressionLevel.Fastest;
 });
 
@@ -82,16 +61,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
         builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ---------------------------------------------------------------------
-// Data Protection
-//
-// The key ring is persisted to PostgreSQL via a custom IXmlRepository
-// (see Services/Auth/EfCoreXmlRepository.cs) so auth cookies survive
-// API restarts and Render redeploys. Without this, every redeploy
-// generates a new key ring, and every existing cookie becomes
-// undecryptable, which silently logs everyone out.
-//
-// SetApplicationName is required: it tells every instance (and every
-// deployment) to look up the same key ring.
+// Data Protection — key ring persisted to PostgreSQL
 // ---------------------------------------------------------------------
 
 builder.Services.AddSingleton<IXmlRepository, EfCoreXmlRepository>();
@@ -133,21 +103,12 @@ builder.Services
     {
         options.Cookie.Name = "LigueMousse.Auth";
         options.Cookie.HttpOnly = true;
-
-        // Same-origin in practice: Vercel rewrites /api/* to the Render
-        // API, so the browser only ever talks to one origin. SameSite=Lax
-        // is therefore sufficient, and safer than None.
         options.Cookie.SameSite = SameSiteMode.Lax;
 
-        // LAN testing from a phone during development needs plain HTTP.
-        // In every other environment the deployment is behind HTTPS,
-        // so mark the cookie Secure.
         options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
             ? CookieSecurePolicy.None
             : CookieSecurePolicy.Always;
 
-        // One year. Combined with sliding expiration, a user who visits
-        // at least once every six months is never logged out.
         options.ExpireTimeSpan = TimeSpan.FromDays(365);
         options.SlidingExpiration = true;
 
@@ -213,30 +174,37 @@ builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
     client.Timeout = TimeSpan.FromSeconds(90);
 });
 
-// Background jobs: runs long operations (refresh-all, roster status,
-// hat-trick backfill) on a background thread so the browser never
-// waits longer than a second for a response.
-builder.Services.AddSingleton<NhlFantasyLeague.api.Services.Jobs.BackgroundJobService>();
-// Live game cache: singleton, in-memory. Shared between the
-// scheduled jobs runner and the Game Day controller.
+// ---------------------------------------------------------------------
+// Background jobs, live cache, response cache
+// ---------------------------------------------------------------------
+
+// Existing long-running job runner (refresh-all, roster status,
+// hat-trick backfill). Browser-facing; polled.
+builder.Services.AddSingleton<BackgroundJobService>();
+
+// In-memory live game cache. Serves Game Day without touching the DB.
 builder.Services.AddSingleton<LiveGameCache>();
 
-// Scheduled jobs runner: singleton. Owns the state and the four
-// jobs. Both the hosted service and the manual trigger controller
-// resolve it.
+// Response cache. Short-circuits repeated GETs so user traffic does
+// not wake Neon on every page load.
+builder.Services.AddSingleton<ResponseCacheService>();
+
+// Scheduled jobs runner. Owns the six jobs and their state. Injects
+// IServiceScopeFactory so it can create scopes for scoped services.
 builder.Services.AddSingleton<ScheduledJobsRunner>();
 
 // The tick loop. Runs every 30 s in the background.
 builder.Services.AddHostedService<ScheduledJobsHostedService>();
 
-// NhlGameService is scoped (uses AppDbContext).
+// Game Day service (schedule, boxscore, live cache refresh, post-game write).
 builder.Services.AddHttpClient<NhlGameService>();
+
 // Bootstraps the Commissioner role from appsettings on startup.
 builder.Services.AddHostedService<CommissionerBootstrapService>();
 
 var app = builder.Build();
 
-// Apply any pending EF Core migrations to the database at startup.
+// Apply any pending EF Core migrations at startup.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -250,19 +218,12 @@ if (app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
-// Must come before the endpoints are registered so every response
-// gets compressed. Placed before UseAuthentication because the auth
-// middleware writes its own small responses that don't need to be
-// compressed anyway.
 app.UseResponseCompression();
 
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Lightweight warm-up endpoint for the cron job. Returns 200 with
-// no DB access and no auth, so it can't fail for reasons unrelated
-// to the container being alive. Point cron-job.org at:
-//   https://nhl-fantasy-api-w0jw.onrender.com/ping
+// Lightweight warm-up endpoint for the cron job.
 app.MapGet("/ping", () => Results.Ok("pong"))
    .AllowAnonymous();
 

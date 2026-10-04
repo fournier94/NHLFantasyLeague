@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models.Dtos;
+using NhlFantasyLeague.api.Services.Cache;
 using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers
@@ -10,21 +11,57 @@ namespace NhlFantasyLeague.api.Controllers
     [Route("api/[controller]")]
     public class StandingsController : ControllerBase
     {
+        /// <summary>
+        /// Standings change only during games. During a live slate,
+        /// users refresh constantly; a 30-second cache turns 20 loads
+        /// per minute into 2. Off-hours, nothing changes anyway.
+        /// </summary>
+        private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
+
         private readonly AppDbContext _dbContext;
         private readonly NhlGameLogService _nhlGameLogService;
+        private readonly ResponseCacheService _cache;
 
         public StandingsController(
             AppDbContext dbContext,
-            NhlGameLogService nhlGameLogService)
+            NhlGameLogService nhlGameLogService,
+            ResponseCacheService cache)
         {
             _dbContext = dbContext;
             _nhlGameLogService = nhlGameLogService;
+            _cache = cache;
         }
 
         [HttpGet]
         public async Task<IActionResult> GetStandings(
             [FromQuery] int? seasonId,
             CancellationToken ct = default)
+        {
+            var cacheKey = seasonId.HasValue
+                ? $"standings:{seasonId.Value}"
+                : "standings:current";
+
+            var rows = await _cache.GetOrCreateAsync(
+                cacheKey,
+                CacheTtl,
+                () => BuildStandingsAsync(seasonId, ct));
+
+            if (rows == null)
+            {
+                return NotFound(new
+                {
+                    message = seasonId.HasValue
+                        ? $"Season {seasonId.Value} not found."
+                        : "No season exists yet. Run POST /api/League/setup."
+                });
+            }
+
+            return Ok(rows);
+        }
+
+        private async Task<List<StandingsRowDto>?> BuildStandingsAsync(
+            int? seasonId,
+            CancellationToken ct)
         {
             var season = seasonId.HasValue
                 ? await _dbContext.Seasons
@@ -35,12 +72,7 @@ namespace NhlFantasyLeague.api.Controllers
 
             if (season == null)
             {
-                return NotFound(new
-                {
-                    message = seasonId.HasValue
-                        ? $"Season {seasonId.Value} not found."
-                        : "No season exists yet. Run POST /api/League/setup."
-                });
+                return null;
             }
 
             var rows = await _dbContext.FantasyTeamSeasons
@@ -65,17 +97,13 @@ namespace NhlFantasyLeague.api.Controllers
                     GoaliePoints = fts.GoaliePoints,
 
                     TotalFantasyPoints = fts.TotalFantasyPoints,
-                    TotalFantasyPointsComputedAt = fts.TotalFantasyPointsComputedAt
+                    TotalFantasyPointsComputedAt =
+                        fts.TotalFantasyPointsComputedAt
                 })
                 .ToListAsync(ct);
 
-            // Yesterday / today totals, computed on the fly. UTC
-            // calendar days to match the PlayerGameLog.GameDate
-            // convention used everywhere else.
-            //
-            // Load the whole season's RosterStatusHistories ONCE and
-            // hand it to both computations. Without this, the service
-            // would fetch the same ~2,000 rows from Neon twice.
+            // Yesterday / today totals, computed on the fly. The season
+            // history is loaded once and handed to both computations.
             var seasonHistory = await _dbContext.RosterStatusHistories
                 .AsNoTracking()
                 .Where(h => h.SeasonId == season.Id)
@@ -109,7 +137,7 @@ namespace NhlFantasyLeague.api.Controllers
                     .GetValueOrDefault(row.FantasyTeamId);
             }
 
-            var ranked = rows
+            return rows
                 .OrderByDescending(r => r.TotalFantasyPoints)
                 .ThenBy(r => r.FantasyTeamName)
                 .Select((r, index) =>
@@ -118,8 +146,6 @@ namespace NhlFantasyLeague.api.Controllers
                     return r;
                 })
                 .ToList();
-
-            return Ok(ranked);
         }
     }
 }

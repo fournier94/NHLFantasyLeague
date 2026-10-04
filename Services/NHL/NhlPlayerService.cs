@@ -154,6 +154,83 @@ namespace NhlFantasyLeague.api.Services.NHL
             return player;
         }
 
+        /// <summary>
+        /// Refreshes the landing data (career stats, bio, draft info,
+        /// current-season totals) for every player who played on the
+        /// given date. Uses the existing SavePlayerAsync path, one
+        /// player at a time, clearing the ChangeTracker between
+        /// players so memory stays flat.
+        ///
+        /// Typical run: ~200-400 players, ~5 minutes. Runs once per
+        /// day at 8:30 AM ET after the daily refresh, so the player
+        /// pages show last night's results before users wake up.
+        /// </summary>
+        public async Task<RefreshRecentPlayersResult> RefreshPlayersWhoPlayedOnAsync(
+            DateOnly date,
+            int delayMsBetweenPlayers = 500,
+            CancellationToken ct = default)
+        {
+            var result = new RefreshRecentPlayersResult { Date = date };
+
+            // Distinct NHL player IDs who appeared in a game on this
+            // date. Uses the DB, so we do not need any NHL API call
+            // to figure out who played.
+            var nhlPlayerIds = await _dbContext.PlayerGameLogs
+                .AsNoTracking()
+                .Where(g => g.GameDate == date)
+                .Join(
+                    _dbContext.Players.AsNoTracking(),
+                    g => g.PlayerId,
+                    p => p.Id,
+                    (g, p) => p.NhlPlayerId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            result.TotalPlayers = nhlPlayerIds.Count;
+
+            foreach (var nhlId in nhlPlayerIds)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (nhlId <= 0)
+                {
+                    result.SkippedNoNhlId++;
+                    continue;
+                }
+
+                try
+                {
+                    var player = await SavePlayerAsync(nhlId);
+
+                    if (player != null)
+                    {
+                        result.PlayersRefreshed++;
+                    }
+                    else
+                    {
+                        result.SkippedNoLandingData++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    result.FailedPlayers++;
+                    result.Errors.Add(
+                        $"{nhlId}: {ex.GetType().Name}: {ex.Message}");
+                }
+
+                // Release every tracked entity before the next player.
+                // Without this, memory climbs linearly over 400 players.
+                _dbContext.ChangeTracker.Clear();
+
+                if (delayMsBetweenPlayers > 0)
+                {
+                    await Task.Delay(delayMsBetweenPlayers, ct);
+                }
+            }
+
+            return result;
+        }
+
         public async Task<NhlPlayerSyncResult> DiscoverPlayerIdsAsync()
         {
             var teams = await _dbContext.NhlTeams
@@ -461,8 +538,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                         $"{player.FirstName} {player.LastName} " +
                         $"(NHL ID: {player.NhlPlayerId})");
 
-                    // Raw career history (PlayerCareerStat): every season,
-                    // every league, every game type, one row per Sequence.
                     await _nhlStatsService.SyncCareerStatsFromLandingAsync(
                         player,
                         nhlPlayer);
@@ -473,8 +548,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                     await _dbContext.SaveChangesAsync();
 
-                    // Fantasy season row (PlayerSeasonStat): one row for the
-                    // current season, NHL regular season only.
                     await _nhlStatsService.UpsertFantasySeasonStatAsync(
                         player,
                         nhlPlayer);
@@ -582,11 +655,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
         }
 
-        /// <summary>
-        /// Copies draft details from the NHL landing response onto the
-        /// player. Undrafted players have no draftDetails, in which case
-        /// the fields stay null.
-        /// </summary>
         public static void UpdatePlayerDraftInfo(
             Player player,
             NhlPlayerResponse response)
@@ -595,8 +663,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             if (draft == null || draft.Year == 0)
             {
-                // No draft info in the payload. Leave whatever we already
-                // have, in case a previous sync caught it.
                 return;
             }
 
@@ -623,5 +689,19 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             return player;
         }
+    }
+
+    /// <summary>
+    /// Summary of a "refresh recent players" run.
+    /// </summary>
+    public class RefreshRecentPlayersResult
+    {
+        public DateOnly Date { get; set; }
+        public int TotalPlayers { get; set; }
+        public int PlayersRefreshed { get; set; }
+        public int SkippedNoLandingData { get; set; }
+        public int SkippedNoNhlId { get; set; }
+        public int FailedPlayers { get; set; }
+        public List<string> Errors { get; set; } = new();
     }
 }

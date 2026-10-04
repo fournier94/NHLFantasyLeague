@@ -14,6 +14,8 @@ namespace NhlFantasyLeague.api.Services
     public class RosterAdminService
     {
         private readonly AppDbContext _dbContext;
+        private readonly Services.Jobs.ScheduledJobsRunner _jobs;
+        private readonly Services.Cache.ResponseCacheService _cache;
 
         /// <summary>NHL season code of two seasons ago (2024-25), used by the player cards.</summary>
         private const int TwoSeasonsAgoNhlCode = 20242025;
@@ -27,9 +29,14 @@ namespace NhlFantasyLeague.api.Services
         /// <summary>How many seasons the future cap projection covers, starting with the current one.</summary>
         private const int FutureCapSeasonCount = 5;
 
-        public RosterAdminService(AppDbContext dbContext)
+        public RosterAdminService(
+              AppDbContext dbContext,
+              Services.Jobs.ScheduledJobsRunner jobs,
+              Services.Cache.ResponseCacheService cache)
         {
             _dbContext = dbContext;
+            _jobs = jobs;
+            _cache = cache;
         }
 
         public async Task<RosterActionResultDto> AssignPlayerAsync(AssignPlayerRequest request)
@@ -103,6 +110,8 @@ namespace NhlFantasyLeague.api.Services
             _dbContext.RosterEntries.Add(entry);
 
             await _dbContext.SaveChangesAsync();
+
+            OnRosterChanged();
 
             return new RosterActionResultDto
             {
@@ -199,6 +208,8 @@ namespace NhlFantasyLeague.api.Services
 
             await _dbContext.SaveChangesAsync();
 
+            OnRosterChanged();
+
             return new RosterActionResultDto
             {
                 Success = true,
@@ -229,6 +240,8 @@ namespace NhlFantasyLeague.api.Services
             _dbContext.RosterEntries.Remove(entry);
 
             await _dbContext.SaveChangesAsync();
+
+            OnRosterChanged();
 
             return new RosterActionResultDto
             {
@@ -263,6 +276,8 @@ namespace NhlFantasyLeague.api.Services
 
             _dbContext.RosterEntries.RemoveRange(entries);
             await _dbContext.SaveChangesAsync();
+
+            OnRosterChanged();
 
             return new RosterActionResultDto
             {
@@ -329,6 +344,8 @@ namespace NhlFantasyLeague.api.Services
                 note);
 
             await _dbContext.SaveChangesAsync();
+
+            OnRosterChanged();
 
             return new RosterActionResultDto
             {
@@ -408,6 +425,8 @@ namespace NhlFantasyLeague.api.Services
                 request.Note ?? $"Set {previousStatus} -> {newStatus}");
 
             await _dbContext.SaveChangesAsync();
+
+            OnRosterChanged();
 
             return new RosterActionResultDto
             {
@@ -778,6 +797,8 @@ namespace NhlFantasyLeague.api.Services
 
             await _dbContext.SaveChangesAsync();
 
+            OnRosterChanged();
+
             return new RosterActionResultDto
             {
                 Success = true,
@@ -797,7 +818,32 @@ namespace NhlFantasyLeague.api.Services
         /// PlayerCareerStat (the raw, per-league history), not from
         /// PlayerSeasonStat (which is the fantasy table).
         /// </summary>
-        public async Task<TeamRosterDto?> GetTeamRosterAsync(int fantasyTeamId, int? seasonId)
+        /// <summary>
+        /// Roster payload, cached for 20 seconds. Every mutation in
+        /// this service invalidates the cache via OnRosterChanged, so
+        /// the only staleness window is a mutation made through a
+        /// different code path — which there isn't.
+        /// </summary>
+        private static readonly TimeSpan RosterCacheTtl =
+            TimeSpan.FromSeconds(20);
+
+        public async Task<TeamRosterDto?> GetTeamRosterAsync(
+            int fantasyTeamId,
+            int? seasonId)
+        {
+            var cacheKey = seasonId.HasValue
+                ? $"roster:{fantasyTeamId}:{seasonId.Value}"
+                : $"roster:{fantasyTeamId}:current";
+
+            return await _cache.GetOrCreateAsync(
+                cacheKey,
+                RosterCacheTtl,
+                () => BuildTeamRosterAsync(fantasyTeamId, seasonId));
+        }
+
+        private async Task<TeamRosterDto?> BuildTeamRosterAsync(
+            int fantasyTeamId,
+            int? seasonId)
         {
             var team = await _dbContext.FantasyTeams
       .AsNoTracking()
@@ -1259,6 +1305,20 @@ namespace NhlFantasyLeague.api.Services
 
             return Enum.TryParse(value, ignoreCase: true, out status)
                 && Enum.IsDefined(status);
+        }
+
+        /// <summary>
+        /// Called by every mutation method after SaveChangesAsync.
+        /// Signals the scheduler to recompute team totals, and drops
+        /// the cached read responses that are now stale. Because any
+        /// roster change can affect standings (the player might have
+        /// played today), we always invalidate both prefixes.
+        /// </summary>
+        private void OnRosterChanged()
+        {
+            _jobs.RequestRecompute();
+            _cache.Invalidate("roster:");
+            _cache.Invalidate("standings:");
         }
 
         private static RosterActionResultDto Failure(string message)
