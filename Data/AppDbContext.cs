@@ -70,9 +70,9 @@ namespace NhlFantasyLeague.api.Data
             // Store PlayerPageStyle as its string name so the DB stays
             // readable and enum reordering never breaks existing rows.
             modelBuilder.Entity<ApplicationUser>()
-       .Property(u => u.PlayerPageStyle)
-       .HasConversion<string>()
-       .HasDefaultValue(PlayerPageStyle.Neon);
+         .Property(u => u.PlayerPageStyle)
+         .HasConversion<string>()
+         .HasDefaultValue(PlayerPageStyle.Classic);
 
             // -----------------------------------------------------------------
             // Existing model configuration, unchanged below.

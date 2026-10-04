@@ -33,9 +33,9 @@ namespace NhlFantasyLeague.api.Models
 
         /// <summary>
         /// Visual style the user prefers for the PlayerPage. Persisted
-        /// across sessions. Defaults to Neon for new accounts.
+        /// across sessions. Defaults to Classic for new accounts.
         /// </summary>
-        public PlayerPageStyle PlayerPageStyle { get; set; } = PlayerPageStyle.Neon;
+        public PlayerPageStyle PlayerPageStyle { get; set; } = PlayerPageStyle.Classic;
 
         /// <summary>UTC instant the account was created.</summary>
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

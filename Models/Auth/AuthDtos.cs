@@ -44,7 +44,7 @@ namespace NhlFantasyLeague.api.Models.Auth
         /// the SPA so the page renders with the user's chosen look on
         /// every visit.
         /// </summary>
-        public string PlayerPageStyle { get; set; } = "Neon";
+        public string PlayerPageStyle { get; set; } = "Classic";
     }
 
     /// <summary>

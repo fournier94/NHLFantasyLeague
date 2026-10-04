@@ -141,7 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             loading,
             isAuthenticated: user != null,
             isCommissioner: user?.isCommissioner ?? false,
-            playerPageStyle: user?.playerPageStyle ?? 'Neon',
+            playerPageStyle: user?.playerPageStyle ?? 'Classic',
             updatePlayerPageStyle,
             login,
             register,
