@@ -1,7 +1,6 @@
 ﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getLeagueTeams, getTeamRoster, type FantasyTeam, type RosterEntry, type TeamRoster } from '@/api/client';
-import { PlayerCard } from '@/components/roster/PlayerCard';
 import { RosterSection } from '@/components/roster/RosterSection';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { useAura } from '@/lib/auraContext';
@@ -593,21 +592,6 @@ export default function MonEquipePage() {
             (entry) => toLineupPositionGroup(entry.position) === 'G',
         );
 
-        // The cap view uses the raw position string, not the lineup
-        // group, so a defenseman whose position is "LD" still lands
-        // in the defensemen card grid.
-        const forwards = activeEntries.filter(
-            (entry) => entry.position !== 'D' && entry.position !== 'G',
-        );
-        const defensemen = activeEntries.filter(
-            (entry) => entry.position === 'D',
-        );
-        const goalies = activeEntries.filter(
-            (entry) => entry.position === 'G',
-        );
-        const bench = benchEntries;
-        const prospects = prospectEntries;
-
         const maxSignedPlayers =
             roster.leagueMaximumRosterSize - roster.leagueProspectCount;
 
@@ -624,11 +608,6 @@ export default function MonEquipePage() {
             prospectForwards,
             prospectDefensemen,
             prospectGoalies,
-            forwards,
-            defensemen,
-            goalies,
-            bench,
-            prospects,
             maxSignedPlayers,
         };
     }, [roster]);
@@ -791,11 +770,6 @@ export default function MonEquipePage() {
         prospectForwards,
         prospectDefensemen,
         prospectGoalies,
-        forwards,
-        defensemen,
-        goalies,
-        bench,
-        prospects,
         maxSignedPlayers,
     } = rosterGroups;
 
@@ -1052,103 +1026,56 @@ export default function MonEquipePage() {
                 </>
             )}
 
-            {activeView === 'cap' && (
-                <>
-                    {roster.futureCapBySeason.length > 0 && (
-                        <div className='w-full'>
-                            <div className='space-y-2'>
-                                {roster.futureCapBySeason.map((row) => {
-                                    const pct = capPercentage(row.capSalary, row.salaryCap);
-                                    const available = Math.max(0, row.salaryCap - row.capSalary);
+            {activeView === 'cap' && roster.futureCapBySeason.length > 0 && (
+                <div className='w-full'>
+                    <div className='space-y-2'>
+                        {roster.futureCapBySeason.map((row) => {
+                            const pct = capPercentage(row.capSalary, row.salaryCap);
+                            const available = Math.max(0, row.salaryCap - row.capSalary);
 
-                                    return (
-                                        <div key={row.nhlSeasonCode}>
-                                            <div className='flex items-center gap-3'>
-                                                <span className='w-12 shrink-0 text-xs font-medium text-foreground'>
-                                                    {row.label}
-                                                </span>
+                            return (
+                                <div key={row.nhlSeasonCode}>
+                                    <div className='flex items-center gap-3'>
+                                        <span className='w-12 shrink-0 text-xs font-medium text-foreground'>
+                                            {row.label}
+                                        </span>
 
-                                                <div
-                                                    className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} ${!isAuraOff(trackAura)
-                                                        ? auraPulseClass('box')
-                                                        : ''
-                                                        }`}
-                                                    style={
-                                                        !isAuraOff(trackAura)
-                                                            ? auraPulseStyle(trackRest, trackPeak)
-                                                            : undefined
-                                                    }
-                                                >
-                                                    <div
-                                                        className='h-full rounded bg-cyan-400 transition-[width]'
-                                                        style={{ width: `${pct}%` }}
-                                                    />
-                                                </div>
-                                            </div>
-
-                                            <div className='mt-1 flex items-center justify-between pl-15 text-xs text-white'>
-                                                <span>
-                                                    {maxSignedPlayers > 0
-                                                        ? `${row.signedPlayers}/${maxSignedPlayers} sous contrats`
-                                                        : `${row.signedPlayers} sous contrats`}
-                                                </span>
-
-                                                <span>
-                                                    {available > 0
-                                                        ? `${compactMillions(available)} $ disponible`
-                                                        : '0 $ disponible'}
-                                                </span>
-                                            </div>
+                                        <div
+                                            className={`relative h-3 flex-1 overflow-hidden rounded ${trackColorClass(pct)} ${!isAuraOff(trackAura)
+                                                ? auraPulseClass('box')
+                                                : ''
+                                                }`}
+                                            style={
+                                                !isAuraOff(trackAura)
+                                                    ? auraPulseStyle(trackRest, trackPeak)
+                                                    : undefined
+                                            }
+                                        >
+                                            <div
+                                                className='h-full rounded bg-cyan-400 transition-[width]'
+                                                style={{ width: `${pct}%` }}
+                                            />
                                         </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
+                                    </div>
 
-                    <RosterSection title='Attaquants' count={forwards.length} spacing='compact'>
-                        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
-                            {forwards.map((entry) => (
-                                <PlayerCard key={entry.id} entry={entry} />
-                            ))}
-                        </div>
-                    </RosterSection>
+                                    <div className='mt-1 flex items-center justify-between pl-15 text-xs text-white'>
+                                        <span>
+                                            {maxSignedPlayers > 0
+                                                ? `${row.signedPlayers}/${maxSignedPlayers} sous contrats`
+                                                : `${row.signedPlayers} sous contrats`}
+                                        </span>
 
-                    <RosterSection title='Défenseurs' count={defensemen.length} spacing='large'>
-                        <div className='mx-auto grid w-full grid-cols-1 gap-3 md:w-2/3 md:grid-cols-2'>
-                            {defensemen.map((entry) => (
-                                <PlayerCard key={entry.id} entry={entry} />
-                            ))}
-                        </div>
-                    </RosterSection>
-
-                    <RosterSection title='Gardiens' count={goalies.length} spacing='large'>
-                        <div className='mx-auto w-full md:w-1/3 md:min-w-[260px]'>
-                            {goalies.map((entry) => (
-                                <PlayerCard
-                                    key={entry.id}
-                                    entry={entry}
-                                />
-                            ))}
-                        </div>
-                    </RosterSection>
-
-                    <RosterSection title='Banc' count={bench.length} spacing='large'>
-                        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
-                            {bench.map((entry) => (
-                                <PlayerCard key={entry.id} entry={entry} />
-                            ))}
-                        </div>
-                    </RosterSection>
-
-                    <RosterSection title='Prospects' count={prospects.length} spacing='large'>
-                        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
-                            {prospects.map((entry) => (
-                                <PlayerCard key={entry.id} entry={entry} />
-                            ))}
-                        </div>
-                    </RosterSection>
-                </>
+                                        <span>
+                                            {available > 0
+                                                ? `${compactMillions(available)} $ disponible`
+                                                : '0 $ disponible'}
+                                        </span>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
             )}
         </section>
     );

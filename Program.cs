@@ -15,12 +15,26 @@ using System.IO.Compression;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Render injects a PORT environment variable (default 10000) and
-// requires the app to bind to 0.0.0.0 on that port. Configuring
-// Kestrel explicitly here avoids any ambiguity with environment
-// variables like ASPNETCORE_URLS or ASPNETCORE_HTTP_PORTS.
-var renderPort = Environment.GetEnvironmentVariable("PORT") ?? "10000";
-builder.WebHost.UseUrls($"http://0.0.0.0:{renderPort}");
+// ---------------------------------------------------------------------
+// Kestrel binding
+//
+// On Render, a PORT environment variable is injected and the app must
+// bind to 0.0.0.0 on that port. Locally, PORT is undefined, so we do
+// NOT call UseUrls: this lets launchSettings.json drive the binding
+// (https://localhost:7081 by default), which is what the Vite dev
+// proxy targets.
+//
+// Calling UseUrls unconditionally would override launchSettings and
+// force the API onto port 10000 with HTTP only, breaking both the
+// Vite proxy and Swagger during local development.
+// ---------------------------------------------------------------------
+
+var renderPort = Environment.GetEnvironmentVariable("PORT");
+
+if (!string.IsNullOrEmpty(renderPort))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{renderPort}");
+}
 
 // ---------------------------------------------------------------------
 // Response compression
@@ -230,12 +244,14 @@ app.UseResponseCompression();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
 // Lightweight warm-up endpoint for the cron job. Returns 200 with
 // no DB access and no auth, so it can't fail for reasons unrelated
 // to the container being alive. Point cron-job.org at:
 //   https://nhl-fantasy-api-w0jw.onrender.com/ping
 app.MapGet("/ping", () => Results.Ok("pong"))
    .AllowAnonymous();
+
 app.MapControllers();
 
 app.Run();
