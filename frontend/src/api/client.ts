@@ -972,3 +972,133 @@ export function getProtectedContracts(): Promise<ProtectedContractsResponse> {
         '/CapFreezeContract/capfreeze/protected-contracts',
     );
 }
+
+// ---------------------------------------------------------------------
+// Game Day
+// ---------------------------------------------------------------------
+
+/** One game as shown on the Game Day page's list. */
+export interface GameDayGameSummary {
+    gameId: number;
+    gameDate: string;
+    startTimeUtc: string;
+    /** FUT, PRE, LIVE, CRIT, FINAL. */
+    gameState: string;
+    awayAbbreviation: string;
+    homeAbbreviation: string;
+    awayScore: number | null;
+    homeScore: number | null;
+    periodNumber: number | null;
+    periodType: string | null;
+    hasBoxscore: boolean;
+}
+
+export interface GameDayScheduleResponse {
+    lastRefreshUtc: string | null;
+    isFresh: boolean;
+    games: GameDayGameSummary[];
+}
+
+/** Named-value pair the NHL uses for player and team names. */
+export interface NhlLocalizedName {
+    default: string;
+}
+
+export interface NhlPeriodDescriptor {
+    number: number;
+    periodType: string;
+}
+
+export interface NhlSkaterStats {
+    playerId: number;
+    sweaterNumber: number | null;
+    name: NhlLocalizedName;
+    position: string;
+    goals: number;
+    assists: number;
+    points: number;
+    plusMinus: number;
+    pim: number;
+    hits: number;
+    powerPlayGoals: number;
+    shots: number;
+    headshot: string | null;
+}
+
+export interface NhlGoalieStats {
+    playerId: number;
+    sweaterNumber: number | null;
+    name: NhlLocalizedName;
+    decision: string | null;
+    goals: number;
+    assists: number;
+    points: number;
+    goalsAgainst: number;
+    shotsAgainst: number;
+    saves: number;
+    shutouts: number;
+    savePctg: number;
+    starter: boolean;
+}
+
+export interface NhlTeamPlayerStats {
+    forwards: NhlSkaterStats[];
+    defense: NhlSkaterStats[];
+    goalies: NhlGoalieStats[];
+}
+
+export interface NhlBoxscoreTeam {
+    id: number;
+    abbrev: string;
+    score: number;
+    sog: number;
+}
+
+export interface NhlBoxscoreResponse {
+    id: number;
+    season: number;
+    gameType: number;
+    gameDate: string;
+    gameState: string;
+    periodDescriptor: NhlPeriodDescriptor | null;
+    awayTeam: NhlBoxscoreTeam;
+    homeTeam: NhlBoxscoreTeam;
+    playerByGameStats: {
+        awayTeam: NhlTeamPlayerStats;
+        homeTeam: NhlTeamPlayerStats;
+    };
+}
+
+/**
+ * Today's NHL schedule with live scores.
+ *
+ * Pass refresh = true to force a synchronous live refresh on the
+ * backend before it responds. Otherwise the backend serves whatever
+ * is in its in-memory cache.
+ *
+ * Skipped from the response cache on purpose: the backend cache
+ * updates every 7 minutes during live games, so a cached client
+ * response would go stale silently.
+ */
+export function getTodayGames(
+    refresh = false,
+): Promise<GameDayScheduleResponse> {
+    const query = refresh ? '?refresh=true' : '';
+    return apiGet<GameDayScheduleResponse>(
+        `/Games/today${query}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
+/**
+ * Full boxscore for a single game, served from the backend's live
+ * cache. Never touches the database.
+ */
+export function getGameBoxscore(
+    gameId: number,
+): Promise<NhlBoxscoreResponse> {
+    return apiGet<NhlBoxscoreResponse>(
+        `/Games/${gameId}/boxscore`,
+        { cacheTtlMs: 0 },
+    );
+}

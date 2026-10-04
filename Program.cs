@@ -10,6 +10,7 @@ using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.CapFreeze;
 using NhlFantasyLeague.api.Services.Health;
+using NhlFantasyLeague.api.Services.Jobs;
 using NhlFantasyLeague.api.Services.NHL;
 using System.IO.Compression;
 
@@ -216,7 +217,20 @@ builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
 // hat-trick backfill) on a background thread so the browser never
 // waits longer than a second for a response.
 builder.Services.AddSingleton<NhlFantasyLeague.api.Services.Jobs.BackgroundJobService>();
+// Live game cache: singleton, in-memory. Shared between the
+// scheduled jobs runner and the Game Day controller.
+builder.Services.AddSingleton<LiveGameCache>();
 
+// Scheduled jobs runner: singleton. Owns the state and the four
+// jobs. Both the hosted service and the manual trigger controller
+// resolve it.
+builder.Services.AddSingleton<ScheduledJobsRunner>();
+
+// The tick loop. Runs every 30 s in the background.
+builder.Services.AddHostedService<ScheduledJobsHostedService>();
+
+// NhlGameService is scoped (uses AppDbContext).
+builder.Services.AddHttpClient<NhlGameService>();
 // Bootstraps the Commissioner role from appsettings on startup.
 builder.Services.AddHostedService<CommissionerBootstrapService>();
 

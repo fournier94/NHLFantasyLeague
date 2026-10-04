@@ -17,6 +17,7 @@ const PlayerPage = lazy(() => import('@/pages/PlayerPage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
 const InscriptionPage = lazy(() => import('@/pages/InscriptionPage'));
 const LiguePage = lazy(() => import('@/pages/LiguePage'));
+const GameDayPage = lazy(() => import('@/pages/GameDayPage'));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
     const { loading, isCommissioner } = useAuth();
@@ -41,6 +42,7 @@ export default function App() {
                         <Route path='/' element={<Navigate to='/mon-equipe' replace />} />
                         <Route path='/mon-equipe' element={<MonEquipePage />} />
                         <Route path='/classement' element={<ClassementPage />} />
+                        <Route path='/game-day' element={<GameDayPage />} />
                         <Route path='/ligue' element={<LiguePage />} />
                         <Route path='/joueurs/:nhlPlayerId' element={<PlayerPage />} />
                         <Route
