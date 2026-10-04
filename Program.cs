@@ -85,6 +85,11 @@ builder.Services.AddScoped<AuthService>();
 
 builder.Services.AddScoped<ExternalSourceHealthService>();
 
+// Background jobs: runs long operations (refresh-all, roster status,
+// hat-trick backfill) on a background thread so the browser never
+// waits longer than a second for a response.
+builder.Services.AddSingleton<NhlFantasyLeague.api.Services.Jobs.BackgroundJobService>();
+
 builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(90);

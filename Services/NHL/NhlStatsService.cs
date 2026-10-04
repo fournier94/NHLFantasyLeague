@@ -508,9 +508,10 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// HatTricks column on PlayerCareerStat.
         /// </summary>
         public async Task<BackfillCareerHatTricksResult> BackfillCareerHatTricksAsync(
-            int delayMsBetweenCalls = 500,
-            bool force = false,
-            CancellationToken ct = default)
+          int delayMsBetweenCalls = 500,
+          bool force = false,
+          NhlFantasyLeague.api.Services.Jobs.BackgroundJobContext? progress = null,
+          CancellationToken ct = default)
         {
             var result = new BackfillCareerHatTricksResult();
 
@@ -552,6 +553,12 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             result.TotalGroups = groups.Count;
 
+            if (progress != null)
+            {
+                progress.ProgressTotal = groups.Count;
+                progress.ProgressCurrent = 0;
+            }
+
             // Get every player's NHL id in one query, so we do not hit
             // the DB inside the loop.
             var playerIds = groups
@@ -577,6 +584,12 @@ namespace NhlFantasyLeague.api.Services.NHL
             foreach (var group in groups)
             {
                 ct.ThrowIfCancellationRequested();
+
+                if (progress != null)
+                {
+                    progress.ProgressCurrent++;
+                    progress.Message = $"Group {progress.ProgressCurrent}/{progress.ProgressTotal}";
+                }
 
                 if (!nhlIdByPlayerId.TryGetValue(
                         group.Key.PlayerId,

@@ -122,19 +122,26 @@ int season)
         /// </summary>
         [HttpPost("season/{season}/refresh-all")]
         public async Task<IActionResult> RefreshCurrentSeasonForAllPlayers(
-            int season,
-            [FromQuery] int delayMsBetweenPlayers = 500,
-            CancellationToken ct = default)
+      int season,
+      [FromQuery] int delayMsBetweenPlayers = 500,
+      [FromQuery] int skip = 0,
+      [FromQuery] int take = 0,
+      CancellationToken ct = default)
         {
             if (delayMsBetweenPlayers < 0)
             {
                 delayMsBetweenPlayers = 0;
             }
 
+            if (skip < 0) skip = 0;
+            if (take < 0) take = 0;
+
             var result =
                 await _nhlGameLogService.RefreshCurrentSeasonForAllPlayersAsync(
                     season,
                     delayMsBetweenPlayers,
+                    skip,
+                    take,
                     ct);
 
             return Ok(result);

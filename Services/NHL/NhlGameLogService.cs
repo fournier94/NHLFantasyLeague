@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Data;
+using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Services;
+using System;
+using System.Diagnostics;
 using System.Net.Http;
 
 namespace NhlFantasyLeague.api.Services.NHL
@@ -362,19 +364,31 @@ namespace NhlFantasyLeague.api.Services.NHL
                     t => t.Abbreviation,
                     StringComparer.OrdinalIgnoreCase);
 
-            var players = await _dbContext.Players
-                .AsNoTracking()
-                .OrderBy(p => p.Id)
-                .Select(p => new
-                {
-                    p.Id,
-                    p.NhlPlayerId,
-                    p.FirstName,
-                    p.LastName
-                })
-                .ToListAsync(ct);
+            var playersQuery = _dbContext.Players
+     .AsNoTracking()
+     .OrderBy(p => p.Id)
+     .Select(p => new
+     {
+         p.Id,
+         p.NhlPlayerId,
+         p.FirstName,
+         p.LastName
+     });
+
+            if (take > 0)
+            {
+                playersQuery = playersQuery.Skip(skip).Take(take);
+            }
+
+            var players = await playersQuery.ToListAsync(ct);
 
             result.TotalPlayers = players.Count;
+
+            if (progress != null)
+            {
+                progress.ProgressTotal = players.Count;
+                progress.ProgressCurrent = 0;
+            }
 
             var playersWithLogs = (await _dbContext.PlayerGameLogs
                 .AsNoTracking()
@@ -388,9 +402,15 @@ namespace NhlFantasyLeague.api.Services.NHL
             {
                 ct.ThrowIfCancellationRequested();
 
-                if (playersWithLogs.Contains(player.Id))
+                if (progress != null)
                 {
-                    result.SkippedAlreadyBackfilled++;
+                    progress.ProgressCurrent++;
+                    progress.Message = $"Processing {player.FirstName} {player.LastName} ({progress.ProgressCurrent}/{progress.ProgressTotal})";
+                }
+
+                if (player.NhlPlayerId <= 0)
+                {
+                    result.SkippedNoNhlId++;
                     continue;
                 }
 
@@ -463,9 +483,12 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// duplicated. Other seasons are not touched.
         /// </summary>
         public async Task<RefreshSeasonGameLogsResult> RefreshCurrentSeasonForAllPlayersAsync(
-            int seasonCode,
-            int delayMsBetweenPlayers = 500,
-            CancellationToken ct = default)
+     int seasonCode,
+     int delayMsBetweenPlayers = 500,
+     int skip = 0,
+     int take = 0,
+     NhlFantasyLeague.api.Services.Jobs.BackgroundJobContext? progress = null,
+     CancellationToken ct = default)
         {
             var result = new RefreshSeasonGameLogsResult
             {
@@ -497,17 +520,23 @@ namespace NhlFantasyLeague.api.Services.NHL
                     t => t.Abbreviation,
                     StringComparer.OrdinalIgnoreCase);
 
-            var players = await _dbContext.Players
-                .AsNoTracking()
-                .OrderBy(p => p.Id)
-                .Select(p => new
-                {
-                    p.Id,
-                    p.NhlPlayerId,
-                    p.FirstName,
-                    p.LastName
-                })
-                .ToListAsync(ct);
+            var playersQuery = _dbContext.Players
+        .AsNoTracking()
+        .OrderBy(p => p.Id)
+        .Select(p => new
+        {
+            p.Id,
+            p.NhlPlayerId,
+            p.FirstName,
+            p.LastName
+        });
+
+            if (take > 0)
+            {
+                playersQuery = playersQuery.Skip(skip).Take(take);
+            }
+
+            var players = await playersQuery.ToListAsync(ct);
 
             result.TotalPlayers = players.Count;
 

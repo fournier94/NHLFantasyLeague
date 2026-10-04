@@ -76,7 +76,8 @@ namespace NhlFantasyLeague.api.Services.Health
         /// for a manual endpoint. No-op when the feature is disabled.
         /// </summary>
         public async Task<PlayerRosterStatusResult> RefreshAsync(
-            CancellationToken ct = default)
+        NhlFantasyLeague.api.Services.Jobs.BackgroundJobContext? progress = null,
+        CancellationToken ct = default)
         {
             var result = new PlayerRosterStatusResult
             {
@@ -213,6 +214,13 @@ namespace NhlFantasyLeague.api.Services.Health
 
             result.TotalPlayers = players.Count;
 
+            if (progress != null)
+            {
+                progress.ProgressTotal = players.Count;
+                progress.ProgressCurrent = 0;
+                progress.Message = "Computing roster locations...";
+            }
+
             // ---------------------------------------------------------
             // Apply the escalation ladder to every player before we
             // recompute RosterLocation.
@@ -234,6 +242,11 @@ namespace NhlFantasyLeague.api.Services.Health
 
             foreach (var player in players)
             {
+                if (progress != null)
+                {
+                    progress.ProgressCurrent++;
+                }
+
                 var onNhlRoster =
                     player.NhlPlayerId > 0 &&
                     nhlRosterPlayerIds.Contains(player.NhlPlayerId);
