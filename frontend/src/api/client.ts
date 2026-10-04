@@ -11,6 +11,63 @@ const API_BASE = '/api';
  */
 const FETCH_CREDENTIALS: RequestCredentials = 'include';
 
+// ---------------------------------------------------------------------
+// Response cache
+//
+// GET responses are cached in memory for a short window (default 30
+// seconds). Repeat navigations to the same page return instantly
+// instead of waiting for another round-trip to Render + Neon.
+//
+// In-flight requests are deduplicated: if two components ask for the
+// same URL at the same time, only one network call fires.
+//
+// Any mutation (POST / PATCH / DELETE) clears the whole cache so the
+// next GET sees fresh data.
+// ---------------------------------------------------------------------
+
+const DEFAULT_CACHE_TTL_MS = 30_000;
+
+interface CacheEntry<T> {
+    data: T;
+    expiresAt: number;
+}
+
+const responseCache = new Map<string, CacheEntry<unknown>>();
+const inFlight = new Map<string, Promise<unknown>>();
+
+function readCache<T>(key: string): { hit: true; data: T } | { hit: false } {
+    const entry = responseCache.get(key);
+    if (!entry) return { hit: false };
+    if (Date.now() > entry.expiresAt) {
+        responseCache.delete(key);
+        return { hit: false };
+    }
+    return { hit: true, data: entry.data as T };
+}
+
+function writeCache<T>(key: string, data: T, ttlMs: number): void {
+    responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
+/**
+ * Clears the whole response cache. Called on logout (so the next
+ * session starts clean) and after every mutation (so a subsequent
+ * GET refetches).
+ */
+export function clearApiCache(): void {
+    responseCache.clear();
+    inFlight.clear();
+}
+
+/**
+ * Options for apiGet. Everything is optional; the defaults are fine
+ * for most callers.
+ */
+interface ApiGetOptions {
+    /** Cache TTL in ms. Pass 0 to bypass the cache entirely. */
+    cacheTtlMs?: number;
+}
+
 /**
  * Shared 401 handler. When any API call returns 401, we clear the
  * cached auth user and let the caller deal with the error. The
@@ -48,31 +105,64 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
     }
 }
 
-async function apiGet<T>(path: string): Promise<T> {
-    const response = await fetch(`${API_BASE}${path}`, {
-        credentials: FETCH_CREDENTIALS,
-    });
+async function apiGet<T>(path: string, options?: ApiGetOptions): Promise<T> {
+    const ttl = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
 
-    if (response.status === 401) {
-        notifyUnauthorized();
-        throw new Error(await readErrorMessage(response, 'Non authentifié.'));
+    // Serve from cache if fresh.
+    if (ttl > 0) {
+        const cached = readCache<T>(path);
+        if (cached.hit) {
+            return cached.data;
+        }
+
+        // Deduplicate an in-flight request for the same URL.
+        const existing = inFlight.get(path);
+        if (existing) {
+            return existing as Promise<T>;
+        }
     }
 
-    if (!response.ok) {
-        throw new Error(
-            await readErrorMessage(
-                response,
-                `Erreur API ${response.status} sur ${path}`,
-            ),
-        );
+    const promise = (async (): Promise<T> => {
+        const response = await fetch(`${API_BASE}${path}`, {
+            credentials: FETCH_CREDENTIALS,
+        });
+
+        if (response.status === 401) {
+            clearApiCache();
+            notifyUnauthorized();
+            throw new Error(await readErrorMessage(response, 'Non authentifié.'));
+        }
+
+        if (!response.ok) {
+            throw new Error(
+                await readErrorMessage(
+                    response,
+                    `Erreur API ${response.status} sur ${path}`,
+                ),
+            );
+        }
+
+        const data = (await response.json()) as T;
+
+        if (ttl > 0) {
+            writeCache(path, data, ttl);
+        }
+
+        return data;
+    })();
+
+    if (ttl > 0) {
+        inFlight.set(path, promise);
+        void promise.finally(() => inFlight.delete(path));
     }
 
-    return (await response.json()) as T;
+    return promise;
 }
 
 /**
  * Like apiGet, but for POST requests: sends JSON and unwraps the JSON reply.
  * On failure it prefers the API's own message so the UI can display it.
+ * Clears the GET cache on success so the next read refetches.
  */
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -83,6 +173,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     });
 
     if (response.status === 401) {
+        clearApiCache();
         notifyUnauthorized();
         throw new Error(await readErrorMessage(response, 'Non authentifié.'));
     }
@@ -93,11 +184,14 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
         );
     }
 
+    clearApiCache();
+
     return (await response.json()) as T;
 }
 
 /**
  * Like apiPost, but for PATCH: sends JSON, expects JSON back.
+ * Clears the GET cache on success so the next read refetches.
  */
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -108,6 +202,7 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
     });
 
     if (response.status === 401) {
+        clearApiCache();
         notifyUnauthorized();
         throw new Error(await readErrorMessage(response, 'Non authentifié.'));
     }
@@ -118,11 +213,14 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
         );
     }
 
+    clearApiCache();
+
     return (await response.json()) as T;
 }
 
 /**
  * Like apiGet, but for DELETE.
+ * Clears the GET cache on success so the next read refetches.
  */
 export async function apiDelete<T>(path: string): Promise<T> {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -131,6 +229,7 @@ export async function apiDelete<T>(path: string): Promise<T> {
     });
 
     if (response.status === 401) {
+        clearApiCache();
         notifyUnauthorized();
         throw new Error(await readErrorMessage(response, 'Non authentifié.'));
     }
@@ -140,6 +239,8 @@ export async function apiDelete<T>(path: string): Promise<T> {
             await readErrorMessage(response, `Erreur API ${response.status}`),
         );
     }
+
+    clearApiCache();
 
     return (await response.json()) as T;
 }
@@ -400,10 +501,14 @@ export interface RosterActionResult {
     entry?: unknown;
 }
 
-/** Searches players by name; the endpoint is a GET even though it is a search. */
+/**
+ * Searches players by name; the endpoint is a GET even though it is a search.
+ * Cached briefly (5s) to dedup rapid keystroke requests.
+ */
 export function searchPlayers(query: string): Promise<PlayerSearchResult[]> {
     return apiGet<PlayerSearchResult[]>(
         `/Roster/search?search=${encodeURIComponent(query)}`,
+        { cacheTtlMs: 5_000 },
     );
 }
 
@@ -831,7 +936,11 @@ export interface ExternalSourceHealthResponse {
 }
 
 export function getExternalSourceHealth(): Promise<ExternalSourceHealthResponse> {
-    return apiGet<ExternalSourceHealthResponse>('/Health/external-sources');
+    // Skip cache: this is a live health check.
+    return apiGet<ExternalSourceHealthResponse>(
+        '/Health/external-sources',
+        { cacheTtlMs: 0 },
+    );
 }
 
 // ---------------------------------------------------------------------

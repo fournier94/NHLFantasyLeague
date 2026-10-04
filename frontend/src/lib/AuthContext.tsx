@@ -9,6 +9,7 @@
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+    clearApiCache,
     getCurrentUser,
     login as apiLogin,
     logout as apiLogout,
@@ -29,7 +30,7 @@ interface AuthContextValue {
 
     /**
      * PlayerPage visual style for the current user. Defaults to
-     * 'Neon' when logged out or before the user has chosen one.
+     * 'Classic' when logged out or before the user has chosen one.
      */
     playerPageStyle: PlayerPageStyle;
 
@@ -102,12 +103,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const login = useCallback(async (request: LoginRequest) => {
         const me = await apiLogin(request);
+        // Fresh session: drop any cached responses from before login.
+        clearApiCache();
         setUser(me);
         return me;
     }, []);
 
     const register = useCallback(async (request: RegisterRequest) => {
         const me = await apiRegister(request);
+        clearApiCache();
         setUser(me);
         return me;
     }, []);
@@ -118,6 +122,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch {
             // Ignore network errors on logout.
         }
+
+        // Wipe all cached API responses so the next session starts clean.
+        clearApiCache();
 
         // Redirect first, then clear the user. Doing it in this
         // order prevents auth-aware wrappers (like AdminRoute) from

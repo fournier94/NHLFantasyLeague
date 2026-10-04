@@ -77,6 +77,17 @@ function compactSalary(salary: number): string {
     return `${rounded}M`;
 }
 
+/**
+ * Builds a resized, WebP-converted URL for a given image via
+ * images.weserv.nl. Returns null if the source URL is missing, so
+ * callers can fall back to the original.
+ */
+function weservImage(originalUrl: string | null, width: number): string | null {
+    if (!originalUrl) return null;
+    const stripped = originalUrl.replace(/^https?:\/\//, '');
+    return `https://images.weserv.nl/?url=${encodeURIComponent(stripped)}&w=${width}&output=webp`;
+}
+
 function contractLabel(
     salary: number,
     yearsRemaining: number,
@@ -1952,6 +1963,20 @@ export default function PlayerPage() {
     const [showGameLog, setShowGameLog] = useState(false);
     const [showInjuryModal, setShowInjuryModal] = useState(false);
 
+    // Track mobile viewport so we can serve lighter images on phones
+    // (smaller size + WebP) while keeping the originals on desktop.
+    const [isMobile, setIsMobile] = useState(
+        typeof window !== 'undefined' &&
+        window.matchMedia('(max-width: 767px)').matches,
+    );
+
+    useEffect(() => {
+        const mq = window.matchMedia('(max-width: 767px)');
+        const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+        mq.addEventListener('change', handler);
+        return () => mq.removeEventListener('change', handler);
+    }, []);
+
     const closeAura = useAura('playerPageCloseButton');
     const pageTeamLogoAura = useAura('playerPageTeamLogo');
 
@@ -2209,10 +2234,16 @@ export default function PlayerPage() {
                 {player.heroImageUrl && (
                     <div className='aspect-[22/9] w-full overflow-hidden rounded-lg border border-border bg-black'>
                         <img
-                            src={player.heroImageUrl}
+                            src={
+                                (isMobile
+                                    ? weservImage(player.heroImageUrl, 800)
+                                    : null) ?? player.heroImageUrl
+                            }
                             alt=''
                             className='h-full w-full scale-[1.12] object-cover object-top'
-                            loading='lazy'
+                            loading='eager'
+                            fetchPriority='high'
+                            decoding='async'
                         />
                     </div>
                 )}
@@ -2409,17 +2440,15 @@ export default function PlayerPage() {
 
                     {player.headshotUrl && (
                         <img
-                            src={player.headshotUrl}
+                            src={
+                                (isMobile
+                                    ? weservImage(player.headshotUrl, 200)
+                                    : null) ?? player.headshotUrl
+                            }
                             alt={`${player.firstName} ${player.lastName}`}
                             className='absolute right-3 top-[3.5rem] h-29 w-29 shrink-0 rounded-md bg-white object-cover sm:static sm:mt-0 sm:h-32 sm:w-32'
-                            loading='lazy'
-                            /* Team-colored halo around the headshot
-                               frame. Two layers: a tight ring for
-                               edge definition, then a softer wide
-                               bloom. Uses the same color as the
-                               team logo aura and the name. The
-                               `CC` suffix is ~80% alpha, `66` is
-                               ~40%. */
+                            loading='eager'
+                            decoding='async'
                             style={
                                 isNeon
                                     ? {
