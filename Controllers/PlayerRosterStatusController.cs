@@ -7,12 +7,6 @@ using NhlFantasyLeague.api.Services.Health;
 
 namespace NhlFantasyLeague.api.Controllers
 {
-    /// <summary>
-    /// Manual triggers and reads for the player roster-status feature.
-    /// Commissioner-only: the refresh hits the NHL and AHL feeds for
-    /// every team, which is not something a regular user should be
-    /// able to launch.
-    /// </summary>
     [Authorize(Roles = AuthService.CommissionerRole)]
     [ApiController]
     [Route("api/[controller]")]
@@ -29,28 +23,14 @@ namespace NhlFantasyLeague.api.Controllers
             _dbContext = dbContext;
         }
 
-        /// <summary>
-        /// Runs a full roster-status refresh. Returns a summary of what
-        /// was found and how many players landed in each location.
-        ///
-        /// When PlayerStatus:Enabled is false, this returns immediately
-        /// with a "feature disabled" message. That is intentional: the
-        /// pipeline can be exercised from Swagger once, and then turned
-        /// off until the scheduled jobs exist.
-        /// </summary>
         [HttpPost("refresh")]
         public async Task<IActionResult> Refresh(CancellationToken ct)
         {
-            var result = await _service.RefreshAsync(ct);
+            var result = await _service.RefreshAsync(null, ct);
 
             return Ok(result);
         }
 
-        /// <summary>
-        /// Returns the current RosterLocation for one player, keyed by
-        /// NhlPlayerId. Used by Swagger for spot-checking after a
-        /// refresh, and (later) by the player page.
-        /// </summary>
         [HttpGet("player/{nhlPlayerId:int}")]
         public async Task<IActionResult> GetPlayerRosterStatus(
             int nhlPlayerId,
@@ -89,10 +69,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(player);
         }
 
-        /// <summary>
-        /// Returns counts of players per RosterLocation. Cheap summary
-        /// for a quick sanity check after a refresh.
-        /// </summary>
         [HttpGet("summary")]
         public async Task<IActionResult> GetSummary(CancellationToken ct)
         {

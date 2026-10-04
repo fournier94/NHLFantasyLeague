@@ -364,31 +364,19 @@ namespace NhlFantasyLeague.api.Services.NHL
                     t => t.Abbreviation,
                     StringComparer.OrdinalIgnoreCase);
 
-            var playersQuery = _dbContext.Players
-     .AsNoTracking()
-     .OrderBy(p => p.Id)
-     .Select(p => new
-     {
-         p.Id,
-         p.NhlPlayerId,
-         p.FirstName,
-         p.LastName
-     });
-
-            if (take > 0)
-            {
-                playersQuery = playersQuery.Skip(skip).Take(take);
-            }
-
-            var players = await playersQuery.ToListAsync(ct);
+            var players = await _dbContext.Players
+                .AsNoTracking()
+                .OrderBy(p => p.Id)
+                .Select(p => new
+                {
+                    p.Id,
+                    p.NhlPlayerId,
+                    p.FirstName,
+                    p.LastName
+                })
+                .ToListAsync(ct);
 
             result.TotalPlayers = players.Count;
-
-            if (progress != null)
-            {
-                progress.ProgressTotal = players.Count;
-                progress.ProgressCurrent = 0;
-            }
 
             var playersWithLogs = (await _dbContext.PlayerGameLogs
                 .AsNoTracking()
@@ -402,15 +390,9 @@ namespace NhlFantasyLeague.api.Services.NHL
             {
                 ct.ThrowIfCancellationRequested();
 
-                if (progress != null)
+                if (playersWithLogs.Contains(player.Id))
                 {
-                    progress.ProgressCurrent++;
-                    progress.Message = $"Processing {player.FirstName} {player.LastName} ({progress.ProgressCurrent}/{progress.ProgressTotal})";
-                }
-
-                if (player.NhlPlayerId <= 0)
-                {
-                    result.SkippedNoNhlId++;
+                    result.SkippedAlreadyBackfilled++;
                     continue;
                 }
 
@@ -481,14 +463,20 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// Safe to call repeatedly during the season: existing game logs
         /// are refreshed, new games are appended, and no rows are
         /// duplicated. Other seasons are not touched.
+        ///
+        /// Optional skip/take let callers chunk the work into smaller
+        /// batches (useful when running from a browser that cannot wait
+        /// for a 45-minute response). When take is 0, the whole player
+        /// list is processed. The optional progress context receives
+        /// live counter updates for the polling UI.
         /// </summary>
         public async Task<RefreshSeasonGameLogsResult> RefreshCurrentSeasonForAllPlayersAsync(
-     int seasonCode,
-     int delayMsBetweenPlayers = 500,
-     int skip = 0,
-     int take = 0,
-     NhlFantasyLeague.api.Services.Jobs.BackgroundJobContext? progress = null,
-     CancellationToken ct = default)
+            int seasonCode,
+            int delayMsBetweenPlayers = 500,
+            int skip = 0,
+            int take = 0,
+            NhlFantasyLeague.api.Services.Jobs.BackgroundJobContext? progress = null,
+            CancellationToken ct = default)
         {
             var result = new RefreshSeasonGameLogsResult
             {
@@ -521,15 +509,15 @@ namespace NhlFantasyLeague.api.Services.NHL
                     StringComparer.OrdinalIgnoreCase);
 
             var playersQuery = _dbContext.Players
-        .AsNoTracking()
-        .OrderBy(p => p.Id)
-        .Select(p => new
-        {
-            p.Id,
-            p.NhlPlayerId,
-            p.FirstName,
-            p.LastName
-        });
+                .AsNoTracking()
+                .OrderBy(p => p.Id)
+                .Select(p => new
+                {
+                    p.Id,
+                    p.NhlPlayerId,
+                    p.FirstName,
+                    p.LastName
+                });
 
             if (take > 0)
             {
@@ -540,9 +528,24 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             result.TotalPlayers = players.Count;
 
+            if (progress != null)
+            {
+                progress.ProgressTotal = players.Count;
+                progress.ProgressCurrent = 0;
+                progress.Message = $"Processing {players.Count} players...";
+            }
+
             foreach (var player in players)
             {
                 ct.ThrowIfCancellationRequested();
+
+                if (progress != null)
+                {
+                    progress.ProgressCurrent++;
+                    progress.Message =
+                        $"Processing {player.FirstName} {player.LastName} " +
+                        $"({progress.ProgressCurrent}/{progress.ProgressTotal})";
+                }
 
                 if (player.NhlPlayerId <= 0)
                 {
