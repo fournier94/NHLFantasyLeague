@@ -330,7 +330,7 @@ export function TopBar() {
                             className='cursor-pointer rounded-lg bg-transparent p-2 text-foreground transition-colors hover:bg-secondary md:hidden'
                         >
                             <Menu
-                                className={`h-5 w-5 ${!isAuraOff(menuIconAura) ? auraPulseClass('filter') : ''} ${!isAuraOff(menuIconAura) ? 'text-[#F2F5FA]' : ''}`}
+                                className={`h-5 w-5 ${!isAuraOff(menuIconAura) ? `${auraPulseClass('filter')} aura-mobile-keep` : ''} ${!isAuraOff(menuIconAura) ? 'text-[#F2F5FA]' : ''}`}
                                 style={
                                     !isAuraOff(menuIconAura)
                                         ? auraPulseStyle(menuRest, menuPeak)

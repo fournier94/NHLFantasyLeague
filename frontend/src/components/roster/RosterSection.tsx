@@ -27,8 +27,9 @@ interface RosterSectionProps {
  * (Attaquants, Défenseurs, Gardiens, Banc, Prospects).
  *
  * The title uses the shared NeonTitle so it matches every other
- * section header in the app. It opts back into the mobile pulse
- * so the section titles keep their aura on phones.
+ * section header in the app. keepPulseOnMobile keeps the aura
+ * pulsing on phones even in Classic mode, where most auras are
+ * otherwise paused for performance.
  */
 export function RosterSection({
     title,
