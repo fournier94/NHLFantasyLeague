@@ -27,7 +27,8 @@ interface RosterSectionProps {
  * (Attaquants, Défenseurs, Gardiens, Banc, Prospects).
  *
  * The title uses the shared NeonTitle so it matches every other
- * section header in the app.
+ * section header in the app. It opts back into the mobile pulse
+ * so the section titles keep their aura on phones.
  */
 export function RosterSection({
     title,
@@ -45,7 +46,7 @@ export function RosterSection({
     return (
         <section className={className}>
             <h2 className={`${titleMarginTop} mb-3 text-center`}>
-                <NeonTitle>{title}</NeonTitle>
+                <NeonTitle keepPulseOnMobile>{title}</NeonTitle>
             </h2>
             {children}
         </section>

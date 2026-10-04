@@ -701,12 +701,11 @@ function SectionTitle({
                     variant='section'
                     showStroke={false}
                     auraColor={auraColor}
+                    keepPulseOnMobile
                 >
                     {children}
                 </NeonTitle>
             ) : (
-                /* Classic style: plain bold sans-serif, white, no
-                   aura. Matches the player name's Classic treatment. */
                 <span className='text-xl font-bold text-foreground'>
                     {children}
                 </span>
@@ -731,12 +730,11 @@ function SubSectionTitle({
                     variant='subsection'
                     showStroke={false}
                     auraColor={auraColor}
+                    keepPulseOnMobile
                 >
                     {children}
                 </NeonTitle>
             ) : (
-                /* Classic style: same font/color as the player name,
-                   one size down from the section titles. */
                 <span className='text-base font-bold text-foreground'>
                     {children}
                 </span>
@@ -2257,6 +2255,7 @@ export default function PlayerPage() {
                                             variant='section'
                                             auraColor={pageTeamLogoColor}
                                             showStroke={false}
+                                            keepPulseOnMobile
                                         >
                                             {player.firstName} {player.lastName}
                                         </NeonTitle>

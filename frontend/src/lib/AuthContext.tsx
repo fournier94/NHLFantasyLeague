@@ -101,6 +101,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
+    // Toggle a class on <html> based on the user's PlayerPage style.
+    //
+    //   Neon    -> <html class="aura-neon">
+    //   Classic -> no class (also the default when logged out)
+    //
+    // The mobile-only rule in index.css that disables aura pulse
+    // animations is scoped with html:not(.aura-neon), so when this
+    // class is present, every aura keeps pulsing on phones.
+    useEffect(() => {
+        const style = user?.playerPageStyle ?? 'Classic';
+        const root = document.documentElement;
+
+        if (style === 'Neon') {
+            root.classList.add('aura-neon');
+        } else {
+            root.classList.remove('aura-neon');
+        }
+    }, [user?.playerPageStyle]);
+
     const login = useCallback(async (request: LoginRequest) => {
         const me = await apiLogin(request);
         // Fresh session: drop any cached responses from before login.

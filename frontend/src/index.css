@@ -205,11 +205,16 @@
    stat strip). Animating text-shadow and filter: drop-shadow() on
    ~100 elements during scroll is expensive on mobile GPUs and
    drains battery; the static rest shadow already reads as "neon",
-   but a couple of hero elements keep their life. */
+   but a couple of hero elements keep their life.
+
+   The rule is scoped with html:not(.aura-neon) so that users who
+   chose the Neon PlayerPage style keep every aura alive on mobile.
+   AuthContext toggles the .aura-neon class on <html> whenever the
+   current user's playerPageStyle is 'Neon'. */
 @media (max-width: 767px) {
-    .aura-pulse-text:not(.aura-mobile-keep),
-    .aura-pulse-filter:not(.aura-mobile-keep),
-    .aura-pulse-box:not(.aura-mobile-keep) {
+    html:not(.aura-neon) .aura-pulse-text:not(.aura-mobile-keep),
+    html:not(.aura-neon) .aura-pulse-filter:not(.aura-mobile-keep),
+    html:not(.aura-neon) .aura-pulse-box:not(.aura-mobile-keep) {
         animation: none !important;
     }
 }

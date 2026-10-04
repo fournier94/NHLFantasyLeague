@@ -25,6 +25,14 @@ interface NeonTitleProps {
      * false to render just the white fill + aura.
      */
     showStroke?: boolean;
+    /**
+     * When true, the pulse animation keeps running on mobile
+     * (<= 767px). By default, all aura pulses are disabled on
+     * mobile for performance, except a small allowlist. Set this
+     * to true only for section / subsection titles that should
+     * stay alive on phones.
+     */
+    keepPulseOnMobile?: boolean;
     className?: string;
 }
 
@@ -39,6 +47,7 @@ interface NeonTitleProps {
  * Overrides:
  *   - `auraColor` swaps the cyan chain for a custom color.
  *   - `showStroke={false}` removes the red outline.
+ *   - `keepPulseOnMobile` opts a title back into the pulse on mobile.
  * Together they let the player name carry the same font as every
  * other title while glowing in the player's team color.
  */
@@ -47,6 +56,7 @@ export function NeonTitle({
     variant = 'section',
     auraColor,
     showStroke = true,
+    keepPulseOnMobile = false,
     className = '',
 }: NeonTitleProps) {
     const aura = useAura('teamPickerLabel');
@@ -97,9 +107,13 @@ export function NeonTitle({
 
     const sizeClass = variant === 'section' ? 'text-xl' : 'text-base';
 
+    const pulseClasses = auraOn
+        ? `${auraPulseClass('text')}${keepPulseOnMobile ? ' aura-mobile-keep' : ''}`
+        : '';
+
     return (
         <span
-            className={`inline-block leading-none tracking-[0.02em] ${sizeClass} ${auraOn ? auraPulseClass('text') : ''} ${className}`}
+            className={`inline-block leading-none tracking-[0.02em] ${sizeClass} ${pulseClasses} ${className}`}
             style={{
                 fontFamily: "'Grindy Brush', sans-serif",
                 fontWeight: 400,
