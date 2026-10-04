@@ -1,3 +1,6 @@
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
@@ -5,9 +8,9 @@ using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.Auth;
-using NhlFantasyLeague.api.Services.NHL;
 using NhlFantasyLeague.api.Services.CapFreeze;
 using NhlFantasyLeague.api.Services.Health;
+using NhlFantasyLeague.api.Services.NHL;
 using System.IO.Compression;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -64,6 +67,29 @@ builder.Services.AddDbContext<AppDbContext>(options =>
         builder.Configuration.GetConnectionString("DefaultConnection")));
 
 // ---------------------------------------------------------------------
+// Data Protection
+//
+// The key ring is persisted to PostgreSQL via a custom IXmlRepository
+// (see Services/Auth/EfCoreXmlRepository.cs) so auth cookies survive
+// API restarts and Render redeploys. Without this, every redeploy
+// generates a new key ring, and every existing cookie becomes
+// undecryptable, which silently logs everyone out.
+//
+// SetApplicationName is required: it tells every instance (and every
+// deployment) to look up the same key ring.
+// ---------------------------------------------------------------------
+
+builder.Services.AddSingleton<IXmlRepository, EfCoreXmlRepository>();
+builder.Services.AddDataProtection()
+    .SetApplicationName("NhlFantasyLeague");
+
+builder.Services.AddOptions<KeyManagementOptions>()
+    .Configure<IXmlRepository>((options, repository) =>
+    {
+        options.XmlRepository = repository;
+    });
+
+// ---------------------------------------------------------------------
 // Identity + cookie authentication
 // ---------------------------------------------------------------------
 
@@ -92,11 +118,23 @@ builder.Services
     {
         options.Cookie.Name = "LigueMousse.Auth";
         options.Cookie.HttpOnly = true;
+
+        // Same-origin in practice: Vercel rewrites /api/* to the Render
+        // API, so the browser only ever talks to one origin. SameSite=Lax
+        // is therefore sufficient, and safer than None.
         options.Cookie.SameSite = SameSiteMode.Lax;
-        // TODO Dev-only: allow the cookie to be set over plain HTTP so LAN
-        // testing from a phone works. Flip back to SameAsRequest (or
-        // Always) once you host the app behind HTTPS.
-        options.Cookie.SecurePolicy = CookieSecurePolicy.None;
+
+        // LAN testing from a phone during development needs plain HTTP.
+        // In every other environment the deployment is behind HTTPS,
+        // so mark the cookie Secure.
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+            ? CookieSecurePolicy.None
+            : CookieSecurePolicy.Always;
+
+        // One year. Combined with sliding expiration, a user who visits
+        // at least once every six months is never logged out.
+        options.ExpireTimeSpan = TimeSpan.FromDays(365);
+        options.SlidingExpiration = true;
 
         options.Events.OnRedirectToLogin = ctx =>
         {

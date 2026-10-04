@@ -6,18 +6,6 @@ using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers
 {
-    /// <summary>
-    /// Season standings. Read-only from the caller's perspective:
-    /// every season-aggregate number is written by the recompute step
-    /// of POST /api/NhlGameLog/season/{season}/refresh-all (and by
-    /// POST .../recompute-team-totals). This controller never
-    /// modifies anything.
-    ///
-    /// YesterdayFantasyPoints and TodayFantasyPoints are computed on
-    /// the fly from PlayerGameLog + RosterStatusHistory so the
-    /// standings always reflect the last two days even before the
-    /// next recompute runs.
-    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class StandingsController : ControllerBase
@@ -33,15 +21,6 @@ namespace NhlFantasyLeague.api.Controllers
             _nhlGameLogService = nhlGameLogService;
         }
 
-        /// <summary>
-        /// Returns every fantasy team's season aggregate, sorted by
-        /// TotalFantasyPoints descending. Ties are broken by team name
-        /// (alphabetical) so the order is deterministic.
-        /// </summary>
-        /// <param name="seasonId">
-        /// Database id of the season. Optional: the current season (the
-        /// one with the latest StartDate) is used when omitted.
-        /// </param>
         [HttpGet]
         public async Task<IActionResult> GetStandings(
             [FromQuery] int? seasonId,
@@ -93,6 +72,17 @@ namespace NhlFantasyLeague.api.Controllers
             // Yesterday / today totals, computed on the fly. UTC
             // calendar days to match the PlayerGameLog.GameDate
             // convention used everywhere else.
+            //
+            // Load the whole season's RosterStatusHistories ONCE and
+            // hand it to both computations. Without this, the service
+            // would fetch the same ~2,000 rows from Neon twice.
+            var seasonHistory = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Where(h => h.SeasonId == season.Id)
+                .OrderBy(h => h.EffectiveAt)
+                .ThenBy(h => h.Id)
+                .ToListAsync(ct);
+
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
             var yesterday = today.AddDays(-1);
 
@@ -100,13 +90,15 @@ namespace NhlFantasyLeague.api.Controllers
                 .ComputeTeamDailyTotalsAsync(
                     season.NhlSeasonCode,
                     yesterday,
-                    ct);
+                    ct,
+                    seasonHistory);
 
             var todayTotals = await _nhlGameLogService
                 .ComputeTeamDailyTotalsAsync(
                     season.NhlSeasonCode,
                     today,
-                    ct);
+                    ct,
+                    seasonHistory);
 
             foreach (var row in rows)
             {

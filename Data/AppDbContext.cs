@@ -44,6 +44,15 @@ namespace NhlFantasyLeague.api.Data
         /// </summary>
         public DbSet<ExternalSourceHealth> ExternalSourceHealths { get; set; }
 
+        /// <summary>
+        /// Data Protection key ring. Persisted to the database so that
+        /// auth cookies survive API restarts and new deployments. Without
+        /// this, every redeploy generates a new key ring and every
+        /// existing cookie becomes undecryptable, which logs everyone out.
+        /// See Program.cs where PersistKeysToDbContext is wired up.
+        /// </summary>
+        public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Identity first, so all its table config is registered.
@@ -348,6 +357,23 @@ namespace NhlFantasyLeague.api.Data
             modelBuilder.Entity<ExternalSourceHealth>()
                 .HasIndex(h => h.SourceName)
                 .IsUnique();
+
+            // -----------------------------------------------------------------
+            // DataProtectionKey
+            //
+            // The key ring is persisted to the database so auth cookies
+            // survive API restarts and new deployments. Explicit table
+            // name is set so the migration is stable if the class is ever
+            // moved or renamed. The Xml column holds the serialized key
+            // ring and must NOT have a length limit.
+            // -----------------------------------------------------------------
+            modelBuilder.Entity<DataProtectionKey>(entity =>
+            {
+                entity.ToTable("DataProtectionKeys");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.FriendlyName).HasMaxLength(256);
+                entity.Property(e => e.Xml).IsRequired();
+            });
         }
     }
 }

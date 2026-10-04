@@ -642,9 +642,10 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// persisted row.
         /// </summary>
         public async Task<Dictionary<int, int>> ComputeTeamDailyTotalsAsync(
-            int seasonCode,
-            DateOnly date,
-            CancellationToken ct = default)
+     int seasonCode,
+     DateOnly date,
+     CancellationToken ct = default,
+     List<RosterStatusHistory>? preloadedHistory = null)
         {
             var season = await _dbContext.Seasons
                 .AsNoTracking()
@@ -675,14 +676,16 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return new Dictionary<int, int>();
             }
 
-            // Whole-season history, grouped by player and sorted by
-            // EffectiveAt. Same shape as the season-total recompute.
-            var historyRows = await _dbContext.RosterStatusHistories
-                .AsNoTracking()
-                .Where(h => h.SeasonId == season.Id)
-                .OrderBy(h => h.EffectiveAt)
-                .ThenBy(h => h.Id)
-                .ToListAsync(ct);
+            // Whole-season history. Callers that compute totals for several
+            // days at once can pass it in to avoid loading the same rows from
+            // Neon multiple times.
+            var historyRows = preloadedHistory
+                ?? await _dbContext.RosterStatusHistories
+                    .AsNoTracking()
+                    .Where(h => h.SeasonId == season.Id)
+                    .OrderBy(h => h.EffectiveAt)
+                    .ThenBy(h => h.Id)
+                    .ToListAsync(ct);
 
             var historyByPlayerId = historyRows
                 .GroupBy(h => h.PlayerId)

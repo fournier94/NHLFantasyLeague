@@ -21,7 +21,6 @@ import {
 import { getNhlTeamAuraColor } from '@/lib/nhlTeamColors';
 import { getLastNonPlayerLocation } from '@/lib/playerNavigation';
 import { useAuth } from '@/lib/AuthContext';
-import ReactCountryFlag from 'react-country-flag';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { NeonTitle } from '@/components/ui/NeonTitle';
 import { Banknote, Ruler } from 'lucide-react';
@@ -929,7 +928,7 @@ function CurrentSeasonStrip({
         <div
             className={cn(
                 'w-full rounded-lg border bg-[#080D1A] p-1.5',
-                auraOn ? auraPulseClass('box') : '',
+                auraOn ? `${auraPulseClass('box')} aura-mobile-keep` : '',
             )}
             style={{
                 borderColor: auraColor
@@ -2346,13 +2345,17 @@ export default function PlayerPage() {
                                         style={{ display: 'inline-block', lineHeight: 0 }}
                                         className='ml-2'
                                     >
-                                        <ReactCountryFlag
-                                            countryCode={birthCountryFlagCode}
-                                            svg
+                                        <img
+                                            src={`https://flagcdn.com/w40/${birthCountryFlagCode.toLowerCase()}.png`}
+                                            srcSet={`https://flagcdn.com/w80/${birthCountryFlagCode.toLowerCase()}.png 2x`}
+                                            alt={player.birthCountry ?? ''}
+                                            width={20}
+                                            height={15}
+                                            loading='lazy'
+                                            decoding='async'
                                             style={{
-                                                width: '1.25rem',
-                                                height: '1.25rem',
                                                 display: 'inline-block',
+                                                borderRadius: 2,
                                             }}
                                         />
                                     </span>

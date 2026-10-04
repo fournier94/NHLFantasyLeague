@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getLeagueTeams, getTeamRoster, type FantasyTeam, type RosterEntry, type TeamRoster } from '@/api/client';
 import { PlayerCard } from '@/components/roster/PlayerCard';
@@ -135,6 +135,12 @@ function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
 
 // =====================================================================
 // Lineup components
+//
+// All three are wrapped in React.memo. They receive only stable props
+// (roster entries from the memoized rosterGroups, plus booleans and the
+// memoized position-group arrays), and none of them subscribe to the
+// aura context. That means opening/closing the team picker, switching
+// views, or any unrelated parent re-render skips them entirely.
 // =====================================================================
 
 // Grid layout per lineup row. The name column is `1fr` so it
@@ -165,7 +171,11 @@ const LINEUP_ROW_TINT = {
     outOfNhl: 'rgba(155, 155, 162, 0.22)',
 } as const;
 
-function LineupHeader({ isGoalie }: { isGoalie: boolean }) {
+const LineupHeader = memo(function LineupHeader({
+    isGoalie,
+}: {
+    isGoalie: boolean;
+}) {
     return (
         <div
             className={`grid w-full items-center gap-x-0.5 border-b border-border/40 pb-0.5 pl-1 uppercase tracking-wide text-white ${isGoalie ? 'mt-3 text-xs' : 'text-sm'
@@ -208,9 +218,9 @@ function LineupHeader({ isGoalie }: { isGoalie: boolean }) {
             <div className='text-center text-[#F59E0B]'>FP</div>
         </div>
     );
-}
+});
 
-function LineupRow({
+const LineupRow = memo(function LineupRow({
     entry,
     isLastOfSection,
 }: {
@@ -325,7 +335,7 @@ function LineupRow({
             <div className='text-center font-bold text-[#F59E0B]'>{fp}</div>
         </Link>
     );
-}
+});
 
 /**
  * One lineup block (Alignement, Banc or Prospects). Renders an inline
@@ -335,7 +345,7 @@ function LineupRow({
  * Separators are only rendered when showSeparators is true (Alignement
  * and Banc). Prospects intentionally have none.
  */
-function LineupTable({
+const LineupTable = memo(function LineupTable({
     forwards,
     defensemen,
     goalies,
@@ -398,7 +408,7 @@ function LineupTable({
             )}
         </div>
     );
-}
+});
 
 // =====================================================================
 // The page
@@ -432,8 +442,77 @@ export default function MonEquipePage() {
     const [error, setError] = useState<string | null>(null);
 
     const trackAura = useAura('capBarTrack');
+    const neonAura = useAura('teamPickerLabel');
 
-    const selectedTeamLabel = (() => {
+    // -----------------------------------------------------------------
+    // Memoized aura strings.
+    //
+    // These depend only on the aura intensity, which changes when the
+    // admin moves a slider. Memoizing them means every unrelated
+    // re-render (team picker toggle, tab switch, parent re-render)
+    // skips rebuilding the shadow chains.
+    // -----------------------------------------------------------------
+
+    // Same palette as the league logo aura in TopBar.tsx: white core
+    // -> league cyan (#00A8FF) -> cyan -> soft cyan bleed. Alphas are
+    // pushed to full at the rest side of the pulse so the aura reads
+    // as clearly on as it does at the peak, rather than fading away
+    // halfway through the cycle.
+    const neonRest = useMemo(
+        () =>
+            [
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px #F2F5FA`,
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px #00A8FF`,
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
+            ].join(', '),
+        [neonAura],
+    );
+
+    const neonPeak = useMemo(
+        () =>
+            [
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px #F2F5FA`,
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px #00A8FF`,
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px #00A8FF`,
+                `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
+            ].join(', '),
+        [neonAura],
+    );
+
+    const neonAuraOn = !isAuraOff(neonAura);
+
+    const trackRest = useMemo(
+        () =>
+            [
+                `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 0).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
+                `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 1).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
+                `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
+            ].join(', '),
+        [trackAura],
+    );
+
+    const trackPeak = useMemo(
+        () =>
+            [
+                `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 0).toFixed(2)}px rgba(0, 168, 255, 0.95)`,
+                `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 1).toFixed(2)}px rgba(0, 168, 255, 0.75)`,
+                `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.45)`,
+            ].join(', '),
+        [trackAura],
+    );
+
+    // -----------------------------------------------------------------
+    // Memoized derived values.
+    //
+    // selectedTeamLabel, otherTeams and rosterGroups all depend only on
+    // stable state (teams, teamIdParam, roster, user.fantasyTeamId).
+    // Memoizing them here means the lineup/cap views can re-render
+    // (tab switch, picker toggle, etc.) without re-running 15 filters
+    // and 6 sorts over the same roster.
+    // -----------------------------------------------------------------
+
+    const selectedTeamLabel = useMemo(() => {
         if (teamIdParam != null) {
             const selected = teams.find(
                 (t) => String(t.id) === teamIdParam,
@@ -441,30 +520,118 @@ export default function MonEquipePage() {
             return selected?.name ?? 'Mon equipe';
         }
         return 'Mon equipe';
-    })();
+    }, [teams, teamIdParam]);
 
-    // Same palette as the league logo aura in TopBar.tsx: white core
-    // -> league cyan (#00A8FF) -> cyan -> soft cyan bleed. Alphas are
-    // pushed to full at the rest side of the pulse so the aura reads
-    // as clearly on as it does at the peak, rather than fading away
-    // halfway through the cycle.
-    const neonAura = useAura('teamPickerLabel');
+    const otherTeams = useMemo(
+        () => teams.filter((t) => t.id !== user?.fantasyTeamId),
+        [teams, user?.fantasyTeamId],
+    );
 
-    const neonRest = [
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
-    ].join(', ');
+    /**
+     * Every list the page renders, computed once per roster change
+     * instead of once per render.
+     *
+     * activeEntries / benchEntries / prospectEntries are the three
+     * roster statuses. The rest are the position-group slices the
+     * lineup table renders, plus maxSignedPlayers for the cap bar
+     * subtitle. Returns null when there is no roster yet; the caller
+     * bails out on the same condition before touching any of these.
+     */
+    const rosterGroups = useMemo(() => {
+        if (!roster) return null;
 
-    const neonPeak = [
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 2).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(neonAura, 'teamPickerLabel', 3).toFixed(2)}px rgba(0, 168, 255, 0.85)`,
-    ].join(', ');
+        const activeEntries = roster.entries.filter(isActive);
+        const benchEntries = roster.entries.filter(
+            (entry) => entry.rosterStatus === 'Bench',
+        );
+        const prospectEntries = roster.entries.filter(
+            (entry) => entry.rosterStatus === 'Prospect',
+        );
 
-    const neonAuraOn = !isAuraOff(neonAura);
+        const mainForwards = sortByFantasyPoints(
+            activeEntries.filter(
+                (entry) => toLineupPositionGroup(entry.position) === 'F',
+            ),
+        );
+        const mainDefensemen = sortByFantasyPoints(
+            activeEntries.filter(
+                (entry) => toLineupPositionGroup(entry.position) === 'D',
+            ),
+        );
+        const mainGoalies = sortByFantasyPoints(
+            activeEntries.filter(
+                (entry) => toLineupPositionGroup(entry.position) === 'G',
+            ),
+        );
+
+        const benchForwards = sortByFantasyPoints(
+            benchEntries.filter(
+                (entry) => toLineupPositionGroup(entry.position) === 'F',
+            ),
+        );
+        const benchDefensemen = sortByFantasyPoints(
+            benchEntries.filter(
+                (entry) => toLineupPositionGroup(entry.position) === 'D',
+            ),
+        );
+        const benchGoalies = sortByFantasyPoints(
+            benchEntries.filter(
+                (entry) => toLineupPositionGroup(entry.position) === 'G',
+            ),
+        );
+
+        // Prospects: sorted by position only (F, then D, then G).
+        // Within a group, the original order is preserved. No
+        // separators.
+        const prospectForwards = prospectEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'F',
+        );
+        const prospectDefensemen = prospectEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'D',
+        );
+        const prospectGoalies = prospectEntries.filter(
+            (entry) => toLineupPositionGroup(entry.position) === 'G',
+        );
+
+        // The cap view uses the raw position string, not the lineup
+        // group, so a defenseman whose position is "LD" still lands
+        // in the defensemen card grid.
+        const forwards = activeEntries.filter(
+            (entry) => entry.position !== 'D' && entry.position !== 'G',
+        );
+        const defensemen = activeEntries.filter(
+            (entry) => entry.position === 'D',
+        );
+        const goalies = activeEntries.filter(
+            (entry) => entry.position === 'G',
+        );
+        const bench = benchEntries;
+        const prospects = prospectEntries;
+
+        const maxSignedPlayers =
+            roster.leagueMaximumRosterSize - roster.leagueProspectCount;
+
+        return {
+            activeEntries,
+            benchEntries,
+            prospectEntries,
+            mainForwards,
+            mainDefensemen,
+            mainGoalies,
+            benchForwards,
+            benchDefensemen,
+            benchGoalies,
+            prospectForwards,
+            prospectDefensemen,
+            prospectGoalies,
+            forwards,
+            defensemen,
+            goalies,
+            bench,
+            prospects,
+            maxSignedPlayers,
+        };
+    }, [roster]);
 
     useEffect(() => {
         let cancelled = false;
@@ -610,91 +777,27 @@ export default function MonEquipePage() {
     }
 
     if (error) return <p className='text-destructive'>{error}</p>;
-    if (!roster) return null;
+    if (!roster || !rosterGroups) return null;
 
-    // Main/bench group membership + sort. Forwards and defensemen are
-    // sorted by FP descending; goalies are sorted by FP descending too
-    // (there is only one, but the code stays generic).
-    const activeEntries = roster.entries.filter(isActive);
-    const benchEntries = roster.entries.filter(
-        (entry) => entry.rosterStatus === 'Bench',
-    );
-    const prospectEntries = roster.entries.filter(
-        (entry) => entry.rosterStatus === 'Prospect',
-    );
-
-    const mainForwards = sortByFantasyPoints(
-        activeEntries.filter(
-            (entry) => toLineupPositionGroup(entry.position) === 'F',
-        ),
-    );
-    const mainDefensemen = sortByFantasyPoints(
-        activeEntries.filter(
-            (entry) => toLineupPositionGroup(entry.position) === 'D',
-        ),
-    );
-    const mainGoalies = sortByFantasyPoints(
-        activeEntries.filter(
-            (entry) => toLineupPositionGroup(entry.position) === 'G',
-        ),
-    );
-
-    const benchForwards = sortByFantasyPoints(
-        benchEntries.filter(
-            (entry) => toLineupPositionGroup(entry.position) === 'F',
-        ),
-    );
-    const benchDefensemen = sortByFantasyPoints(
-        benchEntries.filter(
-            (entry) => toLineupPositionGroup(entry.position) === 'D',
-        ),
-    );
-    const benchGoalies = sortByFantasyPoints(
-        benchEntries.filter(
-            (entry) => toLineupPositionGroup(entry.position) === 'G',
-        ),
-    );
-
-    // Prospects: sorted by position only (F, then D, then G). Within a
-    // group, the original order is preserved. No separators.
-    const prospectForwards = prospectEntries.filter(
-        (entry) => toLineupPositionGroup(entry.position) === 'F',
-    );
-    const prospectDefensemen = prospectEntries.filter(
-        (entry) => toLineupPositionGroup(entry.position) === 'D',
-    );
-    const prospectGoalies = prospectEntries.filter(
-        (entry) => toLineupPositionGroup(entry.position) === 'G',
-    );
-
-    const forwards = activeEntries.filter(
-        (entry) => entry.position !== 'D' && entry.position !== 'G',
-    );
-    const defensemen = activeEntries.filter(
-        (entry) => entry.position === 'D',
-    );
-    const goalies = activeEntries.filter(
-        (entry) => entry.position === 'G',
-    );
-    const bench = benchEntries;
-    const prospects = prospectEntries;
-
-    const maxSignedPlayers =
-        roster.leagueMaximumRosterSize - roster.leagueProspectCount;
-
-    const trackRest = [
-        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 0).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
-        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 1).toFixed(2)}px rgba(0, 168, 255, 0.55)`,
-        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.3)`,
-    ].join(', ');
-
-    const trackPeak = [
-        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 0).toFixed(2)}px rgba(0, 168, 255, 0.95)`,
-        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 1).toFixed(2)}px rgba(0, 168, 255, 0.75)`,
-        `0 0 ${auraRangeFor(trackAura, 'capBarTrack', 2).toFixed(2)}px rgba(0, 168, 255, 0.45)`,
-    ].join(', ');
-
-    const otherTeams = teams.filter((t) => t.id !== user?.fantasyTeamId);
+    // Destructured for readability in the JSX below. rosterGroups is
+    // guaranteed non-null by the guard above.
+    const {
+        mainForwards,
+        mainDefensemen,
+        mainGoalies,
+        benchForwards,
+        benchDefensemen,
+        benchGoalies,
+        prospectForwards,
+        prospectDefensemen,
+        prospectGoalies,
+        forwards,
+        defensemen,
+        goalies,
+        bench,
+        prospects,
+        maxSignedPlayers,
+    } = rosterGroups;
 
     return (
         <section className='-mt-4 space-y-4 sm:-mt-6'>

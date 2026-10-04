@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+﻿import { Suspense, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { TopBar } from '@/components/layout/TopBar';
 import { HealthBanner } from '@/components/layout/HealthBanner';
@@ -118,7 +118,13 @@ export function Layout() {
             <HealthBanner />
 
             <main className='flex-1 px-3 py-4 sm:px-4 sm:py-6'>
-                <Outlet />
+                <Suspense
+                    fallback={
+                        <p className='text-muted-foreground'>Chargement...</p>
+                    }
+                >
+                    <Outlet />
+                </Suspense>
             </main>
         </div>
     );

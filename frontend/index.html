@@ -5,11 +5,24 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ligue de Mousse</title>
-    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>eruda.init();</script>
+
+    <!-- Preload the hero font so it starts downloading in parallel
+         with the CSS. Without this, the browser only discovers the
+         font after parsing the CSS, adding a full round-trip. -->
+    <link rel="preload"
+          href="/fonts/grindy-brush.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin />
+
+    <!-- NHL CDN: team logos, headshots, and hero images all come
+         from assets.nhle.com. Setting up the connection early
+         saves ~100-200ms on the first image fetch. -->
+    <link rel="preconnect" href="https://assets.nhle.com" crossorigin />
+    <link rel="dns-prefetch" href="https://assets.nhle.com" />
 </head>
-  <body>
+<body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-  </body>
+</body>
 </html>

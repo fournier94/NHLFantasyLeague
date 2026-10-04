@@ -205,7 +205,7 @@ export function TopBar() {
                     <img
                         src='/images/league/logo_07_beaver.png'
                         alt='Ligue Keeper'
-                        className={`h-10 w-auto ${!isAuraOff(logoAura) ? auraPulseClass('filter') : ''}`}
+                        className={`h-10 w-auto ${!isAuraOff(logoAura) ? `${auraPulseClass('filter')} aura-mobile-keep` : ''}`}
                         style={
                             !isAuraOff(logoAura)
                                 ? auraPulseStyle(logoRest, logoPeak)

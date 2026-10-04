@@ -2,20 +2,10 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
-@import "@fontsource/rajdhani/500.css";
-@import "@fontsource/rajdhani/600.css";
-@import "@fontsource/rajdhani/700.css";
-
-@font-face {
-    font-family: 'Coors Script';
-    src: url('./assets/fonts/Coors Script Regular.ttf') format('truetype');
-    font-weight: 400;
-    font-style: normal;
-}
 
 @font-face {
     font-family: 'Grindy Brush';
-    src: url('./assets/fonts/Grindy Brush.otf') format('opentype');
+    src: url('/fonts/grindy-brush.woff2') format('woff2');
     font-weight: 400;
     font-style: normal;
     font-display: swap;
@@ -210,10 +200,18 @@
     animation: aura-pulse-box 3.9s ease-in-out infinite alternate;
 }
 
-/* Mobile page title font only; the glow comes from JS. */
-.mobile-page-title {
-    font-family: 'Coors Script', cursive;
-    color: #F2F5FA;
+/* Mobile: kill the pulse on every aura element EXCEPT the ones
+   tagged .aura-mobile-keep (the league logo and the player page
+   stat strip). Animating text-shadow and filter: drop-shadow() on
+   ~100 elements during scroll is expensive on mobile GPUs and
+   drains battery; the static rest shadow already reads as "neon",
+   but a couple of hero elements keep their life. */
+@media (max-width: 767px) {
+    .aura-pulse-text:not(.aura-mobile-keep),
+    .aura-pulse-filter:not(.aura-mobile-keep),
+    .aura-pulse-box:not(.aura-mobile-keep) {
+        animation: none !important;
+    }
 }
 
 /* Small helpers for the tokens Tailwind does not know about. */

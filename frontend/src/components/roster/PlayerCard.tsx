@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+﻿import { memo, useState } from 'react';
 import type {
     PlayerContractLine,
     RosterEntry,
@@ -137,7 +137,7 @@ interface PlayerCardProps {
     className?: string;
 }
 
-export function PlayerCard({
+export const PlayerCard = memo(function PlayerCard({
     entry,
     className = '',
 }: PlayerCardProps) {
@@ -748,4 +748,4 @@ export function PlayerCard({
             </article>
         </Link>
     );
-}
+});
