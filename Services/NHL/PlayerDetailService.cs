@@ -105,15 +105,18 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ToListAsync();
 
             var history = await _dbContext.PlayerInjuryHistories
-         .AsNoTracking()
-         .Where(h => h.PlayerId == player.Id)
-         .OrderByDescending(h => h.FirstSeenAt)
-         .ToListAsync();
+       .AsNoTracking()
+       .Where(h => h.PlayerId == player.Id)
+       .OrderByDescending(h => h.FirstSeenAt)
+       .ToListAsync();
 
-            // NOTE: career rows are loaded by GetPlayerCareerAsync,
-            // not here. Keeping them out of the main payload is what
-            // shrinks the initial /NhlPlayerDetail response from
-            // hundreds of kB to a few kB.
+            var careerRows = await _dbContext.PlayerCareerStats
+                .AsNoTracking()
+                .Where(s => s.PlayerId == player.Id)
+                .OrderBy(s => s.Season)
+                .ThenBy(s => s.GameTypeId)
+                .ThenBy(s => s.Sequence)
+                .ToListAsync();
 
             RosterEntry? entry = null;
 
@@ -292,13 +295,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                         Shutouts = lastSeasonFantasyStat.Shutouts
                     },
 
-                // Career tables are intentionally not populated here.
-                // See GetPlayerCareerAsync for those.
-                RegularSeason = new List<CareerRowDto>(),
-                Playoffs = new List<CareerRowDto>(),
-                Tournaments = new List<CareerRowDto>(),
-                YouthMinor = new List<CareerRowDto>(),
-                NhlTotals = new CareerTotalsDto(),
+                RegularSeason = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Main),
+                Playoffs = BuildCareerRows(careerRows, gameType: 3, CareerCategory.Main),
+                Tournaments = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Tournament),
+                YouthMinor = BuildCareerRows(careerRows, gameType: 2, CareerCategory.YouthMinor),
+                NhlTotals = BuildNhlTotals(careerRows),
 
                 RecentGames = recentGames
                     .Select(g => new GameLogRowDto
