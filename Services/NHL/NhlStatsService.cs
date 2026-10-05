@@ -21,13 +21,26 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         /// <summary>
-        /// Writes one fantasy row per (PlayerId, SeasonId) for the current
-        /// season only, using the NHL regular season totals from the
-        /// landing page. Used by the batch population.
+        /// Writes only the season-only fields of the current-season
+        /// PlayerSeasonStat row: the fields that cannot be derived
+        /// from PlayerGameLog (power-play goals/points, game-winning
+        /// goals, shooting percentage, save percentage, goals against
+        /// average).
+        ///
+        /// Per-game-derivable fields (GP, G, A, PTS, +/-, PIM, SOG,
+        /// W, L, OTL, SO, SV, SA, GA, FP, HT) are intentionally NOT
+        /// written here. They are owned by UpdatePlayerSeasonStatsAsync,
+        /// which recomputes them from PlayerGameLog. The live refresh
+        /// also writes incremental versions of those fields, and both
+        /// writers always produce the same value because they are
+        /// sourced from the same game log rows.
+        ///
+        /// Does NOT create a new row. The row is created by the log
+        /// recompute when the player plays his first game.
         /// </summary>
         public async Task<int> UpsertFantasySeasonStatAsync(
-    Player player,
-    NhlPlayerResponse nhlPlayer)
+            Player player,
+            NhlPlayerResponse nhlPlayer)
         {
             var featured = nhlPlayer.FeaturedStats;
 
@@ -51,16 +64,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return 0;
             }
 
-            bool isGoalie =
-                string.Equals(
-                    player.Position,
-                    "G",
-                    StringComparison.OrdinalIgnoreCase);
-
-            int points = isGoalie
-                ? stats.Goals + stats.Assists
-                : stats.Points;
-
             var existing = await _dbContext.PlayerSeasonStats
                 .FirstOrDefaultAsync(s =>
                     s.PlayerId == player.Id &&
@@ -68,43 +71,15 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             if (existing == null)
             {
-                existing = new PlayerSeasonStat
-                {
-                    PlayerId = player.Id,
-                    SeasonId = season.Id
-                };
-
-                _dbContext.PlayerSeasonStats.Add(existing);
+                return 0;
             }
 
-            // Regular-season totals, sourced from the landing page.
-            existing.GamesPlayed = stats.GamesPlayed;
-            existing.Goals = stats.Goals;
-            existing.Assists = stats.Assists;
-            existing.Points = points;
-            existing.PlusMinus = stats.PlusMinus;
-            existing.PenaltyMinutes = stats.PenaltyMinutes;
             existing.PowerPlayGoals = stats.PowerPlayGoals;
             existing.PowerPlayPoints = stats.PowerPlayPoints;
             existing.GameWinningGoals = stats.GameWinningGoals;
-            existing.Shots = stats.Shots;
             existing.ShootingPercentage = stats.ShootingPercentage;
-
-            // Goalie totals.
-            existing.Wins = stats.Wins;
-            existing.Losses = stats.Losses;
-            existing.OvertimeLosses = stats.OvertimeLosses;
-            existing.Shutouts = stats.Shutouts;
-            existing.Saves = stats.Saves;
-            existing.ShotsAgainst = stats.ShotsAgainst;
             existing.SavePercentage = stats.SavePercentage;
-            existing.GoalsAgainst = stats.GoalsAgainst;
             existing.GoalsAgainstAverage = stats.GoalsAgainstAverage;
-
-            // FantasyPoints and HatTricks are NOT written here. They are
-            // owned by UpdatePlayerSeasonStatsAsync, which computes them
-            // from PlayerGameLog rows. Keeping the writers separated means
-            // re-running either one never clobbers the other.
 
             await _dbContext.SaveChangesAsync();
 
@@ -194,6 +169,26 @@ namespace NhlFantasyLeague.api.Services.NHL
                     s.SeasonId == season.Id);
         }
 
+        /// <summary>
+        /// Recomputes the per-game-derivable fields of the current
+        /// season's PlayerSeasonStat row from PlayerGameLog. This is
+        /// the single authoritative writer for those fields:
+        ///
+        ///   GP, G, A, PTS, +/-, PIM, SOG  (skaters)
+        ///   W, L, OTL, SO, SV, SA, GA     (goalies)
+        ///   FP, HT
+        ///
+        /// The live refresh's ApplyStatDeltas writes incremental
+        /// versions of the same fields during games; both always
+        /// produce the same value because they are sourced from the
+        /// same PlayerGameLog rows. This method is the safety net:
+        /// call it after any log mutation (game log sync, backfill,
+        /// reconciliation) to guarantee the season row matches the
+        /// logs exactly.
+        ///
+        /// The season-only fields (PPG, PPP, GWG, SH%, SV%, GAA) are
+        /// NOT touched here. They are owned by UpsertFantasySeasonStatAsync.
+        /// </summary>
         public async Task UpdatePlayerSeasonStatsAsync(
             int nhlPlayerId,
             int seasonCode)
@@ -216,10 +211,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return;
             }
 
-            // We only read these rows to sum FantasyPoints and count
-            // hat-tricks, so no tracking is needed. AsNoTracking keeps
-            // EF from building identity maps and snapshots over the
-            // ~82 rows per player.
             var logs = await _dbContext.PlayerGameLogs
                 .AsNoTracking()
                 .Where(g =>
@@ -254,18 +245,33 @@ namespace NhlFantasyLeague.api.Services.NHL
                     "G",
                     StringComparison.OrdinalIgnoreCase);
 
+            // Per-game-derived fields: full recompute from logs.
+            seasonStats.GamesPlayed = logs.Count;
+            seasonStats.Goals = logs.Sum(g => g.Goals);
+            seasonStats.Assists = logs.Sum(g => g.Assists);
+            seasonStats.Points = logs.Sum(g => g.Points);
+            seasonStats.PlusMinus = logs.Sum(g => g.PlusMinus);
+            seasonStats.PenaltyMinutes = logs.Sum(g => g.PenaltyMinutes);
+            seasonStats.Shots = logs.Sum(g => g.Shots);
+
+            seasonStats.Wins = logs.Count(g => g.GoalieWin);
+            seasonStats.OvertimeLosses =
+                logs.Count(g => g.GoalieOvertimeLoss);
+            seasonStats.Losses = logs.Count(g =>
+                !g.GoalieWin &&
+                !g.GoalieOvertimeLoss &&
+                (g.ShotsAgainst > 0 || g.GoalsAgainst > 0));
+            seasonStats.Shutouts = logs.Count(g => g.Shutout);
+            seasonStats.Saves = logs.Sum(g => g.Saves);
+            seasonStats.ShotsAgainst = logs.Sum(g => g.ShotsAgainst);
+            seasonStats.GoalsAgainst = logs.Sum(g => g.GoalsAgainst);
+
             seasonStats.FantasyPoints =
                 logs.Sum(g => g.FantasyPoints);
 
-            if (!isGoalie)
-            {
-                seasonStats.HatTricks =
-                    logs.Count(g => g.HatTrick);
-            }
-            else
-            {
-                seasonStats.HatTricks = 0;
-            }
+            seasonStats.HatTricks = isGoalie
+                ? 0
+                : logs.Count(g => g.HatTrick);
 
             await _dbContext.SaveChangesAsync();
         }

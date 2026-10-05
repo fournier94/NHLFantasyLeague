@@ -16,11 +16,11 @@ namespace NhlFantasyLeague.api.Services.NHL
     {
         private readonly AppDbContext _dbContext;
 
-        /// <summary>NHL season code of the current season.</summary>
+        /// <summary>NHL season code of the current season (2026-27).</summary>
         private const int CurrentSeasonNhlCode =
             NhlFantasyLeague.api.Constants.SeasonCodes.Current;
 
-        /// <summary>NHL season code of the previous season.</summary>
+        /// <summary>NHL season code of the previous season (2025-26).</summary>
         private const int PreviousSeasonNhlCode =
             NhlFantasyLeague.api.Constants.SeasonCodes.Previous;
 
@@ -107,10 +107,10 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ToListAsync();
 
             var history = await _dbContext.PlayerInjuryHistories
-       .AsNoTracking()
-       .Where(h => h.PlayerId == player.Id)
-       .OrderByDescending(h => h.FirstSeenAt)
-       .ToListAsync();
+                .AsNoTracking()
+                .Where(h => h.PlayerId == player.Id)
+                .OrderByDescending(h => h.FirstSeenAt)
+                .ToListAsync();
 
             var careerRows = await _dbContext.PlayerCareerStats
                 .AsNoTracking()
@@ -119,6 +119,79 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ThenBy(s => s.GameTypeId)
                 .ThenBy(s => s.Sequence)
                 .ToListAsync();
+
+            // Overlay the live-tracked current-season stats onto the
+            // career table's current-season row, so the career table
+            // and the top season strip (which reads PlayerSeasonStat
+            // directly) never disagree.
+            //
+            // PlayerCareerStat is the historical archive owned by the
+            // landing sync, which can lag the boxscore by up to a day.
+            // PlayerSeasonStat is the live-tracked table: the live
+            // refresh writes incremental updates during games and the
+            // log recompute (UpdatePlayerSeasonStatsAsync) keeps it in
+            // sync from PlayerGameLog.
+            //
+            // Only per-game-derivable fields are overwritten. The
+            // historical-only fields on the row (GamesStarted,
+            // ShorthandedGoals/Points, OvertimeGoals, ATOI,
+            // FaceoffWinningPercentage) keep their landing-sync values.
+            //
+            // Rows are tracked here because we mutate them in memory
+            // before projecting into DTOs. The AsNoTracking call above
+            // is left in place because EF does not need to persist
+            // these changes; the mutation is for this response only.
+            // (If a future change wants to persist the overlay, the
+            // AsNoTracking must be removed.)
+            //
+            // Because we mutate a detached entity, EF will not throw
+            // and will not attempt to save. We explicitly avoid calling
+            // SaveChangesAsync in this method.
+            if (fantasySeasonStat != null)
+            {
+                var currentRow = careerRows.FirstOrDefault(r =>
+                    r.Season == CurrentSeasonNhlCode &&
+                    r.GameTypeId == 2 &&
+                    string.Equals(
+                        r.LeagueAbbreviation,
+                        "NHL",
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (currentRow != null)
+                {
+                    currentRow.GamesPlayed = fantasySeasonStat.GamesPlayed;
+                    currentRow.Goals = fantasySeasonStat.Goals;
+                    currentRow.Assists = fantasySeasonStat.Assists;
+                    currentRow.Points = fantasySeasonStat.Points;
+                    currentRow.PlusMinus = fantasySeasonStat.PlusMinus;
+                    currentRow.PenaltyMinutes =
+                        fantasySeasonStat.PenaltyMinutes;
+                    currentRow.PowerPlayGoals =
+                        fantasySeasonStat.PowerPlayGoals;
+                    currentRow.PowerPlayPoints =
+                        fantasySeasonStat.PowerPlayPoints;
+                    currentRow.GameWinningGoals =
+                        fantasySeasonStat.GameWinningGoals;
+                    currentRow.Shots = fantasySeasonStat.Shots;
+                    currentRow.ShootingPercentage =
+                        fantasySeasonStat.ShootingPercentage;
+                    currentRow.Wins = fantasySeasonStat.Wins;
+                    currentRow.Losses = fantasySeasonStat.Losses;
+                    currentRow.OvertimeLosses =
+                        fantasySeasonStat.OvertimeLosses;
+                    currentRow.Shutouts = fantasySeasonStat.Shutouts;
+                    currentRow.Saves = fantasySeasonStat.Saves;
+                    currentRow.ShotsAgainst =
+                        fantasySeasonStat.ShotsAgainst;
+                    currentRow.SavePercentage =
+                        fantasySeasonStat.SavePercentage;
+                    currentRow.GoalsAgainst =
+                        fantasySeasonStat.GoalsAgainst;
+                    currentRow.GoalsAgainstAverage =
+                        fantasySeasonStat.GoalsAgainstAverage;
+                    currentRow.HatTricks = fantasySeasonStat.HatTricks;
+                }
+            }
 
             RosterEntry? entry = null;
 
@@ -356,6 +429,74 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ThenBy(s => s.Sequence)
                 .ToListAsync();
 
+            // Load the live-tracked current-season row so we can
+            // overlay it on the career table's current-season row.
+            var currentSeason = await _dbContext.Seasons
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s =>
+                    s.NhlSeasonCode == CurrentSeasonNhlCode);
+
+            PlayerSeasonStat? fantasySeasonStat = null;
+
+            if (currentSeason != null)
+            {
+                fantasySeasonStat = await _dbContext.PlayerSeasonStats
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(s =>
+                        s.PlayerId == player.Id &&
+                        s.SeasonId == currentSeason.Id);
+            }
+
+            // Same overlay as GetPlayerDetailAsync: the current-season
+            // row is only as fresh as the landing sync in
+            // PlayerCareerStat, so replace its per-game-derivable
+            // fields with the live-tracked PlayerSeasonStat values.
+            if (fantasySeasonStat != null)
+            {
+                var currentRow = careerRows.FirstOrDefault(r =>
+                    r.Season == CurrentSeasonNhlCode &&
+                    r.GameTypeId == 2 &&
+                    string.Equals(
+                        r.LeagueAbbreviation,
+                        "NHL",
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (currentRow != null)
+                {
+                    currentRow.GamesPlayed = fantasySeasonStat.GamesPlayed;
+                    currentRow.Goals = fantasySeasonStat.Goals;
+                    currentRow.Assists = fantasySeasonStat.Assists;
+                    currentRow.Points = fantasySeasonStat.Points;
+                    currentRow.PlusMinus = fantasySeasonStat.PlusMinus;
+                    currentRow.PenaltyMinutes =
+                        fantasySeasonStat.PenaltyMinutes;
+                    currentRow.PowerPlayGoals =
+                        fantasySeasonStat.PowerPlayGoals;
+                    currentRow.PowerPlayPoints =
+                        fantasySeasonStat.PowerPlayPoints;
+                    currentRow.GameWinningGoals =
+                        fantasySeasonStat.GameWinningGoals;
+                    currentRow.Shots = fantasySeasonStat.Shots;
+                    currentRow.ShootingPercentage =
+                        fantasySeasonStat.ShootingPercentage;
+                    currentRow.Wins = fantasySeasonStat.Wins;
+                    currentRow.Losses = fantasySeasonStat.Losses;
+                    currentRow.OvertimeLosses =
+                        fantasySeasonStat.OvertimeLosses;
+                    currentRow.Shutouts = fantasySeasonStat.Shutouts;
+                    currentRow.Saves = fantasySeasonStat.Saves;
+                    currentRow.ShotsAgainst =
+                        fantasySeasonStat.ShotsAgainst;
+                    currentRow.SavePercentage =
+                        fantasySeasonStat.SavePercentage;
+                    currentRow.GoalsAgainst =
+                        fantasySeasonStat.GoalsAgainst;
+                    currentRow.GoalsAgainstAverage =
+                        fantasySeasonStat.GoalsAgainstAverage;
+                    currentRow.HatTricks = fantasySeasonStat.HatTricks;
+                }
+            }
+
             return new PlayerCareerDto
             {
                 RegularSeason = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Main),
@@ -494,20 +635,20 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var range = await _dbContext.PlayerGameLogs
-      .AsNoTracking()
-      .Where(g =>
-          g.SeasonId == seasonId &&
-          // Belt-and-suspenders: ignore any row with a
-          // sentinel date so a single bad entry cannot
-          // stretch the calculated range to year 1.
-          g.GameDate > new DateOnly(1900, 1, 1))
-      .GroupBy(g => 1)
-      .Select(g => new
-      {
-          First = g.Min(x => x.GameDate),
-          Last = g.Max(x => x.GameDate)
-      })
-      .FirstOrDefaultAsync();
+                .AsNoTracking()
+                .Where(g =>
+                    g.SeasonId == seasonId &&
+                    // Belt-and-suspenders: ignore any row with a
+                    // sentinel date so a single bad entry cannot
+                    // stretch the calculated range to year 1.
+                    g.GameDate > new DateOnly(1900, 1, 1))
+                .GroupBy(g => 1)
+                .Select(g => new
+                {
+                    First = g.Min(x => x.GameDate),
+                    Last = g.Max(x => x.GameDate)
+                })
+                .FirstOrDefaultAsync();
 
             var entry = new CachedSeasonRange(
                 range?.First,

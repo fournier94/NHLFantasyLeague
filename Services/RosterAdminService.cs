@@ -1044,6 +1044,46 @@ namespace NhlFantasyLeague.api.Services
                 }
             }
 
+            // Overlay PlayerSeasonStat for the current season.
+            //
+            // PlayerSeasonStat is the live-tracked table: the live
+            // refresh writes incremental updates to it during games
+            // and UpdatePlayerSeasonStatsAsync recomputes it from
+            // PlayerGameLog. PlayerCareerStat is the historical
+            // archive and only refreshes when the landing page is
+            // re-synced, which can be hours behind. For the current
+            // season, PlayerSeasonStat always wins.
+            //
+            // PlayerCareerStat is kept as a fallback for players who
+            // have a career row for the current season but no
+            // PlayerSeasonStat row yet (should be rare, but harmless
+            // to keep).
+            foreach (var kvp in seasonStatByPlayerAndSeasonCode)
+            {
+                var (playerId, seasonCode) = kvp.Key;
+
+                if (seasonCode != CurrentSeasonNhlCode)
+                {
+                    continue;
+                }
+
+                var stat = kvp.Value;
+
+                currentStatsByPlayerId[playerId] = new CardStatLine
+                {
+                    PlayerId = playerId,
+                    Season = CurrentSeasonNhlCode,
+                    LeagueAbbreviation = "NHL",
+                    GamesPlayed = stat.GamesPlayed,
+                    Goals = stat.Goals,
+                    Assists = stat.Assists,
+                    Points = stat.Points,
+                    Wins = stat.Wins,
+                    Losses = stat.Losses,
+                    OvertimeLosses = stat.OvertimeLosses,
+                };
+            }
+
             var contractsByPlayerId = new Dictionary<int, List<PlayerContract>>();
 
             if (playerIds.Count > 0)
