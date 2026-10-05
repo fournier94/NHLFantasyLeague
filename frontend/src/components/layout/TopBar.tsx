@@ -70,18 +70,31 @@ const INJURY_AURA = [
 ].join(' ');
 
 /**
- * Crossed hockey sticks with a puck, drawn as a small inline SVG.
- * Cyan neon look to match the reference image. Same footprint as
- * the lucide Trophy icon (h-5 w-5 / 20x20).
+ * Static three-layer white glow for the search icon.
  */
-function GameDayIcon({ className = 'h-5 w-5' }: { className?: string }) {
+const SEARCH_AURA = [
+    `drop-shadow(0 0 3px rgba(255, 255, 255, 0.95))`,
+    `drop-shadow(0 0 6px rgba(255, 255, 255, 0.55))`,
+    `drop-shadow(0 0 10px rgba(255, 255, 255, 0.35))`,
+].join(' ');
+
+/**
+ * Crossed hockey sticks with a puck, drawn as a small inline SVG.
+ * Cyan neon look to match the reference image.
+ *
+ * The viewBox is intentionally cropped (2 1 20 20 instead of
+ * 0 0 24 24) so the sticks + puck fill more of the rendered icon
+ * box. This makes the visible content ~20% larger than the h-6 w-6
+ * would suggest, without touching the icon's actual dimensions.
+ */
+function GameDayIcon({ className = 'h-6 w-6' }: { className?: string }) {
     return (
         <svg
-            viewBox='0 0 24 24'
+            viewBox='2 1 20 20'
             className={className}
             fill='none'
             stroke={GAMEDAY_CYAN}
-            strokeWidth='1.7'
+            strokeWidth='1.9'
             strokeLinecap='round'
             strokeLinejoin='round'
             style={{ filter: GAMEDAY_AURA }}
@@ -106,7 +119,7 @@ function GameDayIcon({ className = 'h-5 w-5' }: { className?: string }) {
  * shape as the InjuryBadge on PlayerCard / PlayerPage (a thick
  * cross), scaled to match the lucide icons.
  */
-function InjuryIcon({ className = 'h-5 w-5' }: { className?: string }) {
+function InjuryIcon({ className = 'h-6 w-6' }: { className?: string }) {
     return (
         <svg
             viewBox='0 0 24 24'
@@ -305,7 +318,7 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <CalendarDays className='h-4 w-4' />
+                        <CalendarDays className='h-5 w-5' />
                         <span>Game Day</span>
                     </Link>
 
@@ -316,7 +329,7 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <Stethoscope className='h-4 w-4' />
+                        <Stethoscope className='h-5 w-5' />
                         <span>Blessures</span>
                     </Link>
 
@@ -327,7 +340,7 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <Trophy className='h-4 w-4' />
+                        <Trophy className='h-5 w-5' />
                         <span>Classement</span>
                     </Link>
 
@@ -341,7 +354,7 @@ export function TopBar() {
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                <ShieldCheck className='h-4 w-4' />
+                                <ShieldCheck className='h-5 w-5' />
                                 <span>Admin</span>
                             </Link>
                         )}
@@ -355,7 +368,7 @@ export function TopBar() {
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                <User className='h-5 w-5' />
+                                <User className='h-6 w-6' />
                             </Link>
                         )}
 
@@ -373,7 +386,7 @@ export function TopBar() {
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                <LogIn className='h-4 w-4' />
+                                <LogIn className='h-5 w-5' />
                                 <span>Connexion</span>
                             </Link>
                         )}
@@ -382,23 +395,11 @@ export function TopBar() {
 
                 {/*
                  * Right-aligned group: three shortcut icons
-                 * (Game Day, Blessures, Classement) + Search +
+                 * (Blessures, Classement, Game Day) + Search +
                  * Déconnexion (desktop) + Hamburger (mobile).
-                 * gap-3 gives each icon 12px of breathing room.
+                 * gap-5 gives each icon 20px of breathing room.
                  */}
-                <div className='ml-auto flex items-center gap-3'>
-                    {/* Game Day shortcut — mobile only. */}
-                    <Link
-                        to='/game-day'
-                        aria-label='Game Day'
-                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/game-day'
-                            ? 'text-primary'
-                            : 'text-foreground'
-                            }`}
-                    >
-                        <GameDayIcon className='h-5 w-5' />
-                    </Link>
-
+                <div className='ml-auto flex items-center gap-5'>
                     {/* Blessures shortcut — mobile only. */}
                     <Link
                         to='/blessures'
@@ -408,7 +409,7 @@ export function TopBar() {
                             : 'text-foreground'
                             }`}
                     >
-                        <InjuryIcon className='h-5 w-5' />
+                        <InjuryIcon className='h-6 w-6' />
                     </Link>
 
                     {/* Golden Classement shortcut — mobile only. */}
@@ -421,12 +422,24 @@ export function TopBar() {
                             }`}
                     >
                         <Trophy
-                            className='h-5 w-5'
+                            className='h-6 w-6'
                             style={{
                                 color: GOLD,
                                 filter: trophyAura,
                             }}
                         />
+                    </Link>
+
+                    {/* Game Day shortcut — mobile only. */}
+                    <Link
+                        to='/game-day'
+                        aria-label='Game Day'
+                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/game-day'
+                            ? 'text-primary'
+                            : 'text-foreground'
+                            }`}
+                    >
+                        <GameDayIcon className='h-6 w-6' />
                     </Link>
 
                     <button
@@ -435,7 +448,10 @@ export function TopBar() {
                         onClick={() => setSearchModalOpen(true)}
                         className='cursor-pointer rounded-lg bg-transparent p-2 text-foreground transition-colors hover:bg-secondary'
                     >
-                        <Search className='h-5 w-5' />
+                        <Search
+                            className='h-6 w-6'
+                            style={{ filter: SEARCH_AURA }}
+                        />
                     </button>
 
                     {isAuthenticated && (
@@ -444,7 +460,7 @@ export function TopBar() {
                             onClick={handleLogout}
                             className='hidden cursor-pointer items-center gap-1.5 rounded-lg bg-transparent p-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground md:flex'
                         >
-                            <LogOut className='h-4 w-4' />
+                            <LogOut className='h-5 w-5' />
                             <span>Déconnexion</span>
                         </button>
                     )}
