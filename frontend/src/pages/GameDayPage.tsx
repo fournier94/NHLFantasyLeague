@@ -34,9 +34,6 @@ const FRAME_GLOW =
     '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)';
 const HEADER_GRADIENT =
     'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))';
-const CYAN = '#00E5FF';
-const CYAN_SOFT = '#7DD3FC';
-const GREEN = '#22C55E';
 
 // ---------------------------------------------------------------------
 // Helpers
