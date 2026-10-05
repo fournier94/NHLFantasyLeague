@@ -1,9 +1,10 @@
-﻿using System.Net.Http;
-using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Services.Health;
+using NhlFantasyLeague.api.Services.NHL;
+using System.Net.Http;
+using System.Text.Json;
 
 namespace NhlFantasyLeague.api.Services.Health
 {
@@ -76,8 +77,8 @@ namespace NhlFantasyLeague.api.Services.Health
         /// for a manual endpoint. No-op when the feature is disabled.
         /// </summary>
         public async Task<PlayerRosterStatusResult> RefreshAsync(
-        NhlFantasyLeague.api.Services.Jobs.BackgroundJobContext? progress = null,
-        CancellationToken ct = default)
+ NhlFantasyLeague.api.Services.Jobs.BackgroundJobContext? progress = null,
+ CancellationToken ct = default)
         {
             var result = new PlayerRosterStatusResult
             {
@@ -140,12 +141,15 @@ namespace NhlFantasyLeague.api.Services.Health
             // ---------------------------------------------------------
 
             HashSet<int> nhlRosterPlayerIds;
+            Dictionary<int, string> playerIdToTeamAbbrev;
 
             try
             {
-                var (ids, perTeam) = await FetchNhlRosterPlayerIdsAsync(ct);
+                var (ids, perTeam, playerToTeam) =
+                    await FetchNhlRosterPlayerIdsAsync(ct);
 
                 nhlRosterPlayerIds = ids;
+                playerIdToTeamAbbrev = playerToTeam;
 
                 await _health.RecordSuccessAsync(
                     ExternalSourceHealthService.NhlRosters, ct);
@@ -165,6 +169,7 @@ namespace NhlFantasyLeague.api.Services.Health
                     ct);
 
                 nhlRosterPlayerIds = new HashSet<int>();
+                playerIdToTeamAbbrev = new Dictionary<int, string>();
             }
 
             // ---------------------------------------------------------
@@ -222,6 +227,21 @@ namespace NhlFantasyLeague.api.Services.Health
             }
 
             // ---------------------------------------------------------
+            // NHL team abbreviation -> NhlTeamId lookup, used by the
+            // team change detection below. One query, small table.
+            // ---------------------------------------------------------
+
+            var teamIdByAbbrev = await _dbContext.NhlTeams
+                .AsNoTracking()
+                .Where(t => t.Abbreviation != null && t.Abbreviation != "")
+                .Select(t => new { t.Abbreviation, t.NhlTeamId })
+                .ToDictionaryAsync(
+                    t => t.Abbreviation,
+                    t => t.NhlTeamId,
+                    StringComparer.OrdinalIgnoreCase,
+                    ct);
+
+            // ---------------------------------------------------------
             // Apply the escalation ladder to every player before we
             // recompute RosterLocation.
             // ---------------------------------------------------------
@@ -245,6 +265,35 @@ namespace NhlFantasyLeague.api.Services.Health
                 if (progress != null)
                 {
                     progress.ProgressCurrent++;
+                }
+
+                // ---- NHL team change detection ------------------------
+                // The roster fetch above gives us the current NHL team
+                // of every rostered player. If it disagrees with the
+                // Player row, update NhlTeamId and preserve the old one
+                // as PreviousNhlTeamId. This catches mid-week trades
+                // and callups without waiting for the weekly refresh
+                // or the 8:30 AM career refresh.
+                if (player.NhlPlayerId > 0 &&
+                    playerIdToTeamAbbrev.TryGetValue(
+                        player.NhlPlayerId, out var currentAbbrev) &&
+                    teamIdByAbbrev.TryGetValue(
+                        currentAbbrev, out var currentNhlTeamId) &&
+                    player.NhlTeamId != currentNhlTeamId)
+                {
+                    NhlPlayerService.UpdatePlayerNhlTeam(
+                        player, currentNhlTeamId);
+
+                    result.NhlTeamChanges++;
+
+                    _logger.LogInformation(
+                        "NHL team change detected for {First} {Last} " +
+                        "(NhlPlayerId {NhlId}): {OldTeam} -> {NewTeam}.",
+                        player.FirstName,
+                        player.LastName,
+                        player.NhlPlayerId,
+                        player.PreviousNhlTeamId,
+                        currentNhlTeamId);
                 }
 
                 var onNhlRoster =
@@ -305,7 +354,8 @@ namespace NhlFantasyLeague.api.Services.Health
             await _dbContext.SaveChangesAsync(ct);
 
             result.Message =
-                $"RosterLocation refreshed for {players.Count} players.";
+                $"RosterLocation refreshed for {players.Count} players " +
+                $"({result.NhlTeamChanges} NHL team change(s) applied).";
 
             return result;
         }
@@ -320,8 +370,11 @@ namespace NhlFantasyLeague.api.Services.Health
         // NHL rosters
         // =================================================================
 
-        private async Task<(HashSet<int> Ids, Dictionary<string, int> PerTeam)>
-          FetchNhlRosterPlayerIdsAsync(CancellationToken ct)
+        private async Task<(
+      HashSet<int> Ids,
+      Dictionary<string, int> PerTeam,
+      Dictionary<int, string> PlayerIdToTeamAbbrev)>
+    FetchNhlRosterPlayerIdsAsync(CancellationToken ct)
         {
             var teams = await _dbContext.NhlTeams
                 .AsNoTracking()
@@ -331,6 +384,7 @@ namespace NhlFantasyLeague.api.Services.Health
             var ids = new HashSet<int>();
             var perTeam = new Dictionary<string, int>(
                 StringComparer.OrdinalIgnoreCase);
+            var playerToTeam = new Dictionary<int, string>();
 
             foreach (var abbreviation in teams)
             {
@@ -408,9 +462,12 @@ namespace NhlFantasyLeague.api.Services.Health
 
                         var before = ids.Count;
 
-                        CollectPlayerIds(forwards, ids);
-                        CollectPlayerIds(defensemen, ids);
-                        CollectPlayerIds(goalies, ids);
+                        CollectPlayerIds(
+                            forwards, ids, playerToTeam, abbreviation);
+                        CollectPlayerIds(
+                            defensemen, ids, playerToTeam, abbreviation);
+                        CollectPlayerIds(
+                            goalies, ids, playerToTeam, abbreviation);
 
                         perTeam[abbreviation] = ids.Count - before;
                     }
@@ -428,7 +485,38 @@ namespace NhlFantasyLeague.api.Services.Health
                 }
             }
 
-            return (ids, perTeam);
+            return (ids, perTeam, playerToTeam);
+        }
+
+        private static void CollectPlayerIds(
+            JsonElement array,
+            HashSet<int> target,
+            Dictionary<int, string> playerToTeam,
+            string teamAbbreviation)
+        {
+            if (array.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (var element in array.EnumerateArray())
+            {
+                if (element.TryGetProperty("id", out var idElement) &&
+                    idElement.ValueKind == JsonValueKind.Number)
+                {
+                    var playerId = idElement.GetInt32();
+
+                    target.Add(playerId);
+
+                    // First write wins: a player should only appear on
+                    // one NHL team's current roster, but if the API ever
+                    // lists him twice, keep the first team we saw him on.
+                    if (!playerToTeam.ContainsKey(playerId))
+                    {
+                        playerToTeam[playerId] = teamAbbreviation;
+                    }
+                }
+            }
         }
 
         private static void CollectPlayerIds(
@@ -799,5 +887,13 @@ namespace NhlFantasyLeague.api.Services.Health
         /// failed: -1 HTTP error, -2 shape mismatch, -3 exception.
         /// </summary>
         public Dictionary<string, int> NhlPlayersPerTeam { get; set; } = new();
+
+        /// <summary>
+        /// Number of players whose NhlTeamId was updated by this run
+        /// because the current NHL roster listed them on a different
+        /// team than what we had on file. Catches mid-week trades and
+        /// callups without waiting for the weekly refresh.
+        /// </summary>
+        public int NhlTeamChanges { get; set; }
     }
 }

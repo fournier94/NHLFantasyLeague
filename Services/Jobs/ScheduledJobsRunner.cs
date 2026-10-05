@@ -10,37 +10,42 @@ namespace NhlFantasyLeague.api.Services.Jobs
     /// Owns the scheduled jobs and their shared state. Registered as a
     /// singleton.
     ///
-    /// FIVE JOBS
+    /// JOBS
     ///
-    ///   1. Live refresh (11:00 – 02:00 ET, every 7 min).
-    ///      Memory only, no DB. Serves the Game Day page.
-    ///
-    ///   2. Post-game write (02:30 ET, once per day).
-    ///      Persists FINAL/OFF games for yesterday's ET date.
-    ///      One bulk transaction.
-    ///
-    ///   3. Daily refresh (08:00 ET, once per day).
-    ///      ESPN injuries + NHL/AHL roster locations.
-    ///
-    ///   4. Career stats refresh (08:30 ET, once per day).
-    ///      Landing pages for players who played yesterday.
-    ///
-    ///   5. Weekly deep refresh (Sunday 03:00 ET).
-    ///      Teams, full population, full team-totals recompute.
-    ///
-    /// Plus an ON-DEMAND recompute: any roster change (swap, trade,
-    /// set-status, update) calls RequestRecompute(). The next tick
-    /// picks it up and runs a full FantasyTeamSeason recompute for
-    /// the current season, so standings update within ~30 s.
+    ///   Weekly deep refresh      Sunday 03:00 ET, once per week.
+    ///   Post-game write          02:30 ET, once per day.
+    ///   Season reconciliation    05:00, 10:00, 15:00 ET.
+    ///   Daily cleanup            08:00 ET, once per day.
+    ///   Career stats refresh     08:30 ET, once per day.
+    ///   On-demand recompute      any time a roster mutation fires.
+    ///   Frequent refresh         every 30 min, 24/7.
+    ///   Live refresh             11:00 – 02:00 ET, every 60 sec.
     ///
     /// LOCKING MODEL — two independent semaphores:
     ///
-    ///   _liveLock  — jobs 1 (memory only, HTTP-bound).
-    ///   _heavyLock — jobs 2, 3, 4, 5 (all touch the DB).
+    ///   _liveLock  — live refresh only (memory-only, HTTP-bound).
+    ///   _heavyLock — every other job (all touch the DB).
     ///
-    /// Every job uses WaitAsync(0): if the lock is busy, the job
-    /// no-ops and the next tick tries again. The scheduler never
-    /// blocks on a long job.
+    /// PRIORITY
+    ///
+    /// The heavy lock serializes every DB-touching job: only one runs
+    /// at a time. Every job uses WaitAsync(0), so a job that loses the
+    /// race skips this tick and retries 30 seconds later. Because the
+    /// tick fires jobs in priority order, RARE jobs (weekly, daily)
+    /// always get the first crack at a free lock and can never be
+    /// starved by FREQUENT ones (frequent refresh).
+    ///
+    /// Priority order, most important first:
+    ///
+    ///   1. Weekly deep refresh       (once a week, must not miss)
+    ///   2. Post-game write           (once a day, timing-sensitive)
+    ///   3. Season reconciliation     (3 slots per day)
+    ///   4. Career stats refresh      (once a day)
+    ///   5. Daily cleanup             (once a day, very fast)
+    ///   6. On-demand recompute       (user-triggered, retries via flag)
+    ///   7. Frequent refresh          (many times a day, best-effort)
+    ///
+    /// The live refresh uses a separate lock so it never competes.
     /// </summary>
     public class ScheduledJobsRunner
     {
@@ -77,6 +82,13 @@ namespace NhlFantasyLeague.api.Services.Jobs
         // the run and the live refresh already keeps them current.
         private static readonly TimeSpan AfternoonGameCutoffEt = new(16, 0, 0);
 
+        // Frequent refresh: injuries + roster status. Runs every 30
+        // minutes around the clock. Injuries and callups can change
+        // any time, so we keep this cadence high. ~63 HTTP calls and
+        // ~90 seconds per run.
+        private static readonly TimeSpan FrequentRefreshInterval =
+            TimeSpan.FromMinutes(30);
+
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly LiveGameCache _cache;
         private readonly Services.Cache.ResponseCacheService _responseCache;
@@ -85,16 +97,78 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private readonly SemaphoreSlim _liveLock = new(1, 1);
         private readonly SemaphoreSlim _heavyLock = new(1, 1);
 
+        /// <summary>
+        /// A heavy job that holds the lock for longer than this is
+        /// considered stuck. The watchdog logs a warning once per hold.
+        /// </summary>
+        private static readonly TimeSpan HeavyLockStuckThreshold =
+            TimeSpan.FromMinutes(30);
+
+        // ---- Stable job names ----------------------------------------
+        //
+        // Used both as keys in _lastCompletedEtDateByJob / _inProgressJobs
+        // and as log labels. Keep them stable: renaming a constant resets
+        // the "completed today" state on the next deploy.
+        private const string JobWeeklyRefresh = "Weekly deep refresh";
+        private const string JobPostGameWrite = "Post-game write";
+        private const string JobCareerStatsRefresh = "Career stats refresh";
+        private const string JobDailyCleanup = "Daily cleanup";
+        private const string JobReconciliation5Am = "Season reconciliation (05:00 ET)";
+        private const string JobReconciliation10Am = "Season reconciliation (10:00 ET)";
+        private const string JobReconciliation3Pm = "Season reconciliation (15:00 ET)";
+
         // ---- Shared state (in-memory, lost on restart) ----------------
         private readonly object _stateLock = new();
+
+        /// <summary>
+        /// Once-per-day jobs that have completed successfully today, keyed
+        /// by job name. The value is the ET calendar date of the last
+        /// successful completion. Set only at the END of a run, so a
+        /// failed or interrupted job is retried on the next tick.
+        /// </summary>
+        private readonly Dictionary<string, DateOnly> _lastCompletedEtDateByJob =
+            new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Long-running jobs that are currently executing. Used by the
+        /// tick to avoid re-firing a job that is already running, since
+        /// the "completed today" flag is now only set at the end.
+        /// </summary>
+        private readonly HashSet<string> _inProgressJobs =
+            new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Earliest UTC instant each once-per-day job may fire again
+        /// after a failed attempt. Prevents a persistent failure
+        /// (e.g. an upstream 429 storm) from becoming a retry storm:
+        /// the next tick will skip the job until this instant passes.
+        /// Cleared automatically on a successful run because the
+        /// "completed today" flag then takes over.
+        /// </summary>
+        private readonly Dictionary<string, DateTime> _nextAttemptAllowedUtcByJob =
+            new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// How long to wait after a once-per-day job fails before
+        /// retrying it. Chosen so a persistently failing job retries
+        /// roughly once every 10 minutes instead of twice a minute,
+        /// while still guaranteeing it eventually completes today if
+        /// the underlying issue clears.
+        /// </summary>
+        private static readonly TimeSpan FailureBackoff =
+            TimeSpan.FromMinutes(10);
+
+        /// <summary>UTC instant the heavy lock was last acquired (watchdog).</summary>
+        private DateTime _heavyLockAcquiredAtUtc = DateTime.MinValue;
+
+        /// <summary>Job name that currently holds the heavy lock (watchdog).</summary>
+        private string? _heavyLockOwnerJobName;
+
+        /// <summary>True once the watchdog has logged a stuck-lock warning for the current hold.</summary>
+        private bool _heavyLockStuckWarningIssued;
+
         private DateTime _lastLiveKickUtc = DateTime.MinValue;
-        private DateOnly? _lastDailyRefreshEtDate;
-        private DateOnly? _lastPostGameWriteEtDate;
-        private DateOnly? _lastCareerStatsEtDate;
-        private DateOnly? _lastWeeklyRefreshEtDate;
-        private DateOnly? _lastReconciliation5AmEtDate;
-        private DateOnly? _lastReconciliation10AmEtDate;
-        private DateOnly? _lastReconciliation3PmEtDate;
+        private DateTime _lastFrequentRefreshKickUtc = DateTime.MinValue;
         private bool _recomputeRequested;
 
         public ScheduledJobsRunner(
@@ -128,6 +202,226 @@ namespace NhlFantasyLeague.api.Services.Jobs
         }
 
         // =================================================================
+        // Heavy lock helpers + watchdog
+        // =================================================================
+
+        /// <summary>
+        /// Acquires the heavy lock without waiting, and records the
+        /// owner + instant so the watchdog can flag a stuck hold.
+        /// Always uses <see cref="CancellationToken.None"/>: the tick
+        /// only fires this after it has decided to run the job, and we
+        /// never want a shutdown cancellation to slip in between.
+        /// </summary>
+        private async Task<bool> TryAcquireHeavyLockAsync(
+            string jobName,
+            CancellationToken ct)
+        {
+            if (!await _heavyLock.WaitAsync(0, CancellationToken.None))
+            {
+                return false;
+            }
+
+            lock (_stateLock)
+            {
+                _heavyLockAcquiredAtUtc = DateTime.UtcNow;
+                _heavyLockOwnerJobName = jobName;
+                _heavyLockStuckWarningIssued = false;
+            }
+
+            return true;
+        }
+
+        private void ReleaseHeavyLock()
+        {
+            lock (_stateLock)
+            {
+                _heavyLockAcquiredAtUtc = DateTime.MinValue;
+                _heavyLockOwnerJobName = null;
+            }
+
+            _heavyLock.Release();
+        }
+
+        /// <summary>
+        /// Logs a single warning per lock hold when the heavy lock has
+        /// been held for longer than <see cref="HeavyLockStuckThreshold"/>.
+        /// Called by the tick. Never throws.
+        /// </summary>
+        private void CheckHeavyLockHealth()
+        {
+            string? owner;
+            TimeSpan held;
+
+            lock (_stateLock)
+            {
+                if (_heavyLockAcquiredAtUtc == DateTime.MinValue) return;
+                if (_heavyLockStuckWarningIssued) return;
+
+                held = DateTime.UtcNow - _heavyLockAcquiredAtUtc;
+
+                if (held < HeavyLockStuckThreshold) return;
+
+                _heavyLockStuckWarningIssued = true;
+                owner = _heavyLockOwnerJobName;
+            }
+
+            _logger.LogWarning(
+                "Heavy lock has been held by '{Owner}' for {Minutes:F1} " +
+                "minutes. Watchdog warning.",
+                owner ?? "(unknown)",
+                held.TotalMinutes);
+
+            _ = RecordLockStuckAsync(owner, held);
+        }
+
+        private async Task RecordLockStuckAsync(string? owner, TimeSpan held)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+
+                var log = scope.ServiceProvider
+                    .GetRequiredService<
+                        NhlFantasyLeague.api.Services.Logging.SystemEventLogService
+                    >();
+
+                await log.RecordAsync(
+                    source: "ScheduledJobsRunner",
+                    category: "HeavyLockStuck",
+                    severity: "Warning",
+                    message:
+                        $"Heavy lock held by '{owner ?? "(unknown)"}' for " +
+                        $"{held.TotalMinutes:F1} minutes.",
+                    details: null);
+            }
+            catch
+            {
+                // Never let the watchdog cascade.
+            }
+        }
+
+        // =================================================================
+        // Once-per-day job runner
+        // =================================================================
+
+        /// <summary>
+        /// True when the given once-per-day job should fire on this
+        /// tick. Three conditions must all hold:
+        ///   1. the job is not currently in progress;
+        ///   2. it has not completed successfully for the given ET
+        ///      calendar date;
+        ///   3. if it failed recently, the failure backoff has elapsed.
+        /// </summary>
+        private bool ShouldFireOncePerDayJob(
+            string jobName,
+            DateOnly todayEt)
+        {
+            lock (_stateLock)
+            {
+                if (_inProgressJobs.Contains(jobName))
+                {
+                    return false;
+                }
+
+                var alreadyCompletedToday =
+                    _lastCompletedEtDateByJob.TryGetValue(
+                        jobName, out var lastCompleted)
+                    && lastCompleted == todayEt;
+
+                if (alreadyCompletedToday)
+                {
+                    return false;
+                }
+
+                if (_nextAttemptAllowedUtcByJob.TryGetValue(
+                        jobName, out var nextAllowed)
+                    && DateTime.UtcNow < nextAllowed)
+                {
+                    return false;
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Fires the given once-per-day job on the thread pool.
+        ///
+        ///   * The work runs with <see cref="CancellationToken.None"/>,
+        ///     so a graceful app shutdown does NOT cancel it mid-run.
+        ///   * The "completed today" flag is set by the job itself, only
+        ///     on success. A failed or early-returned run leaves the
+        ///     flag unset, so the next tick retries.
+        ///   * The in-progress set is cleared in a finally, so a job
+        ///     that failed to grab the heavy lock is retried next tick.
+        /// </summary>
+        private void FireOncePerDayJob(
+      string jobName,
+      Func<CancellationToken, Task> work)
+        {
+            lock (_stateLock)
+            {
+                if (!_inProgressJobs.Add(jobName))
+                {
+                    // Should not happen: ShouldFireOncePerDayJob already
+                    // guarded against it. Belt and suspenders.
+                    return;
+                }
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await work(CancellationToken.None);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Should not happen with CancellationToken.None. If
+                    // it does, we do NOT mark the job as done, so the
+                    // next tick retries.
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "{JobName} failed.", jobName);
+                    await RecordJobFailureAsync(jobName, ex);
+
+                    // Apply the failure backoff: the next attempt is
+                    // blocked until FailureBackoff elapses. Prevents a
+                    // persistent failure (e.g. an upstream 429 storm)
+                    // from turning into a retry every 30 seconds.
+                    lock (_stateLock)
+                    {
+                        _nextAttemptAllowedUtcByJob[jobName] =
+                            DateTime.UtcNow + FailureBackoff;
+                    }
+                }
+                finally
+                {
+                    lock (_stateLock)
+                    {
+                        _inProgressJobs.Remove(jobName);
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Marks a once-per-day job as successfully completed for the
+        /// given ET calendar date. Called by the job itself at the very
+        /// end, only when the work finished without throwing.
+        /// </summary>
+        private void MarkJobCompleted(
+            string jobName,
+            DateOnly completedEtDate)
+        {
+            lock (_stateLock)
+            {
+                _lastCompletedEtDateByJob[jobName] = completedEtDate;
+            }
+        }
+
+        // =================================================================
         // Tick
         // =================================================================
 
@@ -138,7 +432,88 @@ namespace NhlFantasyLeague.api.Services.Jobs
             var todayEt = DateOnly.FromDateTime(nowEt);
             var timeOfDayEt = nowEt.TimeOfDay;
 
-            // ---- 0. On-demand recompute -------------------------------
+            // Watchdog: flag a heavy lock that has been held too long.
+            // Called on every tick, cheap when the lock is idle.
+            CheckHeavyLockHealth();
+
+            // -----------------------------------------------------------------
+            // Jobs are evaluated in priority order. When multiple jobs
+            // fire in the same tick, the first one to grab the heavy
+            // lock runs; the rest skip and retry next tick. Because the
+            // once-per-day jobs use a "completed today" flag that is
+            // only set on success, a job that loses the lock race is
+            // NEVER silently skipped for the day — it simply retries
+            // on the next 30-second tick.
+            // -----------------------------------------------------------------
+
+            // ---- Priority 1: weekly deep refresh (Sundays) ------------
+            if (nowEt.DayOfWeek == DayOfWeek.Sunday &&
+                timeOfDayEt >= WeeklyRefreshHourEt &&
+                ShouldFireOncePerDayJob(JobWeeklyRefresh, todayEt))
+            {
+                FireOncePerDayJob(JobWeeklyRefresh, RunWeeklyRefreshAsync);
+            }
+
+            // ---- Priority 2: post-game write --------------------------
+            if (timeOfDayEt >= PostGameHourEt &&
+                ShouldFireOncePerDayJob(JobPostGameWrite, todayEt))
+            {
+                var target = todayEt.AddDays(-1);
+
+                FireOncePerDayJob(
+                    JobPostGameWrite,
+                    jobCt => RunPostGameWriteAsync(target, jobCt));
+            }
+
+            // ---- Priority 3: season reconciliation (05:00 ET) ---------
+            if (timeOfDayEt >= Reconciliation5AmHourEt &&
+                ShouldFireOncePerDayJob(JobReconciliation5Am, todayEt))
+            {
+                FireOncePerDayJob(
+                    JobReconciliation5Am,
+                    jobCt => RunSeasonReconciliationAsync(
+                        "05:00", JobReconciliation5Am, todayEt, jobCt));
+            }
+
+            // ---- Priority 4: season reconciliation (10:00 ET) ---------
+            if (timeOfDayEt >= Reconciliation10AmHourEt &&
+                ShouldFireOncePerDayJob(JobReconciliation10Am, todayEt))
+            {
+                FireOncePerDayJob(
+                    JobReconciliation10Am,
+                    jobCt => RunSeasonReconciliationAsync(
+                        "10:00", JobReconciliation10Am, todayEt, jobCt));
+            }
+
+            // ---- Priority 5: season reconciliation (15:00 ET) ---------
+            if (timeOfDayEt >= Reconciliation3PmHourEt &&
+                ShouldFireOncePerDayJob(JobReconciliation3Pm, todayEt))
+            {
+                FireOncePerDayJob(
+                    JobReconciliation3Pm,
+                    jobCt => RunSeasonReconciliationAsync(
+                        "15:00", JobReconciliation3Pm, todayEt, jobCt));
+            }
+
+            // ---- Priority 6: career stats refresh ---------------------
+            if (timeOfDayEt >= CareerStatsHourEt &&
+                ShouldFireOncePerDayJob(JobCareerStatsRefresh, todayEt))
+            {
+                var target = todayEt.AddDays(-1);
+
+                FireOncePerDayJob(
+                    JobCareerStatsRefresh,
+                    jobCt => RunCareerStatsRefreshAsync(target, jobCt));
+            }
+
+            // ---- Priority 7: daily cleanup ----------------------------
+            if (timeOfDayEt >= DailyRefreshHourEt &&
+                ShouldFireOncePerDayJob(JobDailyCleanup, todayEt))
+            {
+                FireOncePerDayJob(JobDailyCleanup, RunDailyRefreshAsync);
+            }
+
+            // ---- Priority 8: on-demand recompute ----------------------
             bool recomputeNow;
             lock (_stateLock)
             {
@@ -151,10 +526,30 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 FireAndForget(
                     ct,
                     "On-demand recompute",
-                    () => RunRecomputeAsync(ct));
+                    () => RunRecomputeAsync(CancellationToken.None));
             }
 
-            // ---- 1. Live refresh --------------------------------------
+            // ---- Priority 9: frequent refresh -------------------------
+            {
+                bool kick;
+                lock (_stateLock)
+                {
+                    kick = nowUtc - _lastFrequentRefreshKickUtc
+                        >= FrequentRefreshInterval;
+
+                    if (kick) _lastFrequentRefreshKickUtc = nowUtc;
+                }
+
+                if (kick)
+                {
+                    FireAndForget(
+                        ct,
+                        "Frequent refresh (injuries + rosters)",
+                        () => RunFrequentRefreshAsync(ct));
+                }
+            }
+
+            // ---- Priority 10: live refresh (separate lock) ------------
             if (IsInsideLiveWindow(timeOfDayEt))
             {
                 bool kick;
@@ -170,139 +565,6 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         ct,
                         "Live refresh",
                         () => RunLiveRefreshAsync(ct));
-                }
-            }
-
-            // ---- 2. Post-game write -----------------------------------
-            // NOTE: do NOT set the date flag here. The flag is set
-            // inside RunPostGameWriteAsync only after the heavy lock
-            // is acquired. Otherwise a job that loses the lock race
-            // would be silently skipped for the entire day.
-            if (timeOfDayEt >= PostGameHourEt)
-            {
-                bool shouldTry;
-                lock (_stateLock)
-                {
-                    shouldTry = _lastPostGameWriteEtDate != todayEt;
-                }
-
-                if (shouldTry)
-                {
-                    var target = todayEt.AddDays(-1);
-                    FireAndForget(
-                        ct,
-                        $"Post-game write for {target}",
-                        () => RunPostGameWriteAsync(target, ct));
-                }
-            }
-
-            // ---- 5. Weekly deep refresh (Sundays) ---------------------
-            if (nowEt.DayOfWeek == DayOfWeek.Sunday &&
-                timeOfDayEt >= WeeklyRefreshHourEt)
-            {
-                bool shouldTry;
-                lock (_stateLock)
-                {
-                    shouldTry = _lastWeeklyRefreshEtDate != todayEt;
-                }
-
-                if (shouldTry)
-                {
-                    FireAndForget(
-                        ct,
-                        "Weekly deep refresh",
-                        () => RunWeeklyRefreshAsync(ct));
-                }
-            }
-
-            // ---- 3. Daily refresh -------------------------------------
-            if (timeOfDayEt >= DailyRefreshHourEt)
-            {
-                bool shouldTry;
-                lock (_stateLock)
-                {
-                    shouldTry = _lastDailyRefreshEtDate != todayEt;
-                }
-
-                if (shouldTry)
-                {
-                    FireAndForget(
-                        ct,
-                        "Daily refresh",
-                        () => RunDailyRefreshAsync(ct));
-                }
-            }
-
-            // ---- 4. Career stats refresh ------------------------------
-            if (timeOfDayEt >= CareerStatsHourEt)
-            {
-                bool shouldTry;
-                lock (_stateLock)
-                {
-                    shouldTry = _lastCareerStatsEtDate != todayEt;
-                }
-
-                if (shouldTry)
-                {
-                    var target = todayEt.AddDays(-1);
-                    FireAndForget(
-                        ct,
-                        $"Career stats refresh for {target}",
-                        () => RunCareerStatsRefreshAsync(target, ct));
-                }
-            }
-
-            // ---- 7. Season reconciliation (05:00 ET) ------------------
-            if (timeOfDayEt >= Reconciliation5AmHourEt)
-            {
-                bool shouldTry;
-                lock (_stateLock)
-                {
-                    shouldTry = _lastReconciliation5AmEtDate != todayEt;
-                }
-
-                if (shouldTry)
-                {
-                    FireAndForget(
-                        ct,
-                        "Season reconciliation (05:00 ET)",
-                        () => RunSeasonReconciliationAsync("05:00", todayEt, ct));
-                }
-            }
-
-            // ---- 8. Season reconciliation (10:00 ET) ------------------
-            if (timeOfDayEt >= Reconciliation10AmHourEt)
-            {
-                bool shouldTry;
-                lock (_stateLock)
-                {
-                    shouldTry = _lastReconciliation10AmEtDate != todayEt;
-                }
-
-                if (shouldTry)
-                {
-                    FireAndForget(
-                        ct,
-                        "Season reconciliation (10:00 ET)",
-                        () => RunSeasonReconciliationAsync("10:00", todayEt, ct));
-                }
-            }
-
-            // ---- 9. Season reconciliation (15:00 ET) ------------------
-            if (timeOfDayEt >= Reconciliation3PmHourEt)
-            {
-                bool shouldTry;
-                lock (_stateLock)
-                {
-                    shouldTry = _lastReconciliation3PmEtDate != todayEt;
-                }
-
-                if (shouldTry)
-                {
-                    FireAndForget(
-                        ct,
-                        "Season reconciliation (15:00 ET)",
-                        () => RunSeasonReconciliationAsync("15:00", todayEt, ct));
                 }
             }
 
@@ -384,7 +646,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// </summary>
         public async Task RunRecomputeAsync(CancellationToken ct = default)
         {
-            if (!await _heavyLock.WaitAsync(0, ct))
+            if (!await TryAcquireHeavyLockAsync("On-demand recompute", ct))
             {
                 // A heavy job is already running. Re-set the flag so
                 // the next tick retries.
@@ -427,7 +689,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
             finally
             {
-                _heavyLock.Release();
+                ReleaseHeavyLock();
             }
         }
 
@@ -490,21 +752,15 @@ namespace NhlFantasyLeague.api.Services.Jobs
        DateOnly targetEtDate,
        CancellationToken ct = default)
         {
-            if (!await _heavyLock.WaitAsync(0, ct))
+            if (!await TryAcquireHeavyLockAsync(JobPostGameWrite, ct))
             {
                 _logger.LogInformation(
                     "Post-game write skipped: another heavy job is running.");
                 return;
             }
 
-            // Lock acquired. Mark today's run as done now, so that
-            // even if the job body throws, the next tick does not
-            // re-run it.
-            lock (_stateLock)
-            {
-                _lastPostGameWriteEtDate = DateOnly.FromDateTime(
-                    TimeZoneHelper.ToEastern(DateTime.UtcNow));
-            }
+            var completedEtDate = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
 
             try
             {
@@ -534,6 +790,10 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 // Standings changed. Drop the cached copies so the
                 // next read reflects the fresh totals.
                 _responseCache.Invalidate("standings:");
+
+                // Only mark the job as done-for-today on success. A
+                // throw leaves the flag unset so the next tick retries.
+                MarkJobCompleted(JobPostGameWrite, completedEtDate);
             }
             catch (Exception ex)
             {
@@ -544,33 +804,40 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
             finally
             {
-                _heavyLock.Release();
+                ReleaseHeavyLock();
             }
         }
 
         // =================================================================
-        // Job 3: daily refresh (injuries + roster locations)
+        // Frequent refresh: injuries + roster status (every 30 min)
         // =================================================================
 
-        public async Task RunDailyRefreshAsync(CancellationToken ct = default)
+        /// <summary>
+        /// Runs the injury (ESPN) and roster status (NHL + AHL)
+        /// refreshes. Fires every 30 minutes, 24/7.
+        ///
+        /// Uses WaitAsync(0) on the heavy lock: if any other heavy
+        /// job is running, this run is skipped and the next kick
+        /// (30 min later) picks it up. The 30-minute interval is
+        /// enforced by _lastFrequentRefreshKickUtc, not by a success
+        /// flag, so a skipped run does not cause a retry storm.
+        ///
+        /// Typical cost: ~63 HTTP calls, ~90 seconds.
+        /// </summary>
+        private async Task RunFrequentRefreshAsync(
+     CancellationToken ct = default)
         {
-            if (!await _heavyLock.WaitAsync(0, ct))
+            if (!await TryAcquireHeavyLockAsync(
+                    "Frequent refresh (injuries + rosters)", ct))
             {
                 _logger.LogInformation(
-                    "Daily refresh skipped: another heavy job is running.");
+                    "Frequent refresh skipped: another heavy job is " +
+                    "running.");
                 return;
-            }
-
-            lock (_stateLock)
-            {
-                _lastDailyRefreshEtDate = DateOnly.FromDateTime(
-                    TimeZoneHelper.ToEastern(DateTime.UtcNow));
             }
 
             try
             {
-                _logger.LogInformation("Daily refresh starting.");
-
                 using var scope = _scopeFactory.CreateScope();
 
                 var injuryService = scope.ServiceProvider
@@ -584,7 +851,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     var injuryResult = await injuryService.RefreshAsync(ct);
 
                     _logger.LogInformation(
-                        "Daily injuries: {Matched} matched, " +
+                        "Frequent injuries: {Matched} matched, " +
                         "{Unmatched} unmatched.",
                         injuryResult.MatchedCount,
                         injuryResult.UnmatchedCount);
@@ -592,7 +859,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 catch (Exception ex)
                 {
                     _logger.LogWarning(
-                        ex, "Daily injury refresh failed.");
+                        ex, "Frequent injury refresh failed.");
                 }
 
                 try
@@ -601,7 +868,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         .RefreshAsync(null, ct);
 
                     _logger.LogInformation(
-                        "Daily roster status: {Nhl} NHL, {Ahl} AHL, " +
+                        "Frequent roster status: {Nhl} NHL, {Ahl} AHL, " +
                         "{Injured} injured, {Out} out.",
                         rosterResult.NhlRosterCount,
                         rosterResult.AhlRosterCount,
@@ -611,8 +878,39 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 catch (Exception ex)
                 {
                     _logger.LogWarning(
-                        ex, "Daily roster status refresh failed.");
+                        ex, "Frequent roster status refresh failed.");
                 }
+            }
+            finally
+            {
+                ReleaseHeavyLock();
+            }
+        }
+
+
+        // =================================================================
+        // Job 3: daily cleanup (SystemEventLog retention)
+        // =================================================================
+
+        public async Task RunDailyRefreshAsync(CancellationToken ct = default)
+        {
+            if (!await TryAcquireHeavyLockAsync(JobDailyCleanup, ct))
+            {
+                _logger.LogInformation(
+                    "Daily refresh skipped: another heavy job is running.");
+                return;
+            }
+
+            var completedEtDate = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
+
+            try
+            {
+                // NOTE: injuries and roster status were moved to the
+                // frequent refresh (every 30 min). This job now only
+                // runs the daily housekeeping tasks that do not need
+                // to run more than once a day.
+                _logger.LogInformation("Daily cleanup starting.");
 
                 try
                 {
@@ -630,7 +928,12 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         ex, "SystemEventLog cleanup failed.");
                 }
 
-                _logger.LogInformation("Daily refresh done.");
+                _logger.LogInformation("Daily cleanup done.");
+
+                // Only mark the job as done-for-today on success. A
+                // throw above leaves the flag unset so the next tick
+                // retries.
+                MarkJobCompleted(JobDailyCleanup, completedEtDate);
             }
             catch (Exception ex)
             {
@@ -638,7 +941,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
             finally
             {
-                _heavyLock.Release();
+                ReleaseHeavyLock();
             }
         }
 
@@ -656,10 +959,10 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// lock hold.
         /// </summary>
         public async Task RunCareerStatsRefreshAsync(
-      DateOnly targetEtDate,
-      CancellationToken ct = default)
+     DateOnly targetEtDate,
+     CancellationToken ct = default)
         {
-            if (!await _heavyLock.WaitAsync(0, ct))
+            if (!await TryAcquireHeavyLockAsync(JobCareerStatsRefresh, ct))
             {
                 _logger.LogInformation(
                     "Career stats refresh skipped: another heavy job " +
@@ -667,11 +970,8 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 return;
             }
 
-            lock (_stateLock)
-            {
-                _lastCareerStatsEtDate = DateOnly.FromDateTime(
-                    TimeZoneHelper.ToEastern(DateTime.UtcNow));
-            }
+            var completedEtDate = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
 
             try
             {
@@ -694,6 +994,11 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     result.PlayersRefreshed,
                     result.FailedPlayers,
                     result.SkippedNoLandingData);
+
+                // Only mark the job as done-for-today on success. A
+                // throw above leaves the flag unset so the next tick
+                // retries.
+                MarkJobCompleted(JobCareerStatsRefresh, completedEtDate);
             }
             catch (Exception ex)
             {
@@ -702,7 +1007,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
             finally
             {
-                _heavyLock.Release();
+                ReleaseHeavyLock();
             }
         }
 
@@ -712,18 +1017,15 @@ namespace NhlFantasyLeague.api.Services.Jobs
 
         public async Task RunWeeklyRefreshAsync(CancellationToken ct = default)
         {
-            if (!await _heavyLock.WaitAsync(0, ct))
+            if (!await TryAcquireHeavyLockAsync(JobWeeklyRefresh, ct))
             {
                 _logger.LogInformation(
                     "Weekly refresh skipped: another heavy job is running.");
                 return;
             }
 
-            lock (_stateLock)
-            {
-                _lastWeeklyRefreshEtDate = DateOnly.FromDateTime(
-                    TimeZoneHelper.ToEastern(DateTime.UtcNow));
-            }
+            var completedEtDate = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
 
             try
             {
@@ -790,6 +1092,13 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 }
 
                 _logger.LogInformation("Weekly deep refresh done.");
+
+                // Mark the weekly job as completed for today ONLY after
+                // every sub-step has run. If any step escapes (they are
+                // individually caught, but a hard exception here is
+                // possible), the flag stays unset and the next tick
+                // retries.
+                MarkJobCompleted(JobWeeklyRefresh, completedEtDate);
             }
             catch (Exception ex)
             {
@@ -797,7 +1106,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
             finally
             {
-                _heavyLock.Release();
+                ReleaseHeavyLock();
             }
         }
 
@@ -823,11 +1132,12 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// a skipped run does not mark itself as complete.
         /// </summary>
         private async Task RunSeasonReconciliationAsync(
-            string slotLabel,
-            DateOnly todayEt,
-            CancellationToken ct)
+      string slotLabel,
+      string jobName,
+      DateOnly todayEt,
+      CancellationToken ct)
         {
-            if (!await _heavyLock.WaitAsync(0, ct))
+            if (!await TryAcquireHeavyLockAsync(jobName, ct))
             {
                 _logger.LogInformation(
                     "Season reconciliation ({Slot}) skipped: another " +
@@ -850,31 +1160,10 @@ namespace NhlFantasyLeague.api.Services.Jobs
                             "Season reconciliation (15:00 ET) skipped: " +
                             "afternoon NHL games are scheduled today.");
 
-                        lock (_stateLock)
-                        {
-                            _lastReconciliation3PmEtDate = todayEt;
-                        }
-
+                        // A skip is a "successful run": mark it done so
+                        // we don't retry every tick until tomorrow.
+                        MarkJobCompleted(jobName, todayEt);
                         return;
-                    }
-                }
-
-                // ---- Mark this slot as done now that we're committed --
-                lock (_stateLock)
-                {
-                    switch (slotLabel)
-                    {
-                        case "05:00":
-                            _lastReconciliation5AmEtDate = todayEt;
-                            break;
-
-                        case "10:00":
-                            _lastReconciliation10AmEtDate = todayEt;
-                            break;
-
-                        case "15:00":
-                            _lastReconciliation3PmEtDate = todayEt;
-                            break;
                     }
                 }
 
@@ -891,6 +1180,10 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         "Season reconciliation ({Slot}) skipped: no " +
                         "current season.",
                         slotLabel);
+
+                    // No current season is a terminal state for today;
+                    // marking it done avoids a retry storm.
+                    MarkJobCompleted(jobName, todayEt);
                     return;
                 }
 
@@ -927,6 +1220,10 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     result.TeamTotals?.TeamsProcessed ?? 0,
                     result.TeamTotals?.GamesCredited ?? 0,
                     result.FailedPlayers);
+
+                // Mark done only on successful completion. A failure
+                // leaves the flag unset so the next tick retries.
+                MarkJobCompleted(jobName, todayEt);
             }
             catch (Exception ex)
             {
@@ -936,7 +1233,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
             finally
             {
-                _heavyLock.Release();
+                ReleaseHeavyLock();
             }
         }
 

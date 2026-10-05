@@ -312,6 +312,47 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
             }
 
+            // --- Defensive: collapse duplicate open spells -----------
+            // If the same (player, status, team) triple somehow has
+            // more than one open spell, keep the one with the newest
+            // LastSeenAt and resolve the rest. This protects the
+            // "Historique des blessures" section on PlayerPage from
+            // ever showing the same injury multiple times.
+            var remainingOpen = openSpells
+                .Where(h => h.ResolvedAt == null)
+                .ToList();
+
+            var duplicateGroups = remainingOpen
+                .GroupBy(h => new
+                {
+                    h.PlayerId,
+                    Status = h.InjuryStatus.Trim().ToLowerInvariant(),
+                    Team = h.TeamAbbreviation.Trim().ToLowerInvariant(),
+                })
+                .Where(g => g.Count() > 1)
+                .ToList();
+
+            foreach (var group in duplicateGroups)
+            {
+                var ordered = group
+                    .OrderByDescending(h => h.LastSeenAt)
+                    .ToList();
+
+                for (var i = 1; i < ordered.Count; i++)
+                {
+                    ordered[i].ResolvedAt = now;
+                }
+
+                _logger.LogInformation(
+                    "Collapsed {Count} duplicate open injury spell(s) " +
+                    "for player {PlayerId} ({Status} / {Team}).",
+                    ordered.Count - 1,
+                    group.Key.PlayerId,
+                    group.Key.Status,
+                    group.Key.Team);
+            }
+
+
             await _dbContext.SaveChangesAsync(ct);
 
             await _health.RecordSuccessAsync(
