@@ -47,6 +47,80 @@ const MOBILE_NAV_ITEMS = [
 /** Color used for the golden Classement shortcut icon. */
 const GOLD = '#FFC72C';
 
+/** Colors used for the two new mobile shortcuts. */
+const GAMEDAY_CYAN = '#00E5FF';
+const INJURY_RED = '#EF4444';
+
+/**
+ * Static three-layer glow for the two new mobile shortcuts. Same
+ * shape as the golden trophy aura: three stacked drop-shadows with
+ * decreasing opacity. Not tied to the aura slider system — these
+ * are fixed decorations, not user-tunable channels.
+ */
+const GAMEDAY_AURA = [
+    `drop-shadow(0 0 3px rgba(0, 229, 255, 0.95))`,
+    `drop-shadow(0 0 6px rgba(0, 229, 255, 0.55))`,
+    `drop-shadow(0 0 10px rgba(0, 168, 255, 0.35))`,
+].join(' ');
+
+const INJURY_AURA = [
+    `drop-shadow(0 0 3px rgba(239, 68, 68, 0.95))`,
+    `drop-shadow(0 0 6px rgba(239, 68, 68, 0.55))`,
+    `drop-shadow(0 0 10px rgba(220, 38, 38, 0.35))`,
+].join(' ');
+
+/**
+ * Crossed hockey sticks with a puck, drawn as a small inline SVG.
+ * Cyan neon look to match the reference image. Same footprint as
+ * the lucide Trophy icon (h-5 w-5 / 20x20).
+ */
+function GameDayIcon({ className = 'h-5 w-5' }: { className?: string }) {
+    return (
+        <svg
+            viewBox='0 0 24 24'
+            className={className}
+            fill='none'
+            stroke={GAMEDAY_CYAN}
+            strokeWidth='1.7'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+            style={{ filter: GAMEDAY_AURA }}
+            aria-hidden='true'
+        >
+            {/* Left hockey stick: shaft from top-right down to
+                bottom-left, then a blade that hooks left. */}
+            <path d='M20 3 L12 13 L8 17 Q7 19 5 19 L3 19' />
+
+            {/* Right hockey stick: mirror image of the left. */}
+            <path d='M4 3 L12 13 L16 17 Q17 19 19 19 L21 19' />
+
+            {/* Puck at the crossing point, drawn last so it sits on
+                top of both shafts. */}
+            <ellipse cx='12' cy='12.5' rx='3.5' ry='2.2' />
+        </svg>
+    );
+}
+
+/**
+ * Red cross used on the mobile nav for the Blessures page. Same
+ * shape as the InjuryBadge on PlayerCard / PlayerPage (a thick
+ * cross), scaled to match the lucide icons.
+ */
+function InjuryIcon({ className = 'h-5 w-5' }: { className?: string }) {
+    return (
+        <svg
+            viewBox='0 0 24 24'
+            className={className}
+            xmlns='http://www.w3.org/2000/svg'
+            style={{ filter: INJURY_AURA }}
+            aria-hidden='true'
+        >
+            <rect x='9' y='3' width='6' height='18' fill={INJURY_RED} />
+            <rect x='3' y='9' width='18' height='6' fill={INJURY_RED} />
+        </svg>
+    );
+}
+
 export function TopBar() {
     const location = useLocation();
     const navigate = useNavigate();
@@ -307,11 +381,36 @@ export function TopBar() {
                 </div>
 
                 {/*
-                 * Right-aligned group: Trophy (mobile) + Search +
+                 * Right-aligned group: three shortcut icons
+                 * (Game Day, Blessures, Classement) + Search +
                  * Déconnexion (desktop) + Hamburger (mobile).
                  * gap-3 gives each icon 12px of breathing room.
                  */}
                 <div className='ml-auto flex items-center gap-3'>
+                    {/* Game Day shortcut — mobile only. */}
+                    <Link
+                        to='/game-day'
+                        aria-label='Game Day'
+                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/game-day'
+                            ? 'text-primary'
+                            : 'text-foreground'
+                            }`}
+                    >
+                        <GameDayIcon className='h-5 w-5' />
+                    </Link>
+
+                    {/* Blessures shortcut — mobile only. */}
+                    <Link
+                        to='/blessures'
+                        aria-label='Blessures'
+                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/blessures'
+                            ? 'text-primary'
+                            : 'text-foreground'
+                            }`}
+                    >
+                        <InjuryIcon className='h-5 w-5' />
+                    </Link>
+
                     {/* Golden Classement shortcut — mobile only. */}
                     <Link
                         to='/classement'
