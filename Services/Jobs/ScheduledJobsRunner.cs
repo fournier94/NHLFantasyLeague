@@ -240,9 +240,9 @@ namespace NhlFantasyLeague.api.Services.Jobs
         }
 
         private void FireAndForget(
-            CancellationToken ct,
-            string jobName,
-            Func<Task> work)
+     CancellationToken ct,
+     string jobName,
+     Func<Task> work)
         {
             _ = Task.Run(async () =>
             {
@@ -258,8 +258,43 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 {
                     _logger.LogError(
                         ex, "{JobName} threw.", jobName);
+
+                    await RecordJobFailureAsync(jobName, ex);
                 }
             }, ct);
+        }
+
+        /// <summary>
+        /// Records a scheduled-job failure into SystemEventLogs so it
+        /// shows up on the admin page. Never throws.
+        /// </summary>
+        private async Task RecordJobFailureAsync(
+            string jobName,
+            Exception ex)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var log = scope.ServiceProvider
+                    .GetRequiredService<
+                        NhlFantasyLeague.api.Services.Logging.SystemEventLogService
+                    >();
+
+                var details = ex.StackTrace is null
+                    ? ex.Message
+                    : ex.Message + "\n\n" + ex.StackTrace;
+
+                await log.RecordAsync(
+                    source: $"ScheduledJob:{jobName}",
+                    category: "JobFailure",
+                    severity: "Error",
+                    message: $"{ex.GetType().Name}: {ex.Message}",
+                    details: details);
+            }
+            catch
+            {
+                // Never let logging failures cascade.
+            }
         }
 
         private static bool IsInsideLiveWindow(TimeSpan timeOfDayEt)
@@ -507,6 +542,22 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 {
                     _logger.LogWarning(
                         ex, "Daily roster status refresh failed.");
+                }
+
+                try
+                {
+                    using var logScope = _scopeFactory.CreateScope();
+                    var logService = logScope.ServiceProvider
+                        .GetRequiredService<
+                            NhlFantasyLeague.api.Services.Logging.SystemEventLogService
+                        >();
+
+                    await logService.CleanupAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex, "SystemEventLog cleanup failed.");
                 }
 
                 _logger.LogInformation("Daily refresh done.");

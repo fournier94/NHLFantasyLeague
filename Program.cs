@@ -12,10 +12,23 @@ using NhlFantasyLeague.api.Services.Cache;
 using NhlFantasyLeague.api.Services.CapFreeze;
 using NhlFantasyLeague.api.Services.Health;
 using NhlFantasyLeague.api.Services.Jobs;
+using NhlFantasyLeague.api.Services.Logging;
 using NhlFantasyLeague.api.Services.NHL;
 using System.IO.Compression;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Attach the HTTP error logging handler to every HttpClient the app
+// registers, so 429s and transport failures across all external
+// sources (NHL, ESPN, CapFreeze, AHL feed) are recorded in the
+// SystemEventLogs table without touching each AddHttpClient call.
+builder.Services.AddScoped<SystemEventLogService>();
+builder.Services.AddTransient<HttpErrorLoggingHandler>();
+
+builder.Services.ConfigureHttpClientDefaults(http =>
+{
+    http.AddHttpMessageHandler<HttpErrorLoggingHandler>();
+});
 
 // Render injects a PORT environment variable. Locally, PORT is
 // undefined, so we do NOT call UseUrls: launchSettings.json drives
@@ -169,6 +182,13 @@ builder.Services.AddScoped<AuthService>();
 // ---------------------------------------------------------------------
 
 builder.Services.AddScoped<ExternalSourceHealthService>();
+
+// ---------------------------------------------------------------------
+// System event logging (errors + warnings surfaced in the admin page)
+// ---------------------------------------------------------------------
+
+builder.Services.AddScoped<SystemEventLogService>();
+builder.Services.AddTransient<HttpErrorLoggingHandler>();
 
 builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
 {

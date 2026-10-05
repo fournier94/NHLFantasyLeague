@@ -53,6 +53,12 @@ namespace NhlFantasyLeague.api.Data
         /// </summary>
         public DbSet<DataProtectionKey> DataProtectionKeys { get; set; }
 
+        /// <summary>
+        /// Auto-recorded errors and warnings from HTTP calls and
+        /// scheduled jobs. Surfaced on the admin page.
+        /// </summary>
+        public DbSet<SystemEventLog> SystemEventLogs { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Identity first, so all its table config is registered.
@@ -374,6 +380,39 @@ namespace NhlFantasyLeague.api.Data
                 entity.Property(e => e.FriendlyName).HasMaxLength(256);
                 entity.Property(e => e.Xml).IsRequired();
             });
+
+            // SystemEventLogs: lookups are (a) by DedupeKey + recency
+            // for the dedup check, and (b) by LastSeenUtc desc for the
+            // admin page and the cleanup job.
+            modelBuilder.Entity<SystemEventLog>()
+                .HasIndex(e => new { e.DedupeKey, e.LastSeenUtc });
+
+            modelBuilder.Entity<SystemEventLog>()
+                .HasIndex(e => e.LastSeenUtc);
+
+            modelBuilder.Entity<SystemEventLog>()
+                .Property(e => e.Source)
+                .HasMaxLength(100);
+
+            modelBuilder.Entity<SystemEventLog>()
+                .Property(e => e.Category)
+                .HasMaxLength(50);
+
+            modelBuilder.Entity<SystemEventLog>()
+                .Property(e => e.Severity)
+                .HasMaxLength(20);
+
+            modelBuilder.Entity<SystemEventLog>()
+                .Property(e => e.Message)
+                .HasMaxLength(500);
+
+            modelBuilder.Entity<SystemEventLog>()
+                .Property(e => e.Details)
+                .HasMaxLength(2000);
+
+            modelBuilder.Entity<SystemEventLog>()
+                .Property(e => e.DedupeKey)
+                .HasMaxLength(64);
         }
     }
 }
