@@ -1,24 +1,12 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getStandings, type StandingsRow } from '@/api/client';
+import { Crown, TrendingUp } from 'lucide-react';
+import {
+    getStandings,
+    type StandingsRow,
+} from '@/api/client';
 import { cn } from '@/lib/utils';
 import { NeonTitle } from '@/components/ui/NeonTitle';
-
-/**
- * Classement (standings) page.
- *
- * Read-only view of GET /api/Standings. Every number comes from the
- * backend; this page never computes anything except the sort order.
- *
- * HIER / AJD show the FP each team's Active-at-game-time players
- * produced in the games that started yesterday / today.
- *
- * Column order: Rank | Team | GP | 3B | W | OTL | SO | PTS | HIER | AJD | FP
- *
- * Every visible header is clickable and sorts the table. The rank
- * number next to each team does NOT change with the sort: it stays
- * as that team's official season rank (by total FP).
- */
 
 type SortKey =
     | 'totalGames'
@@ -33,12 +21,92 @@ type SortKey =
 
 type SortDirection = 'asc' | 'desc';
 
+// ---------------------------------------------------------------------
+// Palette
+// ---------------------------------------------------------------------
+
+const GOLD = '#FFC72C';
+const SILVER = '#C0C0C0';
+const BRONZE = '#CD7F32';
+const CYAN = '#00E5FF';
+const CYAN_SOFT = '#7DD3FC';
+const GREEN = '#22C55E';
+
+const CYAN_BORDER = 'rgba(0, 168, 255, 0.6)';
+const CYAN_GLOW = 'rgba(0, 168, 255, 0.35)';
+const FRAME_BG = '#080D1A';
+
+// 11 columns: 6% rank, 20% team, 9 equal stat columns.
+// Identical to the previous implementation's colgroup proportions.
+const GRID_COLUMNS = '6% 20% repeat(9, calc((100% - 26%) / 9))';
+
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
+
+interface RankAccent {
+    accent: string;
+    tint: string | undefined;
+    glow: string;
+}
+
+function rankAccent(rank: number): RankAccent {
+    if (rank === 1) {
+        return {
+            accent: GOLD,
+            tint: 'rgba(255, 199, 44, 0.06)',
+            glow: 'rgba(255, 199, 44, 0.55)',
+        };
+    }
+    if (rank === 2) {
+        return {
+            accent: SILVER,
+            tint: 'rgba(192, 192, 192, 0.05)',
+            glow: 'rgba(192, 192, 192, 0.4)',
+        };
+    }
+    if (rank === 3) {
+        return {
+            accent: BRONZE,
+            tint: 'rgba(205, 127, 50, 0.06)',
+            glow: 'rgba(205, 127, 50, 0.4)',
+        };
+    }
+    return {
+        accent: 'rgba(0, 168, 255, 0.45)',
+        tint: undefined,
+        glow: 'rgba(0, 168, 255, 0.3)',
+    };
+}
+
+function renderDailyTotal(value: number) {
+    if (value > 0) {
+        return (
+            <span
+                className='font-semibold'
+                style={{
+                    color: GREEN,
+                    textShadow: '0 0 6px rgba(34, 197, 94, 0.5)',
+                }}
+            >
+                +{value}
+            </span>
+        );
+    }
+    return <span className='text-muted-foreground'>0</span>;
+}
+
+// ---------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------
+
 export default function ClassementPage() {
     const [rows, setRows] = useState<StandingsRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const [sortKey, setSortKey] = useState<SortKey>('totalFantasyPoints');
+    const [sortKey, setSortKey] =
+        useState<SortKey>('totalFantasyPoints');
     const [sortDirection, setSortDirection] =
         useState<SortDirection>('desc');
 
@@ -119,246 +187,278 @@ export default function ClassementPage() {
         return copy;
     }, [rows, sortKey, sortDirection]);
 
+    // --- Sortable column header ---------------------------------------
+
+    function ColumnHeader({
+        label,
+        key: sortField,
+        color = CYAN_SOFT,
+    }: {
+        label: string;
+        key: SortKey;
+        color?: string;
+    }) {
+        const active = sortKey === sortField;
+
+        return (
+            <button
+                type='button'
+                onClick={() => handleSort(sortField)}
+                className={cn(
+                    'w-full cursor-pointer select-none text-center font-semibold uppercase tracking-wider transition-colors hover:text-white',
+                    active ? '' : '',
+                )}
+                style={{
+                    color: active ? CYAN : color,
+                    textShadow: active
+                        ? `0 0 8px ${CYAN}AA`
+                        : undefined,
+                }}
+            >
+                {label}
+                {active && (
+                    <span className='ml-0.5 inline-block text-[0.6rem] align-middle'>
+                        {sortDirection === 'asc' ? '▲' : '▼'}
+                    </span>
+                )}
+            </button>
+        );
+    }
+
+    // --- Loading / error states ---------------------------------------
+
     if (loading) {
-        return <p className='text-muted-foreground'>Chargement...</p>;
-    }
-
-    if (error) {
-        return <p className='text-destructive'>{error}</p>;
-    }
-
-    if (rows.length === 0) {
         return (
             <section className='w-full space-y-4'>
                 <h2 className='text-center'>
                     <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
                 </h2>
                 <p className='text-center text-muted-foreground'>
-                    Aucune donnée de classement pour le moment.
+                    Chargement...
                 </p>
             </section>
         );
     }
 
-    function renderDailyTotal(value: number) {
-        if (value > 0) {
-            return <span className='text-[#22C55E]'>+{value}</span>;
-        }
-
-        return <span className='text-muted-foreground'>0</span>;
-    }
-
-    function renderSortIndicator(key: SortKey) {
-        if (sortKey !== key) return null;
-
+    if (error) {
         return (
-            <span className='ml-1 inline-block text-[0.65rem] align-middle'>
-                {sortDirection === 'asc' ? '▲' : '▼'}
-            </span>
+            <section className='w-full space-y-4'>
+                <h2 className='text-center'>
+                    <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
+                </h2>
+                <p className='text-center text-destructive'>{error}</p>
+            </section>
         );
     }
 
-    const thSortable =
-        'px-2 py-3 text-center font-medium cursor-pointer select-none transition-colors hover:text-[#00A8FF]';
-
     return (
         <section className='w-full space-y-4'>
-            <h2 className='text-center'>
-                <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
-            </h2>
+            {/* ---- Header: crown + title + decorative subtitle ---- */}
+            <div className='flex flex-col items-center gap-1.5'>
+                <Crown
+                    className='h-7 w-7'
+                    strokeWidth={2}
+                    style={{
+                        color: GOLD,
+                        filter:
+                            'drop-shadow(0 0 6px rgba(255, 199, 44, 0.85)) drop-shadow(0 0 14px rgba(255, 199, 44, 0.4))',
+                    }}
+                />
 
-            <div className='w-full rounded-lg border border-border bg-card'>
-                <table className='w-full table-fixed text-sm tabular-nums md:text-base'>
-                    {/*
-                     * 11 columns total.
-                     *   - Rank gets 6%.
-                     *   - Team gets 20%.
-                     *   - The remaining 9 columns share 74% equally
-                     *     via calc((100% - 26%) / 9).
-                     * This keeps GP, 3B, W, OTL, SO, PTS, HIER, AJD
-                     * and FP all exactly the same width.
-                     */}
-                    <colgroup>
-                        <col className='w-[6%]' />
-                        <col className='w-[20%]' />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                        <col style={{ width: 'calc((100% - 26%) / 9)' }} />
-                    </colgroup>
+                <h2 className='text-center'>
+                    <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
+                </h2>
 
-                    <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
-                        <tr>
-                            <th className='px-2 py-3 text-center' />
-                            <th className='px-2 py-3 text-center' />
+                <div className='flex w-full max-w-3xl items-center gap-3 px-4'>
+                    <div
+                        className='h-px flex-1'
+                        style={{
+                            background:
+                                'linear-gradient(to right, transparent, rgba(0, 168, 255, 0.9))',
+                            boxShadow: '0 0 6px rgba(0, 168, 255, 0.6)',
+                        }}
+                    />
+                    <span
+                        className='text-[0.65rem] uppercase tracking-[0.3em] text-[#00E5FF]'
+                        style={{
+                            textShadow: '0 0 8px rgba(0, 229, 255, 0.6)',
+                        }}
+                    >
+                        Ligue de Mousse
+                    </span>
+                    <div
+                        className='h-px flex-1'
+                        style={{
+                            background:
+                                'linear-gradient(to left, transparent, rgba(0, 168, 255, 0.9))',
+                            boxShadow: '0 0 6px rgba(0, 168, 255, 0.6)',
+                        }}
+                    />
+                </div>
+            </div>
 
-                            <th
-                                className={thSortable}
-                                onClick={() => handleSort('totalGames')}
-                            >
-                                GP
-                                {renderSortIndicator('totalGames')}
-                            </th>
+            {/* ---- Standings table ---- */}
+            {rows.length === 0 ? (
+                <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
+                    Aucune donnée de classement pour le moment.
+                </p>
+            ) : (
+                <div
+                    className='overflow-hidden rounded-lg border'
+                    style={{
+                        borderColor: CYAN_BORDER,
+                        backgroundColor: FRAME_BG,
+                        boxShadow: `0 0 22px ${CYAN_GLOW}, inset 0 0 18px rgba(0, 168, 255, 0.08)`,
+                    }}
+                >
+                    {/* ---- Header row ---- */}
+                    <div
+                        className='grid items-center border-b px-2 py-2.5 text-[0.6rem] sm:text-[0.7rem]'
+                        style={{
+                            gridTemplateColumns: GRID_COLUMNS,
+                            borderColor: 'rgba(0, 168, 255, 0.35)',
+                            background:
+                                'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))',
+                        }}
+                    >
+                        <div className='text-center font-semibold uppercase tracking-wider text-[#00E5FF]'>
+                            #
+                        </div>
+                        <div className='pl-1.5 font-semibold uppercase tracking-wider text-[#00E5FF]'>
+                            Équipe
+                        </div>
 
-                            <th
-                                className={thSortable}
-                                onClick={() => handleSort('skaterHatTricks')}
-                            >
-                                3B
-                                {renderSortIndicator('skaterHatTricks')}
-                            </th>
+                        <ColumnHeader label='GP' key='totalGames' />
+                        <ColumnHeader label='3B' key='skaterHatTricks' />
+                        <ColumnHeader
+                            label='W'
+                            key='goalieWins'
+                            color={CYAN}
+                        />
+                        <ColumnHeader
+                            label='OTL'
+                            key='goalieOvertimeLosses'
+                        />
+                        <ColumnHeader label='SO' key='goalieShutouts' />
+                        <ColumnHeader
+                            label='PTS'
+                            key='totalPoints'
+                            color={CYAN}
+                        />
+                        <ColumnHeader
+                            label='HIER'
+                            key='yesterdayFantasyPoints'
+                        />
+                        <ColumnHeader
+                            label='AJD'
+                            key='todayFantasyPoints'
+                        />
+                        <ColumnHeader
+                            label='FP'
+                            key='totalFantasyPoints'
+                            color={GOLD}
+                        />
+                    </div>
 
-                            <th
-                                className={cn(
-                                    thSortable,
-                                    'text-[#00F0FF] hover:text-white',
-                                )}
-                                onClick={() => handleSort('goalieWins')}
-                            >
-                                W
-                                {renderSortIndicator('goalieWins')}
-                            </th>
-
-                            <th
-                                className={thSortable}
-                                onClick={() =>
-                                    handleSort('goalieOvertimeLosses')
-                                }
-                            >
-                                OTL
-                                {renderSortIndicator('goalieOvertimeLosses')}
-                            </th>
-
-                            <th
-                                className={thSortable}
-                                onClick={() => handleSort('goalieShutouts')}
-                            >
-                                SO
-                                {renderSortIndicator('goalieShutouts')}
-                            </th>
-
-                            <th
-                                className={cn(
-                                    thSortable,
-                                    'text-[#00F0FF] hover:text-white',
-                                )}
-                                onClick={() => handleSort('totalPoints')}
-                            >
-                                PTS
-                                {renderSortIndicator('totalPoints')}
-                            </th>
-
-                            <th
-                                className={cn(
-                                    thSortable,
-                                    'text-[0.65rem]',
-                                )}
-                                onClick={() =>
-                                    handleSort('yesterdayFantasyPoints')
-                                }
-                            >
-                                HIER
-                                {renderSortIndicator('yesterdayFantasyPoints')}
-                            </th>
-
-                            <th
-                                className={cn(
-                                    thSortable,
-                                    'text-[0.65rem]',
-                                )}
-                                onClick={() =>
-                                    handleSort('todayFantasyPoints')
-                                }
-                            >
-                                AJD
-                                {renderSortIndicator('todayFantasyPoints')}
-                            </th>
-
-                            <th
-                                className={thSortable}
-                                onClick={() =>
-                                    handleSort('totalFantasyPoints')
-                                }
-                            >
-                                FP
-                                {renderSortIndicator('totalFantasyPoints')}
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody className='text-foreground'>
-                        {sortedRows.map((row, index) => {
-                            const isFirst = row.rank === 1;
-                            const totalGames =
-                                row.skaterGamesPlayed + row.goalieGamesPlayed;
-                            const totalPoints =
-                                row.skaterPoints + row.goaliePoints;
+                    {/* ---- Data rows ---- */}
+                    <div>
+                        {sortedRows.map((row) => {
+                            const accent = rankAccent(row.rank);
 
                             return (
-                                <tr
+                                <div
                                     key={row.fantasyTeamId}
-                                    className={cn(
-                                        'border-b border-border/40 last:border-b-0',
-                                        index % 2 === 0
-                                            ? 'bg-transparent'
-                                            : 'bg-secondary/20',
-                                    )}
+                                    className='grid items-center border-b border-[#00A8FF]/10 px-2 py-2 text-xs tabular-nums transition-colors last:border-b-0 hover:bg-[#00A8FF]/5 sm:text-sm'
+                                    style={{
+                                        gridTemplateColumns: GRID_COLUMNS,
+                                        borderLeft: `3px solid ${accent.accent}`,
+                                        backgroundColor: accent.tint,
+                                        boxShadow: `inset 4px 0 10px -6px ${accent.glow}`,
+                                    }}
                                 >
-                                    <td
-                                        className={cn(
-                                            'px-2 py-3 text-center font-semibold',
-                                            isFirst && 'text-[#F59E0B]',
-                                        )}
-                                    >
-                                        {row.rank}
-                                    </td>
+                                    {/* Rank */}
+                                    <div className='text-center'>
+                                        <span
+                                            className='inline-block text-sm font-bold'
+                                            style={{
+                                                color: accent.accent,
+                                                textShadow: `0 0 8px ${accent.glow}`,
+                                            }}
+                                        >
+                                            {row.rank}
+                                        </span>
+                                    </div>
 
-                                    <td className='px-2 py-3 text-center font-medium'>
+                                    {/* Team name */}
+                                    <div className='flex min-w-0 items-center pl-1.5'>
                                         <Link
                                             to={`/mon-equipe?teamId=${row.fantasyTeamId}`}
-                                            className='transition-colors hover:text-[#00A8FF] hover:underline'
+                                            className='truncate text-xs font-semibold text-foreground transition-colors hover:text-[#00E5FF] sm:text-sm'
                                         >
                                             {row.fantasyTeamName}
                                         </Link>
-                                    </td>
+                                    </div>
 
-                                    <td className='px-2 py-3 text-center'>
-                                        {totalGames}
-                                    </td>
-                                    <td className='px-2 py-3 text-center'>
+                                    {/* Stats */}
+                                    <div className='text-center text-[#7DD3FC]'>
+                                        {row.skaterGamesPlayed +
+                                            row.goalieGamesPlayed}
+                                    </div>
+                                    <div className='text-center text-[#7DD3FC]'>
                                         {row.skaterHatTricks}
-                                    </td>
-                                    <td className='px-2 py-3 text-center text-[#00F0FF]'>
+                                    </div>
+                                    <div
+                                        className='text-center font-semibold'
+                                        style={{ color: CYAN }}
+                                    >
                                         {row.goalieWins}
-                                    </td>
-                                    <td className='px-2 py-3 text-center'>
+                                    </div>
+                                    <div className='text-center text-[#7DD3FC]'>
                                         {row.goalieOvertimeLosses}
-                                    </td>
-                                    <td className='px-2 py-3 text-center'>
+                                    </div>
+                                    <div className='text-center text-[#7DD3FC]'>
                                         {row.goalieShutouts}
-                                    </td>
-                                    <td className='px-2 py-3 text-center text-[#00F0FF]'>
-                                        {totalPoints}
-                                    </td>
-                                    <td className='px-2 py-3 text-center'>
-                                        {renderDailyTotal(row.yesterdayFantasyPoints)}
-                                    </td>
-                                    <td className='px-2 py-3 text-center'>
-                                        {renderDailyTotal(row.todayFantasyPoints)}
-                                    </td>
-                                    <td className='px-2 py-3 text-center text-base font-bold text-[#F59E0B] md:text-lg'>
-                                        {row.totalFantasyPoints}
-                                    </td>
-                                </tr>
+                                    </div>
+                                    <div
+                                        className='text-center font-semibold'
+                                        style={{ color: CYAN }}
+                                    >
+                                        {row.skaterPoints +
+                                            row.goaliePoints}
+                                    </div>
+                                    <div className='text-center'>
+                                        {renderDailyTotal(
+                                            row.yesterdayFantasyPoints,
+                                        )}
+                                    </div>
+                                    <div className='text-center'>
+                                        {renderDailyTotal(
+                                            row.todayFantasyPoints,
+                                        )}
+                                    </div>
+                                    <div className='flex items-center justify-center gap-0.5'>
+                                        <span
+                                            className='text-sm font-bold sm:text-base'
+                                            style={{
+                                                color: GOLD,
+                                                textShadow:
+                                                    '0 0 8px rgba(255, 199, 44, 0.6)',
+                                            }}
+                                        >
+                                            {row.totalFantasyPoints}
+                                        </span>
+                                        <TrendingUp
+                                            className='h-3 w-3 opacity-70'
+                                            style={{ color: GOLD }}
+                                            strokeWidth={2.5}
+                                        />
+                                    </div>
+                                </div>
                             );
                         })}
-                    </tbody>
-                </table>
-            </div>
+                    </div>
+                </div>
+            )}
         </section>
     );
 }
