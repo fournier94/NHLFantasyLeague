@@ -71,6 +71,33 @@ function periodLabel(game: GameDayGameSummary): string {
     return '';
 }
 
+/**
+ * True when the given UTC instant falls on the user's local
+ * calendar day (from local midnight to local midnight). This is
+ * what "today" means to the user, and it matches the arena date
+ * the NHL uses in ET for the vast majority of games.
+ */
+function isTodayLocal(iso: string): boolean {
+    const start = new Date(iso);
+
+    if (Number.isNaN(start.getTime())) {
+        return false;
+    }
+
+    const now = new Date();
+
+    const startOfToday = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+    );
+
+    const startOfTomorrow = new Date(startOfToday);
+    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+
+    return start >= startOfToday && start < startOfTomorrow;
+}
+
 function startTimeLabel(iso: string): string {
     try {
         return TIME_FORMATTER.format(new Date(iso));
@@ -537,14 +564,21 @@ export default function GameDayPage() {
     };
 
     /**
-     * Games sorted by start time ascending (earliest first). Computed
-     * once per data change instead of once per render, so re-renders
-     * triggered by expanding a boxscore do not re-sort.
+     * Today's games, sorted by start time ascending (earliest first).
+     *
+     * The backend returns the whole NHL game week, so we filter it
+     * on the client against the user's local calendar day. A game
+     * that started late yesterday and is still LIVE or CRIT is
+     * kept, so a West Coast game running past midnight ET does not
+     * disappear from the page.
      */
-    const games = useMemo(
-        () => sortGamesByStartTime(data?.games ?? []),
-        [data?.games],
-    );
+    const games = useMemo(() => {
+        const today = (data?.games ?? []).filter(
+            (g) => isTodayLocal(g.startTimeUtc) || isLive(g),
+        );
+
+        return sortGamesByStartTime(today);
+    }, [data?.games]);
 
     if (loading && !data) {
         return (

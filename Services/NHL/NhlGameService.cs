@@ -137,26 +137,15 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return new List<NhlScheduleGame>();
             }
 
-            // The NHL's /v1/schedule/now endpoint returns the whole
-            // current game week (typically Saturday to Friday), not
-            // just today. Filter it down to today's ET calendar date,
-            // plus any game that is still LIVE or CRIT from an
-            // earlier ET date. That second clause handles the rare
-            // case where a 10 PM ET start runs past midnight: its
-            // GameDate is yesterday but it is still on screen.
-            var todayEt = DateOnly.FromDateTime(
-                TimeZoneHelper.ToEastern(DateTime.UtcNow));
-
+            // Return the whole game week. The NHL returns a week-long
+            // schedule here (typically Saturday to Friday), and we
+            // intentionally do NOT filter by date on the server:
+            // gameDate is unreliable for a handful of games and the
+            // user's local clock is what "today" means to them. The
+            // GameDayPage filters this list against the user's local
+            // calendar day.
             return response.GameWeek
                 .SelectMany(w => w.Games)
-                .Where(g =>
-                    g.GameDate == todayEt ||
-                    string.Equals(
-                        g.GameState, "LIVE",
-                        StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(
-                        g.GameState, "CRIT",
-                        StringComparison.OrdinalIgnoreCase))
                 .ToList();
         }
 
