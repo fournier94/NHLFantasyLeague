@@ -64,6 +64,19 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private static readonly TimeSpan CareerStatsHourEt = new(8, 30, 0);
         private static readonly TimeSpan WeeklyRefreshHourEt = new(3, 0, 0);
 
+        // Season reconciliation: three times a day, re-fetch every
+        // player's current-season game logs and landing page, then
+        // rebuild the team totals. Used as a safety net for late
+        // stat corrections from the NHL.
+        private static readonly TimeSpan Reconciliation5AmHourEt = new(5, 0, 0);
+        private static readonly TimeSpan Reconciliation10AmHourEt = new(10, 0, 0);
+        private static readonly TimeSpan Reconciliation3PmHourEt = new(15, 0, 0);
+
+        // The 15:00 ET reconciliation is skipped when any NHL game
+        // starts before this cutoff. Afternoon matinees overlap with
+        // the run and the live refresh already keeps them current.
+        private static readonly TimeSpan AfternoonGameCutoffEt = new(16, 0, 0);
+
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly LiveGameCache _cache;
         private readonly Services.Cache.ResponseCacheService _responseCache;
@@ -79,6 +92,9 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private DateOnly? _lastPostGameWriteEtDate;
         private DateOnly? _lastCareerStatsEtDate;
         private DateOnly? _lastWeeklyRefreshEtDate;
+        private DateOnly? _lastReconciliation5AmEtDate;
+        private DateOnly? _lastReconciliation10AmEtDate;
+        private DateOnly? _lastReconciliation3PmEtDate;
         private bool _recomputeRequested;
 
         public ScheduledJobsRunner(
@@ -233,6 +249,60 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         ct,
                         $"Career stats refresh for {target}",
                         () => RunCareerStatsRefreshAsync(target, ct));
+                }
+            }
+
+            // ---- 7. Season reconciliation (05:00 ET) ------------------
+            if (timeOfDayEt >= Reconciliation5AmHourEt)
+            {
+                bool shouldTry;
+                lock (_stateLock)
+                {
+                    shouldTry = _lastReconciliation5AmEtDate != todayEt;
+                }
+
+                if (shouldTry)
+                {
+                    FireAndForget(
+                        ct,
+                        "Season reconciliation (05:00 ET)",
+                        () => RunSeasonReconciliationAsync("05:00", todayEt, ct));
+                }
+            }
+
+            // ---- 8. Season reconciliation (10:00 ET) ------------------
+            if (timeOfDayEt >= Reconciliation10AmHourEt)
+            {
+                bool shouldTry;
+                lock (_stateLock)
+                {
+                    shouldTry = _lastReconciliation10AmEtDate != todayEt;
+                }
+
+                if (shouldTry)
+                {
+                    FireAndForget(
+                        ct,
+                        "Season reconciliation (10:00 ET)",
+                        () => RunSeasonReconciliationAsync("10:00", todayEt, ct));
+                }
+            }
+
+            // ---- 9. Season reconciliation (15:00 ET) ------------------
+            if (timeOfDayEt >= Reconciliation3PmHourEt)
+            {
+                bool shouldTry;
+                lock (_stateLock)
+                {
+                    shouldTry = _lastReconciliation3PmEtDate != todayEt;
+                }
+
+                if (shouldTry)
+                {
+                    FireAndForget(
+                        ct,
+                        "Season reconciliation (15:00 ET)",
+                        () => RunSeasonReconciliationAsync("15:00", todayEt, ct));
                 }
             }
 
@@ -730,6 +800,197 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 _heavyLock.Release();
             }
         }
+
+        // =================================================================
+        // Jobs 7-9: season reconciliation (safety net for late stat
+        // corrections)
+        // =================================================================
+
+        /// <summary>
+        /// Re-fetches every player's current-season game logs and landing
+        /// page, then rebuilds the FantasyTeamSeason totals. Runs three
+        /// times a day (05:00, 10:00, 15:00 ET) so any late stat
+        /// corrections the NHL makes after a game propagate to every
+        /// table on the site.
+        ///
+        /// The 15:00 ET slot is skipped when any NHL game starts before
+        /// 16:00 ET today. Afternoon matinees overlap with the run and
+        /// are already handled by the live refresh.
+        ///
+        /// Uses WaitAsync(0) on the heavy lock: if any other heavy job
+        /// is running, this run is skipped and the next tick retries.
+        /// The "done" flag is only set AFTER the lock is acquired, so
+        /// a skipped run does not mark itself as complete.
+        /// </summary>
+        private async Task RunSeasonReconciliationAsync(
+            string slotLabel,
+            DateOnly todayEt,
+            CancellationToken ct)
+        {
+            if (!await _heavyLock.WaitAsync(0, ct))
+            {
+                _logger.LogInformation(
+                    "Season reconciliation ({Slot}) skipped: another " +
+                    "heavy job is running.",
+                    slotLabel);
+                return;
+            }
+
+            try
+            {
+                // ---- Afternoon-game check (15:00 ET slot only) --------
+                if (slotLabel == "15:00")
+                {
+                    var hasAfternoonGame =
+                        await HasAfternoonNhlGameAsync(todayEt, ct);
+
+                    if (hasAfternoonGame)
+                    {
+                        _logger.LogInformation(
+                            "Season reconciliation (15:00 ET) skipped: " +
+                            "afternoon NHL games are scheduled today.");
+
+                        lock (_stateLock)
+                        {
+                            _lastReconciliation3PmEtDate = todayEt;
+                        }
+
+                        return;
+                    }
+                }
+
+                // ---- Mark this slot as done now that we're committed --
+                lock (_stateLock)
+                {
+                    switch (slotLabel)
+                    {
+                        case "05:00":
+                            _lastReconciliation5AmEtDate = todayEt;
+                            break;
+
+                        case "10:00":
+                            _lastReconciliation10AmEtDate = todayEt;
+                            break;
+
+                        case "15:00":
+                            _lastReconciliation3PmEtDate = todayEt;
+                            break;
+                    }
+                }
+
+                using var scope = _scopeFactory.CreateScope();
+
+                var gameLogService = scope.ServiceProvider
+                    .GetRequiredService<NhlGameLogService>();
+
+                var seasonCode = await GetCurrentSeasonCodeAsync(scope);
+
+                if (!seasonCode.HasValue)
+                {
+                    _logger.LogWarning(
+                        "Season reconciliation ({Slot}) skipped: no " +
+                        "current season.",
+                        slotLabel);
+                    return;
+                }
+
+                _logger.LogInformation(
+                    "Season reconciliation ({Slot}) starting. " +
+                    "This can take 30-45 minutes.",
+                    slotLabel);
+
+                var result = await gameLogService
+                    .RefreshCurrentSeasonForAllPlayersAsync(
+                        seasonCode.Value,
+                        delayMsBetweenPlayers: 500,
+                        skip: 0,
+                        take: 0,
+                        progress: null,
+                        ct);
+
+                // Everything the reconciliation touched is now stale in
+                // the read caches. Drop them all.
+                _responseCache.Invalidate("standings:");
+                _responseCache.Invalidate("roster:");
+                _responseCache.Invalidate("player-detail:");
+                _responseCache.Invalidate("player-career:");
+                _responseCache.Invalidate("league:");
+
+                _logger.LogInformation(
+                    "Season reconciliation ({Slot}) done. " +
+                    "Players={Players}, GamesSaved={Games}, " +
+                    "TeamTotals={Teams} teams / {Credited} games credited, " +
+                    "Failed={Failed}.",
+                    slotLabel,
+                    result.PlayersProcessed,
+                    result.TotalGamesSaved,
+                    result.TeamTotals?.TeamsProcessed ?? 0,
+                    result.TeamTotals?.GamesCredited ?? 0,
+                    result.FailedPlayers);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex, "Season reconciliation ({Slot}) failed.",
+                    slotLabel);
+            }
+            finally
+            {
+                _heavyLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Returns true when at least one NHL game is scheduled to
+        /// start before the afternoon cutoff (16:00 ET) on the given
+        /// date. Fails open: if the schedule fetch throws, we assume
+        /// no afternoon game and let the reconciliation run, since
+        /// running during an afternoon game is harmless (the live
+        /// refresh handles the game in parallel).
+        /// </summary>
+        private async Task<bool> HasAfternoonNhlGameAsync(
+            DateOnly todayEt,
+            CancellationToken ct)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+
+                var gameService = scope.ServiceProvider
+                    .GetRequiredService<NhlGameService>();
+
+                var schedule = await gameService
+                    .GetScheduleForDateAsync(todayEt, ct);
+
+                if (schedule.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (var game in schedule)
+                {
+                    var startEt = TimeZoneHelper.ToEastern(
+                        game.StartTimeUtc);
+
+                    if (startEt.TimeOfDay < AfternoonGameCutoffEt)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Could not determine whether afternoon NHL games " +
+                    "exist. Proceeding with the 15:00 ET reconciliation.");
+
+                return false;
+            }
+        }
+
 
         private static async Task<int?> GetCurrentSeasonCodeAsync(
             IServiceScope scope)
