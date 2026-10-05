@@ -1501,6 +1501,16 @@ function SkaterCareerTable({
                                         return <td className={tdRight}>—</td>;
                                     }
 
+                                    // VOR compares a player's production to a
+                                    // replacement-level baseline for a full
+                                    // season. Until the current season is
+                                    // finished, that comparison is misleading
+                                    // (the season totals are incomplete), so
+                                    // we show a dash instead.
+                                    if (row.season === CURRENT_SEASON_CODE) {
+                                        return <td className={tdRight}>—</td>;
+                                    }
+
                                     const fp = row.points + row.hatTricks * 3;
 
                                     // Per-season VOR threshold so shortened

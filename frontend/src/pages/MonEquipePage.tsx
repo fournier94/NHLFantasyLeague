@@ -290,19 +290,23 @@ const LineupRow = memo(function LineupRow({
                 {shortName}
             </div>
 
-            {/* Small glow behind the team logo, tinted with the
-                team's AURA color (brighter than the base color for
-                dark teams like UTA / SEA / TBL). The `8C` suffix is
-                ~55% alpha on the 6-digit hex. */}
+            {/* Logo cell. `self-stretch` overrides the grid's
+                items-center for this cell only, so the cell takes
+                the full row height. The logo then fills that
+                height with `fillHeight`, and its width follows
+                from the preserved 1:1 aspect ratio. Net effect:
+                the logo is always as big as the row allows,
+                regardless of font-size tweaks. The `8C` suffix on
+                the aura color is ~55% alpha on the 6-digit hex. */}
             <div
-                className='flex justify-center'
+                className='flex self-stretch items-center justify-center'
                 style={{
                     filter: `drop-shadow(0 0 3px ${teamAuraColor}8C)`,
                 }}
             >
                 <NhlTeamLogo
                     abbreviation={entry.nhlTeamAbbreviation}
-                    size={20}
+                    fillHeight
                 />
             </div>
 
