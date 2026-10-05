@@ -108,7 +108,7 @@ function positionBorderColor(group: LineupPositionGroup): string {
 /**
  * Renders a daily FP value (hier / ajd) in the lineup tables.
  *   - null / undefined -> did not play. Rendered as "X" (muted grey).
- *   - 0               -> played, no points. Rendered as "0" (muted grey).
+ *   - 0               -> played, no points. Rendered as "0" (white).
  *   - > 0             -> points scored. Rendered as "+N" (green).
  */
 function renderDailyPoints(value: number | null | undefined) {
@@ -117,7 +117,7 @@ function renderDailyPoints(value: number | null | undefined) {
     }
 
     if (value === 0) {
-        return <span className='text-muted-foreground'>0</span>;
+        return <span className='text-white'>0</span>;
     }
 
     return <span className='text-[#22C55E]'>+{value}</span>;
