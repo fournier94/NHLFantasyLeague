@@ -308,10 +308,47 @@ new(StringComparer.OrdinalIgnoreCase)
                 };
             }
 
-            // Now that we know the page had entries, it is safe to
-            // reset the collected candidates to Unsigned. They will
-            // be re-assigned by the matching loop below if they
-            // appear on the CapFreeze page.
+            // ---------------------------------------------------------
+            // SAFETY: require a plausible match rate before we reset
+            // anyone's status. This is the guard that makes the
+            // "everyone went Unsigned" disaster structurally
+            // impossible.
+            //
+            // If CapFreeze returned N entries and only M matched:
+            //   - high match rate (>= 60%) -> the page is well-formed
+            //     and matching works; the small number of unmatched
+            //     entries are genuinely new / unusual / renamed.
+            //     It is safe to reset unmatched current-team players
+            //     to Unsigned (they left the team).
+            //   - low match rate (< 60%) -> something is wrong with
+            //     the page or with the matching (page structure
+            //     changed, rate-limited partial response, name
+            //     encoding change). Abort BEFORE resetting anyone,
+            //     and throw so the outer loop records the failure
+            //     and rolls back the transaction.
+            // ---------------------------------------------------------
+
+            var totalEntries = playerLinks.Count;
+            var matchedEntries = matchResults.Count(m => m.Player != null);
+            var matchRate = (double)matchedEntries / totalEntries;
+
+            const double MinimumAcceptableMatchRate = 0.60;
+
+            if (matchRate < MinimumAcceptableMatchRate)
+            {
+                throw new InvalidOperationException(
+                    $"CapFreeze match rate for {teamSlug} was only " +
+                    $"{matchedEntries}/{totalEntries} " +
+                    $"({matchRate:P0}). Aborting to avoid wiping " +
+                    "player statuses. Check the CapFreeze page structure " +
+                    "and the matching service.");
+            }
+
+            // Match rate is acceptable. It is now safe to reset the
+            // collected candidates to Unsigned. Players that do not
+            // appear on the CapFreeze page below are genuinely no
+            // longer on this team; players that do appear will be
+            // re-assigned by the matching loop.
             foreach (var p in playersToResetIfUnmatched)
             {
                 p.Status = PlayerStatus.Unsigned;
