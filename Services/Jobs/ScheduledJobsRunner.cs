@@ -54,7 +54,11 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// <summary>Live window closes at 2:00 AM ET.</summary>
         private static readonly TimeSpan LiveWindowEndEt = new(2, 0, 0);
 
-        private static readonly TimeSpan LiveRefreshInterval = TimeSpan.FromMinutes(7);
+        // How often the live-refresh job fires during the live window.
+        // 60 seconds matches the NHL boxscore's natural freshness and
+        // gives users near-real-time goal updates without hammering the
+        // API. If the NHL starts returning 429s, back this off to 2 min.
+        private static readonly TimeSpan LiveRefreshInterval = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan PostGameHourEt = new(2, 30, 0);
         private static readonly TimeSpan DailyRefreshHourEt = new(8, 0, 0);
         private static readonly TimeSpan CareerStatsHourEt = new(8, 30, 0);

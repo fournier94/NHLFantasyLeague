@@ -95,6 +95,13 @@ namespace NhlFantasyLeague.api.Services.NHL
         private static readonly TimeSpan FinalGameGraceWindow =
             TimeSpan.FromHours(6);
 
+        // Tracks the last time we fetched each game's boxscore, so the
+        // FINAL/OFF polling can back off over time without hitting the
+        // API on every tick. Keyed by NHL game id. Small (one entry per
+        // game per day) and safe to keep forever.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, DateTime>
+            _lastBoxscoreFetchUtc = new();
+
         private readonly HttpClient _httpClient;
         private readonly AppDbContext _dbContext;
 
@@ -286,8 +293,8 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         private static bool ShouldAttachBoxscore(
-            NhlScheduleGame game,
-            DateTime now)
+     NhlScheduleGame game,
+     DateTime now)
         {
             if (!BoxscoreStates.Contains(game.GameState))
             {
@@ -299,13 +306,39 @@ namespace NhlFantasyLeague.api.Services.NHL
                 || string.Equals(
                     game.GameState, "CRIT", StringComparison.OrdinalIgnoreCase);
 
+            var minutesSinceStart =
+                (now - game.StartTimeUtc).TotalMinutes;
+
+            // LIVE / CRIT: fetch every tick, no backoff.
             if (isLive)
             {
+                _lastBoxscoreFetchUtc[game.Id] = now;
                 return true;
             }
 
-            // FINAL / OFF: only within the grace window.
-            return now - game.StartTimeUtc <= FinalGameGraceWindow;
+            // FINAL / OFF: stop fetching entirely once we're past the
+            // grace window. Prevents refreshing yesterday's games.
+            if (minutesSinceStart > FinalGameGraceWindow.TotalMinutes)
+            {
+                return false;
+            }
+
+            // FINAL / OFF within the grace window. Poll aggressively
+            // for the first 3 hours after start (covers the game ending
+            // and the immediate post-game corrections), then back off to
+            // once every 5 minutes. This keeps the API load flat even
+            // though the live tick is now every 60 seconds.
+            var minMinutesBetweenFetches =
+                minutesSinceStart < 180 ? 1 : 5;
+
+            if (_lastBoxscoreFetchUtc.TryGetValue(game.Id, out var last) &&
+                (now - last).TotalMinutes < minMinutesBetweenFetches)
+            {
+                return false;
+            }
+
+            _lastBoxscoreFetchUtc[game.Id] = now;
+            return true;
         }
 
         // =================================================================
