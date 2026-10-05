@@ -918,6 +918,23 @@ export interface PlayerDetail {
 export const getPlayerDetail = (nhlPlayerId: number) =>
     apiGet<PlayerDetail>(`/NhlPlayerDetail/${nhlPlayerId}`);
 
+/**
+ * Just the career tables for a player. Split from the main
+ * player detail call so the initial page load stays small; the
+ * PlayerPage fetches this in a second request once the main
+ * payload is on screen.
+ */
+export interface PlayerCareer {
+    regularSeason: CareerRow[];
+    playoffs: CareerRow[];
+    nhlTotals: CareerTotals;
+    tournaments: CareerRow[];
+    youthMinor: CareerRow[];
+}
+
+export const getPlayerCareer = (nhlPlayerId: number) =>
+    apiGet<PlayerCareer>(`/NhlPlayerDetail/${nhlPlayerId}/career`);
+
 // ---------------------------------------------------------------------
 // External source health (commissioner only)
 // ---------------------------------------------------------------------

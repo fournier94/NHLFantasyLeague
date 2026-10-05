@@ -1330,6 +1330,8 @@ namespace NhlFantasyLeague.api.Services
             _jobs.RequestRecompute();
             _cache.Invalidate("roster:");
             _cache.Invalidate("standings:");
+            _cache.Invalidate("player-detail:");
+            _cache.Invalidate("player-career:");
         }
 
         private static RosterActionResultDto Failure(string message)

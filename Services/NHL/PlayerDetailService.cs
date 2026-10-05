@@ -105,18 +105,15 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ToListAsync();
 
             var history = await _dbContext.PlayerInjuryHistories
-                .AsNoTracking()
-                .Where(h => h.PlayerId == player.Id)
-                .OrderByDescending(h => h.FirstSeenAt)
-                .ToListAsync();
+         .AsNoTracking()
+         .Where(h => h.PlayerId == player.Id)
+         .OrderByDescending(h => h.FirstSeenAt)
+         .ToListAsync();
 
-            var careerRows = await _dbContext.PlayerCareerStats
-                .AsNoTracking()
-                .Where(s => s.PlayerId == player.Id)
-                .OrderBy(s => s.Season)
-                .ThenBy(s => s.GameTypeId)
-                .ThenBy(s => s.Sequence)
-                .ToListAsync();
+            // NOTE: career rows are loaded by GetPlayerCareerAsync,
+            // not here. Keeping them out of the main payload is what
+            // shrinks the initial /NhlPlayerDetail response from
+            // hundreds of kB to a few kB.
 
             RosterEntry? entry = null;
 
@@ -295,11 +292,13 @@ namespace NhlFantasyLeague.api.Services.NHL
                         Shutouts = lastSeasonFantasyStat.Shutouts
                     },
 
-                RegularSeason = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Main),
-                Playoffs = BuildCareerRows(careerRows, gameType: 3, CareerCategory.Main),
-                Tournaments = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Tournament),
-                YouthMinor = BuildCareerRows(careerRows, gameType: 2, CareerCategory.YouthMinor),
-                NhlTotals = BuildNhlTotals(careerRows),
+                // Career tables are intentionally not populated here.
+                // See GetPlayerCareerAsync for those.
+                RegularSeason = new List<CareerRowDto>(),
+                Playoffs = new List<CareerRowDto>(),
+                Tournaments = new List<CareerRowDto>(),
+                YouthMinor = new List<CareerRowDto>(),
+                NhlTotals = new CareerTotalsDto(),
 
                 RecentGames = recentGames
                     .Select(g => new GameLogRowDto
@@ -325,6 +324,42 @@ namespace NhlFantasyLeague.api.Services.NHL
                     .ToList(),
 
                 SeasonMonths = seasonMonths
+            };
+        }
+
+        /// <summary>
+        /// Returns just the career tables for one NHL player. Called
+        /// by GET /api/NhlPlayerDetail/{id}/career so the initial
+        /// page load does not have to carry a decade of per-season
+        /// rows across the network. Returns null when the player does
+        /// not exist.
+        /// </summary>
+        public async Task<PlayerCareerDto?> GetPlayerCareerAsync(int nhlPlayerId)
+        {
+            var player = await _dbContext.Players
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
+
+            if (player == null)
+            {
+                return null;
+            }
+
+            var careerRows = await _dbContext.PlayerCareerStats
+                .AsNoTracking()
+                .Where(s => s.PlayerId == player.Id)
+                .OrderBy(s => s.Season)
+                .ThenBy(s => s.GameTypeId)
+                .ThenBy(s => s.Sequence)
+                .ToListAsync();
+
+            return new PlayerCareerDto
+            {
+                RegularSeason = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Main),
+                Playoffs = BuildCareerRows(careerRows, gameType: 3, CareerCategory.Main),
+                Tournaments = BuildCareerRows(careerRows, gameType: 2, CareerCategory.Tournament),
+                YouthMinor = BuildCareerRows(careerRows, gameType: 2, CareerCategory.YouthMinor),
+                NhlTotals = BuildNhlTotals(careerRows),
             };
         }
 
