@@ -587,7 +587,10 @@ export function TopBar() {
             </nav>
 
             {/* Search modal — portaled to document.body so it lives
-                outside the header's stacking context. */}
+                outside the header's stacking context.
+                Visual style matches the Classement column header:
+                cyan border + outer glow, gradient header bar, cyan
+                uppercase tracking-wider text. */}
             {searchModalOpen &&
                 createPortal(
                     <div
@@ -598,41 +601,62 @@ export function TopBar() {
                         aria-label='Rechercher un joueur'
                     >
                         <div
-                            className='w-full max-w-md rounded-lg border border-border bg-card shadow-2xl'
+                            className='w-full max-w-md overflow-hidden rounded-lg border'
                             onClick={(event) => event.stopPropagation()}
+                            style={{
+                                borderColor: 'rgba(0, 168, 255, 0.6)',
+                                backgroundColor: '#080D1A',
+                                boxShadow:
+                                    '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)',
+                            }}
                         >
-                            <div className='flex items-center gap-2 border-b border-border px-3 py-2'>
-                                <Search className='h-4 w-4 shrink-0 text-muted-foreground' />
+                            {/* ---- Header bar (same style as the
+                                Classement column header row) ---- */}
+                            <div
+                                className='flex items-center gap-2 border-b px-3 py-2.5'
+                                style={{
+                                    borderColor: 'rgba(0, 168, 255, 0.35)',
+                                    background:
+                                        'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))',
+                                }}
+                            >
+                                <Search
+                                    className='h-4 w-4 shrink-0'
+                                    style={{
+                                        color: '#00E5FF',
+                                        filter:
+                                            'drop-shadow(0 0 6px rgba(0, 229, 255, 0.85)) drop-shadow(0 0 14px rgba(0, 229, 255, 0.4))',
+                                    }}
+                                />
 
                                 <input
                                     ref={searchInputRef}
                                     type='text'
                                     value={searchQuery}
                                     autoComplete='off'
-                                    placeholder='Rechercher un joueur'
+                                    placeholder='RECHERCHER UN JOUEUR'
                                     onChange={(event) =>
                                         setSearchQuery(event.target.value)
                                     }
-                                    className='w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none'
+                                    className='w-full bg-transparent text-sm font-semibold uppercase tracking-wider text-[#00E5FF] placeholder:text-[#00E5FF]/40 focus:outline-none'
+                                    style={{
+                                        textShadow:
+                                            '0 0 8px rgba(0, 229, 255, 0.35)',
+                                    }}
                                 />
 
                                 <button
                                     type='button'
                                     aria-label='Fermer la recherche'
                                     onClick={closeSearchModal}
-                                    className='cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground'
+                                    className='cursor-pointer rounded-md p-1 text-[#00E5FF] transition-colors hover:bg-[#00A8FF]/15'
                                 >
                                     <X className='h-4 w-4' />
                                 </button>
                             </div>
 
+                            {/* ---- Results list ---- */}
                             <div className='max-h-80 overflow-y-auto'>
-                                {searchQuery.trim().length < 2 && (
-                                    <p className='px-3 py-3 text-sm text-muted-foreground'>
-                                        Tapez au moins 2 caractères pour rechercher.
-                                    </p>
-                                )}
-
                                 {searchQuery.trim().length >= 2 &&
                                     searching &&
                                     searchResults.length === 0 && (
@@ -654,13 +678,17 @@ export function TopBar() {
                                         key={p.playerId}
                                         type='button'
                                         onClick={() => handlePickResult(p)}
-                                        className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                        className='flex w-full cursor-pointer items-center justify-between gap-2 border-b px-3 py-2 text-left text-sm transition-colors last:border-b-0 hover:bg-[#00A8FF]/10'
+                                        style={{
+                                            borderColor:
+                                                'rgba(0, 168, 255, 0.12)',
+                                        }}
                                     >
-                                        <span className='text-foreground'>
+                                        <span className='truncate font-semibold text-foreground'>
                                             {p.firstName} {p.lastName}
                                         </span>
 
-                                        <span className='text-xs text-muted-foreground'>
+                                        <span className='shrink-0 text-xs uppercase tracking-wider text-[#7DD3FC]'>
                                             {p.nhlTeamAbbreviation} · {p.position}
                                         </span>
                                     </button>

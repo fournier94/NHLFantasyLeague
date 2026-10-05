@@ -18,30 +18,25 @@ import { cn } from '@/lib/utils';
 // Constants
 // ---------------------------------------------------------------------
 
-/**
- * Polling cadence. We never stop polling: the page has no manual
- * refresh button, so it must keep itself current through the whole
- * day. Two tiers keep the load proportional to how interesting the
- * data currently is.
- *
- *   LIVE: at least one game is LIVE or CRIT. The scores on screen
- *         change every few seconds, so we poll aggressively. This
- *         matches the backend's own live-cache refresh interval.
- *
- *   IDLE: no live games. We still want to catch the transition
- *         scheduled -> live (so the first goal of the night shows up
- *         without a page reload), the transition live -> final, and
- *         any late schedule changes. A 10-minute check is plenty
- *         for all of those.
- */
-const POLL_LIVE_MS = 2 * 60_000;   // 2 minutes while a game is live
-const POLL_IDLE_MS = 10 * 60_000;  // 10 minutes otherwise
+const POLL_LIVE_MS = 2 * 60_000;
+const POLL_IDLE_MS = 10 * 60_000;
 
 const TIME_FORMATTER = new Intl.DateTimeFormat('fr-CA', {
     hour: 'numeric',
     minute: '2-digit',
     timeZone: 'America/Toronto',
 });
+
+// Shared frame style, matching the Classement page.
+const FRAME_BG = '#080D1A';
+const FRAME_BORDER = 'rgba(0, 168, 255, 0.6)';
+const FRAME_GLOW =
+    '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)';
+const HEADER_GRADIENT =
+    'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))';
+const CYAN = '#00E5FF';
+const CYAN_SOFT = '#7DD3FC';
+const GREEN = '#22C55E';
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -55,11 +50,6 @@ function isScheduled(game: GameDayGameSummary): boolean {
     return game.gameState === 'FUT' || game.gameState === 'PRE';
 }
 
-/**
- * A game is "finished" when its state is neither live nor scheduled.
- * The NHL API uses FINAL right after the game ends, then flips to OFF
- * once the game is fully wrapped up. Both mean the same thing to us.
- */
 function isFinal(game: GameDayGameSummary): boolean {
     return !isLive(game) && !isScheduled(game);
 }
@@ -69,6 +59,14 @@ function periodLabel(game: GameDayGameSummary): string {
     if (game.periodType === 'SO') return 'TAB';
     if (game.periodNumber) return `${game.periodNumber}e`;
     return '';
+}
+
+function startTimeLabel(iso: string): string {
+    try {
+        return TIME_FORMATTER.format(new Date(iso));
+    } catch {
+        return '';
+    }
 }
 
 /**
@@ -98,31 +96,9 @@ function isTodayLocal(iso: string): boolean {
     return start >= startOfToday && start < startOfTomorrow;
 }
 
-function startTimeLabel(iso: string): string {
-    try {
-        return TIME_FORMATTER.format(new Date(iso));
-    } catch {
-        return '';
-    }
-}
-
-function goalieDecisionLabel(decision: string | null): string {
-    if (!decision) return '';
-    if (decision === 'W') return 'V';
-    if (decision === 'L') return 'D';
-    if (decision === 'O') return 'DP';
-    return decision;
-}
-
 /**
  * Sorts games by start time ascending, earliest first. Ties are
- * broken by gameId (ascending) so the order is stable across renders
- * when two games share the same start time (which happens on
- * Saturdays with matinee slates).
- *
- * The backend usually already returns them in this order, but the
- * frontend guarantees it so the on-screen order never depends on the
- * backend's sort behaviour.
+ * broken by gameId ascending so the order is stable across renders.
  */
 function sortGamesByStartTime(
     games: GameDayGameSummary[],
@@ -135,6 +111,14 @@ function sortGamesByStartTime(
 
         return a.gameId - b.gameId;
     });
+}
+
+function goalieDecisionLabel(decision: string | null): string {
+    if (!decision) return '';
+    if (decision === 'W') return 'V';
+    if (decision === 'L') return 'D';
+    if (decision === 'O') return 'DP';
+    return decision;
 }
 
 // ---------------------------------------------------------------------
@@ -213,19 +197,19 @@ function TeamBoxscore({
 
     return (
         <div className='space-y-2'>
-            <div className='flex items-center gap-2 border-b border-border/40 pb-1'>
+            <div className='flex items-center gap-2 border-b border-[#00A8FF]/20 pb-1'>
                 <NhlTeamLogo abbreviation={abbreviation} size={20} />
                 <span className='text-sm font-semibold text-foreground'>
                     {abbreviation}
                 </span>
-                <span className='text-[0.65rem] uppercase tracking-wide text-muted-foreground'>
+                <span className='text-[0.65rem] uppercase tracking-wider text-[#7DD3FC]'>
                     {label}
                 </span>
             </div>
 
             {skaters.length > 0 && (
                 <div>
-                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wide text-muted-foreground'>
+                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
                         <span className='flex-1'>Joueur</span>
                         <div className='flex shrink-0 gap-2'>
                             <span className='w-6 text-center'>B</span>
@@ -241,7 +225,7 @@ function TeamBoxscore({
 
             {goalies.length > 0 && (
                 <div>
-                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wide text-muted-foreground'>
+                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
                         <span className='flex-1'>Gardien</span>
                         <div className='flex shrink-0 gap-2'>
                             <span className='w-6 text-center'>Déc.</span>
@@ -266,7 +250,10 @@ function BoxscorePanel({
 }) {
     if (loading) {
         return (
-            <div className='border-t border-border/40 px-3 py-4 text-center text-xs text-muted-foreground'>
+            <div
+                className='border-t px-3 py-4 text-center text-xs text-muted-foreground'
+                style={{ borderColor: 'rgba(0, 168, 255, 0.2)' }}
+            >
                 Chargement du sommaire...
             </div>
         );
@@ -275,7 +262,10 @@ function BoxscorePanel({
     if (!boxscore) return null;
 
     return (
-        <div className='max-h-[28rem] space-y-4 overflow-y-auto border-t border-border/40 px-3 py-3 md:max-h-none'>
+        <div
+            className='max-h-[28rem] space-y-4 overflow-y-auto border-t px-3 py-3 md:max-h-none'
+            style={{ borderColor: 'rgba(0, 168, 255, 0.2)' }}
+        >
             <TeamBoxscore
                 team={boxscore.playerByGameStats.awayTeam}
                 abbreviation={boxscore.awayTeam.abbrev}
@@ -287,6 +277,69 @@ function BoxscorePanel({
                 abbreviation={boxscore.homeTeam.abbrev}
                 label='Locaux'
             />
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------
+// Team row inside a game card
+// ---------------------------------------------------------------------
+
+function TeamRow({
+    abbreviation,
+    score,
+    isWinning,
+    isScheduled,
+}: {
+    abbreviation: string;
+    score: number;
+    isWinning: boolean;
+    isScheduled: boolean;
+}) {
+    return (
+        <div className='flex items-center justify-between gap-3 px-4 py-1.5'>
+            <div className='flex min-w-0 flex-1 items-center gap-2.5'>
+                <NhlTeamLogo abbreviation={abbreviation} size={26} />
+                <span
+                    className={cn(
+                        'truncate text-base font-bold tracking-wide',
+                        isScheduled || !isWinning
+                            ? 'text-[#7DD3FC]'
+                            : 'text-white',
+                    )}
+                    style={
+                        !isScheduled && isWinning
+                            ? {
+                                textShadow:
+                                    '0 0 8px rgba(125, 211, 252, 0.5)',
+                            }
+                            : undefined
+                    }
+                >
+                    {abbreviation}
+                </span>
+            </div>
+
+            <span
+                className={cn(
+                    'shrink-0 text-xl font-bold tabular-nums',
+                    isScheduled
+                        ? 'text-[#00A8FF]/50'
+                        : isWinning
+                            ? 'text-white'
+                            : 'text-[#7DD3FC]',
+                )}
+                style={
+                    !isScheduled && isWinning
+                        ? {
+                            textShadow:
+                                '0 0 10px rgba(125, 211, 252, 0.6)',
+                        }
+                        : undefined
+                }
+            >
+                {isScheduled ? '—' : score}
+            </span>
         </div>
     );
 }
@@ -327,12 +380,26 @@ function GameCard({
     return (
         <div
             className={cn(
-                'overflow-hidden rounded-lg border border-border bg-card transition-colors',
-                clickable && 'cursor-pointer hover:border-[#00A8FF]/40',
+                'overflow-hidden rounded-lg border transition-shadow',
+                clickable && 'cursor-pointer hover:brightness-110',
             )}
             onClick={handleClick}
+            style={{
+                borderColor: FRAME_BORDER,
+                backgroundColor: FRAME_BG,
+                boxShadow: live
+                    ? '0 0 22px rgba(34, 197, 94, 0.35), inset 0 0 18px rgba(34, 197, 94, 0.08)'
+                    : FRAME_GLOW,
+            }}
         >
-            <div className='flex items-center justify-between gap-2 border-b border-border/40 px-3 py-2 text-xs'>
+            {/* ---- Header bar: time / status / expand hint ---- */}
+            <div
+                className='flex items-center justify-between gap-2 border-b px-4 py-2'
+                style={{
+                    borderColor: 'rgba(0, 168, 255, 0.35)',
+                    background: HEADER_GRADIENT,
+                }}
+            >
                 <div className='flex items-center gap-2'>
                     {live && (
                         <span className='relative inline-flex h-2 w-2'>
@@ -343,11 +410,24 @@ function GameCard({
 
                     <span
                         className={cn(
-                            'font-bold uppercase tracking-wide',
+                            'text-xs font-bold uppercase tracking-wider',
                             live && 'text-emerald-400',
                             final && 'text-muted-foreground',
-                            scheduled && 'text-muted-foreground',
+                            scheduled && 'text-[#00E5FF]',
                         )}
+                        style={
+                            scheduled
+                                ? {
+                                    textShadow:
+                                        '0 0 8px rgba(0, 229, 255, 0.4)',
+                                }
+                                : live
+                                    ? {
+                                        textShadow:
+                                            '0 0 8px rgba(34, 197, 94, 0.5)',
+                                    }
+                                    : undefined
+                        }
                     >
                         {live
                             ? `En direct${periodLabel(game) ? ` · ${periodLabel(game)}` : ''}`
@@ -359,80 +439,33 @@ function GameCard({
 
                 <div className='flex items-center gap-2 text-muted-foreground'>
                     {clickable && (
-                        <span className='text-[0.65rem] uppercase'>
+                        <span className='text-[0.65rem] uppercase tracking-wider'>
                             {expanded ? 'Réduire' : 'Détails'}
                         </span>
                     )}
-                    {clickable && (
-                        expanded ? (
+                    {clickable &&
+                        (expanded ? (
                             <ChevronUp className='h-4 w-4' />
                         ) : (
                             <ChevronDown className='h-4 w-4' />
-                        )
-                    )}
+                        ))}
                 </div>
             </div>
 
-            <div className='space-y-2 px-3 py-2.5'>
-                <div className='flex items-center justify-between gap-3'>
-                    <div className='flex min-w-0 flex-1 items-center gap-2'>
-                        <NhlTeamLogo
-                            abbreviation={game.awayAbbreviation}
-                            size={24}
-                        />
-                        <span
-                            className={cn(
-                                'truncate text-base font-bold',
-                                awayWinning
-                                    ? 'text-foreground'
-                                    : 'text-muted-foreground',
-                            )}
-                        >
-                            {game.awayAbbreviation}
-                        </span>
-                    </div>
-
-                    <span
-                        className={cn(
-                            'shrink-0 text-lg font-bold tabular-nums',
-                            awayWinning
-                                ? 'text-foreground'
-                                : 'text-muted-foreground',
-                        )}
-                    >
-                        {scheduled ? '—' : awayScore}
-                    </span>
-                </div>
-
-                <div className='flex items-center justify-between gap-3'>
-                    <div className='flex min-w-0 flex-1 items-center gap-2'>
-                        <NhlTeamLogo
-                            abbreviation={game.homeAbbreviation}
-                            size={24}
-                        />
-                        <span
-                            className={cn(
-                                'truncate text-base font-bold',
-                                homeWinning
-                                    ? 'text-foreground'
-                                    : 'text-muted-foreground',
-                            )}
-                        >
-                            {game.homeAbbreviation}
-                        </span>
-                    </div>
-
-                    <span
-                        className={cn(
-                            'shrink-0 text-lg font-bold tabular-nums',
-                            homeWinning
-                                ? 'text-foreground'
-                                : 'text-muted-foreground',
-                        )}
-                    >
-                        {scheduled ? '—' : homeScore}
-                    </span>
-                </div>
+            {/* ---- Team rows ---- */}
+            <div className='space-y-1 py-2'>
+                <TeamRow
+                    abbreviation={game.awayAbbreviation}
+                    score={awayScore}
+                    isWinning={awayWinning}
+                    isScheduled={scheduled}
+                />
+                <TeamRow
+                    abbreviation={game.homeAbbreviation}
+                    score={homeScore}
+                    isWinning={homeWinning}
+                    isScheduled={scheduled}
+                />
             </div>
 
             {expanded && (
@@ -503,15 +536,9 @@ export default function GameDayPage() {
             const hasLive =
                 result?.games.some(isLive) ?? false;
 
-            // Force a synchronous backend refresh when the schedule
-            // is stale or empty. When the page has games and the
-            // backend cache is fresh, a normal read is enough.
             const needsForce =
                 !result?.isFresh || (result?.games.length ?? 0) === 0;
 
-            // Poll fast while a game is live, slow otherwise. We
-            // never stop: the page has no manual refresh button, so
-            // it must keep itself current through the whole day.
             const delay = hasLive ? POLL_LIVE_MS : POLL_IDLE_MS;
 
             timeoutId = window.setTimeout(
@@ -565,7 +592,6 @@ export default function GameDayPage() {
 
     /**
      * Today's games, sorted by start time ascending (earliest first).
-     *
      * The backend returns the whole NHL game week, so we filter it
      * on the client against the user's local calendar day. A game
      * that started late yesterday and is still LIVE or CRIT is

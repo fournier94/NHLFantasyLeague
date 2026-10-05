@@ -252,7 +252,7 @@ export default function ClassementPage() {
     }
 
     return (
-        <section className='w-full space-y-4'>
+        <section className='flex min-h-full w-full flex-col gap-4'>
             {/* ---- Header: crown + title + decorative subtitle ---- */}
             <div className='flex flex-col items-center gap-1.5'>
                 <Crown
@@ -299,12 +299,12 @@ export default function ClassementPage() {
 
             {/* ---- Standings table ---- */}
             {rows.length === 0 ? (
-                <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
+                <p className='flex-1 rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
                     Aucune donnée de classement pour le moment.
                 </p>
             ) : (
                 <div
-                    className='overflow-hidden rounded-lg border'
+                    className='flex-1 overflow-hidden rounded-lg border'
                     style={{
                         borderColor: CYAN_BORDER,
                         backgroundColor: FRAME_BG,
