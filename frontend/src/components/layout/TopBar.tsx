@@ -44,38 +44,41 @@ const MOBILE_NAV_ITEMS = [
     { to: '/classement', label: 'Classement', icon: Trophy },
 ];
 
-/** Color used for the golden Classement shortcut icon. */
+/** Colors used for the mobile shortcut icons. */
 const GOLD = '#FFC72C';
-
-/** Colors used for the two new mobile shortcuts. */
 const GAMEDAY_CYAN = '#00E5FF';
 const INJURY_RED = '#EF4444';
+const SEARCH_WHITE = '#FFFFFF';
 
 /**
- * Static three-layer glow for the two new mobile shortcuts. Same
- * shape as the golden trophy aura: three stacked drop-shadows with
- * decreasing opacity. Not tied to the aura slider system — these
- * are fixed decorations, not user-tunable channels.
+ * Two-layer glow, matching the crown effect on the Classement page:
+ *
+ *   drop-shadow(0 0 6px  rgba(color, 0.85))   <- inner, tight
+ *   drop-shadow(0 0 14px rgba(color, 0.4))    <- outer, soft bloom
+ *
+ * A single solid inner ring plus a wider, dimmer halo reads cleaner
+ * than the previous three-layer chain and matches the visual language
+ * of the crown.
  */
+
 const GAMEDAY_AURA = [
-    `drop-shadow(0 0 3px rgba(0, 229, 255, 0.95))`,
-    `drop-shadow(0 0 6px rgba(0, 229, 255, 0.55))`,
-    `drop-shadow(0 0 10px rgba(0, 168, 255, 0.35))`,
+    `drop-shadow(0 0 6px rgba(0, 229, 255, 0.85))`,
+    `drop-shadow(0 0 14px rgba(0, 229, 255, 0.4))`,
 ].join(' ');
 
 const INJURY_AURA = [
-    `drop-shadow(0 0 3px rgba(239, 68, 68, 0.95))`,
-    `drop-shadow(0 0 6px rgba(239, 68, 68, 0.55))`,
-    `drop-shadow(0 0 10px rgba(220, 38, 38, 0.35))`,
+    `drop-shadow(0 0 6px rgba(239, 68, 68, 0.85))`,
+    `drop-shadow(0 0 14px rgba(239, 68, 68, 0.4))`,
 ].join(' ');
 
-/**
- * Static three-layer white glow for the search icon.
- */
+const TROPHY_AURA = [
+    `drop-shadow(0 0 6px rgba(255, 199, 44, 0.85))`,
+    `drop-shadow(0 0 14px rgba(255, 199, 44, 0.4))`,
+].join(' ');
+
 const SEARCH_AURA = [
-    `drop-shadow(0 0 3px rgba(255, 255, 255, 0.95))`,
-    `drop-shadow(0 0 6px rgba(255, 255, 255, 0.55))`,
-    `drop-shadow(0 0 10px rgba(255, 255, 255, 0.35))`,
+    `drop-shadow(0 0 6px rgba(255, 255, 255, 0.85))`,
+    `drop-shadow(0 0 14px rgba(255, 255, 255, 0.4))`,
 ].join(' ');
 
 /**
@@ -266,16 +269,6 @@ export function TopBar() {
         `drop-shadow(0 0 ${(logoLayer(3) * LEAGUE_LOGO_PULSE_PEAK_SCALE).toFixed(2)}px rgba(0, 168, 255, 0.5))`,
     ].join(' ');
 
-    // --- Golden trophy aura -------------------------------------------
-    // Fixed, not tied to the aura system: this is a small shortcut
-    // icon, not a user-tunable element. Three layers of gold at
-    // decreasing opacity sell the "glowing medal" look.
-    const trophyAura = [
-        `drop-shadow(0 0 3px rgba(255, 199, 44, 0.95))`,
-        `drop-shadow(0 0 6px rgba(255, 199, 44, 0.6))`,
-        `drop-shadow(0 0 10px rgba(255, 184, 0, 0.35))`,
-    ].join(' ');
-
     function handlePickResult(p: PlayerSearchResult) {
         setSearchModalOpen(false);
         setSearchQuery('');
@@ -425,7 +418,7 @@ export function TopBar() {
                             className='h-6 w-6'
                             style={{
                                 color: GOLD,
-                                filter: trophyAura,
+                                filter: TROPHY_AURA,
                             }}
                         />
                     </Link>
@@ -450,7 +443,10 @@ export function TopBar() {
                     >
                         <Search
                             className='h-6 w-6'
-                            style={{ filter: SEARCH_AURA }}
+                            style={{
+                                color: SEARCH_WHITE,
+                                filter: SEARCH_AURA,
+                            }}
                         />
                     </button>
 
