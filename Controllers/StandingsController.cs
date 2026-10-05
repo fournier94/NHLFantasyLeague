@@ -111,7 +111,9 @@ namespace NhlFantasyLeague.api.Controllers
                 .ThenBy(h => h.Id)
                 .ToListAsync(ct);
 
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var nowEt = NhlFantasyLeague.api.Services.NHL.TimeZoneHelper
+      .ToEastern(DateTime.UtcNow);
+            var today = DateOnly.FromDateTime(nowEt);
             var yesterday = today.AddDays(-1);
 
             var yesterdayTotals = await _nhlGameLogService

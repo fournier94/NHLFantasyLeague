@@ -810,15 +810,6 @@ namespace NhlFantasyLeague.api.Services
         }
 
         /// <summary>
-        /// Returns the full roster of one fantasy team for one season, with
-        /// the total salary, the cap salary (Active + Bench), the five-year
-        /// cap projection, and the number of players per status.
-        ///
-        /// The three stat lines shown on each player card come from
-        /// PlayerCareerStat (the raw, per-league history), not from
-        /// PlayerSeasonStat (which is the fantasy table).
-        /// </summary>
-        /// <summary>
         /// Roster payload, cached for 20 seconds. Every mutation in
         /// this service invalidates the cache via OnRosterChanged, so
         /// the only staleness window is a mutation made through a
@@ -1016,10 +1007,14 @@ namespace NhlFantasyLeague.api.Services
             }
 
             // Yesterday / today fantasy points per player. Today and
-            // yesterday are UTC calendar days matching the stored
-            // PlayerGameLog.GameDate. Null = did not play; 0 = played,
-            // no points; positive = points scored.
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // yesterday are ET calendar days matching the stored
+            // PlayerGameLog.GameDate (the NHL labels games with the
+            // local arena date). Using UTC would put us one day off
+            // for any game that starts in the evening ET, because by
+            // then UTC has already rolled over to tomorrow.
+            var nowEt = NhlFantasyLeague.api.Services.NHL.TimeZoneHelper
+                .ToEastern(DateTime.UtcNow);
+            var today = DateOnly.FromDateTime(nowEt);
             var yesterday = today.AddDays(-1);
 
             var recentLogs = new List<RecentGameLogRow>();
@@ -1152,6 +1147,20 @@ namespace NhlFantasyLeague.api.Services
                         var (currentContract, secondContract) =
                             ResolveContractLines(contracts, season.NhlSeasonCode);
 
+                        // null = did not play; 0 = played, no points.
+                        // The dictionaries only contain players who
+                        // have a game log row for that day, so a
+                        // missing key maps correctly to null.
+                        int? yesterdayFp = yesterdayFpByPlayerId
+                            .TryGetValue(e.PlayerId, out var yFp)
+                            ? yFp
+                            : null;
+
+                        int? todayFp = todayFpByPlayerId
+                            .TryGetValue(e.PlayerId, out var tFp)
+                            ? tFp
+                            : null;
+
                         return ToRosterEntryDto(
                             e,
                             ToSeasonStatLineDto(
@@ -1170,7 +1179,9 @@ namespace NhlFantasyLeague.api.Services
                                 seasonStatByPlayerAndSeasonCode.GetValueOrDefault(
                                     (e.PlayerId, CurrentSeasonNhlCode))),
                             currentContract,
-                            secondContract);
+                            secondContract,
+                            yesterdayFp,
+                            todayFp);
                     })
                     .ToList()
             };

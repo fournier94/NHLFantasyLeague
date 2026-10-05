@@ -461,7 +461,9 @@ export interface TeamRoster {
 
 /** Fetches the full roster (with totals and stat lines) of one fantasy team. */
 export const getTeamRoster = (fantasyTeamId: number) =>
-    apiGet<TeamRoster>(`/Roster/team/${fantasyTeamId}`);
+    apiGet<TeamRoster>(`/Roster/team/${fantasyTeamId}`, {
+        cacheTtlMs: 5_000,
+    });
 
 /** One player row returned by the roster search (GET /api/Roster/search). */
 export interface PlayerSearchResult {
@@ -683,7 +685,9 @@ export interface StandingsRow {
 
 export function getStandings(seasonId?: number): Promise<StandingsRow[]> {
     const query = seasonId != null ? `?seasonId=${seasonId}` : '';
-    return apiGet<StandingsRow[]>(`/Standings${query}`);
+    return apiGet<StandingsRow[]>(`/Standings${query}`, {
+        cacheTtlMs: 5_000,
+    });
 }
 
 // ---------------------------------------------------------------------
@@ -1101,4 +1105,65 @@ export function getGameBoxscore(
         `/Games/${gameId}/boxscore`,
         { cacheTtlMs: 0 },
     );
+}
+
+// ---------------------------------------------------------------------
+// Injuries
+// ---------------------------------------------------------------------
+
+export interface InjuryRow {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    nhlTeamAbbreviation: string | null;
+    nhlTeamName: string | null;
+    headshotUrl: string | null;
+
+    isInjured: boolean;
+    injuryStatus: string | null;
+    injuryKind: 'None' | 'Injury' | 'Suspension';
+    injuryShortDescription: string | null;
+    injuryLongDescription: string | null;
+    injuryType: string | null;
+    injuryDetail: string | null;
+    injurySide: string | null;
+    injuryReturnDate: string | null;
+    injuryFantasyStatus: string | null;
+    injuryUpdatedAt: string | null;
+
+    fantasyTeamId: number | null;
+    fantasyTeamName: string | null;
+    rosterStatus: string | null;
+}
+
+export interface InjuryFilters {
+    search?: string;
+    nhlTeam?: string;
+    fantasyTeamId?: number;
+    kind?: 'Injury' | 'Suspension';
+}
+
+/**
+ * Every injured or suspended player, with optional filters. Cached
+ * client-side for 30 seconds so rapid filter changes and page
+ * navigations don't spam the backend.
+ */
+export function getInjuries(
+    filters: InjuryFilters = {},
+): Promise<InjuryRow[]> {
+    const params = new URLSearchParams();
+
+    if (filters.search) params.set('search', filters.search);
+    if (filters.nhlTeam) params.set('nhlTeam', filters.nhlTeam);
+    if (filters.fantasyTeamId != null) {
+        params.set('fantasyTeamId', String(filters.fantasyTeamId));
+    }
+    if (filters.kind) params.set('kind', filters.kind);
+
+    const query = params.toString();
+    const path = query ? `/Injuries?${query}` : '/Injuries';
+
+    return apiGet<InjuryRow[]>(path, { cacheTtlMs: 30_000 });
 }

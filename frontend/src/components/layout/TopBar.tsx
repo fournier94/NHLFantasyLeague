@@ -8,6 +8,7 @@ import {
     Menu,
     Search,
     ShieldCheck,
+    Stethoscope,
     Trophy,
     User,
     Users,
@@ -39,6 +40,7 @@ import {
 const MOBILE_NAV_ITEMS = [
     { to: '/mon-equipe', label: 'Mon equipe', icon: Users },
     { to: '/game-day', label: 'Game Day', icon: CalendarDays },
+    { to: '/blessures', label: 'Blessures', icon: Stethoscope },
     { to: '/classement', label: 'Classement', icon: Trophy },
 ];
 
@@ -231,6 +233,17 @@ export function TopBar() {
                     >
                         <CalendarDays className='h-4 w-4' />
                         <span>Game Day</span>
+                    </Link>
+
+                    <Link
+                        to='/blessures'
+                        className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/blessures'
+                            ? 'font-medium text-primary'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                    >
+                        <Stethoscope className='h-4 w-4' />
+                        <span>Blessures</span>
                     </Link>
 
                     <Link

@@ -155,6 +155,68 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         /// <summary>
+        /// Same as SavePlayerAsync, but skips the
+        /// UpsertFantasySeasonStatAsync call. Used by the career stats
+        /// refresh so the NHL landing page (which lags behind the
+        /// boxscore by a few hours) does not clobber the live-persisted
+        /// PlayerSeasonStat.FantasyPoints / GamesPlayed / Goals / ...
+        /// deltas.
+        ///
+        /// Only Player, PlayerCareerStat and the landing-owned columns
+        /// of PlayerSeasonStat are considered safe to overwrite here.
+        /// Since we cannot safely separate them, we just skip the
+        /// season stat entirely.
+        /// </summary>
+        private async Task<Player?> RefreshPlayerWithoutSeasonStatAsync(
+            int nhlPlayerId)
+        {
+            var existingPlayer = await _dbContext.Players
+                .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
+
+            var response = await GetPlayerAsync(nhlPlayerId);
+
+            if (response == null)
+            {
+                return null;
+            }
+
+            if (existingPlayer == null)
+            {
+                return null;
+            }
+
+            var player = existingPlayer;
+
+            player.FirstName = response.FirstName.Default;
+            player.LastName = response.LastName.Default;
+            player.Position = response.Position ?? string.Empty;
+
+            UpdatePlayerNhlTeam(player, response.CurrentTeamId);
+
+            player.BirthDate = response.BirthDate.HasValue
+                ? DateOnly.FromDateTime(response.BirthDate.Value)
+                : null;
+
+            player.HeadshotUrl = response.Headshot;
+
+            UpdatePlayerDraftInfo(player, response);
+
+            await _dbContext.SaveChangesAsync();
+
+            await _nhlStatsService.SyncCareerStatsFromLandingAsync(
+                player, response);
+
+            await _dbContext.SaveChangesAsync();
+
+            // NOTE: intentionally NOT calling
+            // UpsertFantasySeasonStatAsync. The landing page lags
+            // behind the boxscore; overwriting the season stat here
+            // would roll back live-persisted deltas.
+
+            return player;
+        }
+
+        /// <summary>
         /// Refreshes the landing data (career stats, bio, draft info,
         /// current-season totals) for every player who played on the
         /// given date. Uses the existing SavePlayerAsync path, one
@@ -200,7 +262,7 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 try
                 {
-                    var player = await SavePlayerAsync(nhlId);
+                    var player = await RefreshPlayerWithoutSeasonStatAsync(nhlId);
 
                     if (player != null)
                     {
