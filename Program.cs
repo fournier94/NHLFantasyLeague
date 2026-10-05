@@ -105,9 +105,10 @@ builder.Services
         options.Cookie.HttpOnly = true;
         options.Cookie.SameSite = SameSiteMode.Lax;
 
-        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
-            ? CookieSecurePolicy.None
-            : CookieSecurePolicy.Always;
+        options.Cookie.SecurePolicy = builder.Configuration
+     .GetValue<bool>("Auth:CookieRequireHttps", false)
+         ? CookieSecurePolicy.Always
+         : CookieSecurePolicy.None;
 
         options.ExpireTimeSpan = TimeSpan.FromDays(365);
         options.SlidingExpiration = true;

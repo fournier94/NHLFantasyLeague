@@ -15,7 +15,8 @@ COPY --from=build /app/publish .
 
 # Force port 10000. The .NET 8 base image defaults to 8080 internally,
 # which conflicts with Render's expected port and causes no-server.
-ENV ASPNETCORE_HTTP_PORTS=10000
+ENV ASPNETCORE_HTTP_PORTS=8080
 
-EXPOSE 10000
+EXPOSE 8080
+
 ENTRYPOINT ["dotnet", "NhlFantasyLeague.api.dll"]

@@ -1,0 +1,40 @@
+﻿services:
+  db:
+    image: postgres:18
+    restart: always
+    environment:
+      POSTGRES_DB: nhlfantasy
+      POSTGRES_USER: leagueuser
+      POSTGRES_PASSWORD: CHANGE_ME
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      - db
+    environment:
+      - ConnectionStrings__DefaultConnection=Host=db;Database=nhlfantasy;Username=leagueuser;Password=CHANGE_ME
+      - Auth__InviteCode=CHANGE_ME
+      - Auth__CookieRequireHttps=false
+      - ASPNETCORE_ENVIRONMENT=Production
+    ports:
+      - "5000:8080"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
