@@ -1,13 +1,10 @@
 ﻿import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
-    getPlayerCareer,
     getPlayerDetail,
     type CareerRow,
-    type CareerTotals,
     type GameLogRow,
     type Month,
-    type PlayerCareer,
     type PlayerDetail,
 } from '@/api/client';
 import { cn } from '@/lib/utils';
@@ -1947,7 +1944,6 @@ export default function PlayerPage() {
     const isNeon = playerPageStyle === 'Neon';
 
     const [player, setPlayer] = useState<PlayerDetail | null>(null);
-    const [career, setCareer] = useState<PlayerCareer | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [showGameLog, setShowGameLog] = useState(false);
@@ -2014,33 +2010,6 @@ export default function PlayerPage() {
             cancelled = true;
         };
     }, [nhlPlayerId]);
-
-    // Second call: career tables. Fires as soon as the main player
-    // payload is on screen. The career endpoint is served from the
-    // backend's in-memory cache, so on a repeat visit it is effectively
-    // free. Failure is non-fatal: the career sections simply stay
-    // empty and the rest of the page remains usable.
-    useEffect(() => {
-        if (!player || !nhlPlayerId) {
-            return;
-        }
-
-        let cancelled = false;
-
-        getPlayerCareer(Number(nhlPlayerId))
-            .then((data) => {
-                if (!cancelled) {
-                    setCareer(data);
-                }
-            })
-            .catch(() => {
-                // Non-fatal.
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [player, nhlPlayerId]);
 
     // Close: jump past every PlayerPage we opened and land on the last
     // non-player page (typically /mon-equipe, with the scroll position
@@ -2209,49 +2178,12 @@ export default function PlayerPage() {
         ? contractLabel(secondContract.salary, secondContract.yearsRemaining)
         : null;
 
-    // Career tables now arrive from a second API call. Until it lands,
-    // these fall back to empty arrays so the page renders cleanly with
-    // "Aucune donnée." placeholders inside the career tables. The NHL
-    // totals line also falls back to an all-zero object so the height
-    // of the table doesn't jump when the real data arrives.
-    const regularSeasonRows: CareerRow[] = career?.regularSeason ?? [];
-    const playoffsRows: CareerRow[] = career?.playoffs ?? [];
-    const tournamentsRows: CareerRow[] = career?.tournaments ?? [];
-    const youthMinorRows: CareerRow[] = career?.youthMinor ?? [];
+    const regularSeasonRows: CareerRow[] = player.regularSeason;
+    const playoffsRows: CareerRow[] = player.playoffs;
+    const tournamentsRows: CareerRow[] = player.tournaments;
+    const youthMinorRows: CareerRow[] = player.youthMinor;
 
-    const emptyNhlTotals: CareerTotals = {
-        gamesPlayed: 0,
-        goals: 0,
-        assists: 0,
-        points: 0,
-        penaltyMinutes: 0,
-        plusMinus: 0,
-        powerPlayPoints: 0,
-        shots: 0,
-        gameWinningGoals: 0,
-        playoffGamesPlayed: 0,
-        playoffGoals: 0,
-        playoffAssists: 0,
-        playoffPoints: 0,
-        playoffPenaltyMinutes: 0,
-        playoffPowerPlayPoints: 0,
-        playoffShots: 0,
-        playoffGameWinningGoals: 0,
-        wins: 0,
-        losses: 0,
-        overtimeLosses: 0,
-        shutouts: 0,
-        saves: 0,
-        shotsAgainst: 0,
-        goalsAgainst: 0,
-        savePercentage: 0,
-        playoffWins: 0,
-        playoffLosses: 0,
-        playoffOvertimeLosses: 0,
-        playoffShutouts: 0,
-    };
-
-    const nhlTotals = career?.nhlTotals ?? emptyNhlTotals;
+    const nhlTotals = player.nhlTotals;
 
     const hasNhlTotals =
         nhlTotals.gamesPlayed > 0 ||
