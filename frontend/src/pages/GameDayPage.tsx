@@ -1,10 +1,5 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-    CalendarDays,
-    ChevronDown,
-    ChevronUp,
-    RefreshCw,
-} from 'lucide-react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
     getGameBoxscore,
     getTodayGames,
@@ -23,18 +18,28 @@ import { cn } from '@/lib/utils';
 // Constants
 // ---------------------------------------------------------------------
 
-const POLL_INTERVAL_MS = 2 * 60_000;
+/**
+ * Polling cadence. We never stop polling: the page has no manual
+ * refresh button, so it must keep itself current through the whole
+ * day. Two tiers keep the load proportional to how interesting the
+ * data currently is.
+ *
+ *   LIVE: at least one game is LIVE or CRIT. The scores on screen
+ *         change every few seconds, so we poll aggressively. This
+ *         matches the backend's own live-cache refresh interval.
+ *
+ *   IDLE: no live games. We still want to catch the transition
+ *         scheduled -> live (so the first goal of the night shows up
+ *         without a page reload), the transition live -> final, and
+ *         any late schedule changes. A 10-minute check is plenty
+ *         for all of those.
+ */
+const POLL_LIVE_MS = 2 * 60_000;   // 2 minutes while a game is live
+const POLL_IDLE_MS = 10 * 60_000;  // 10 minutes otherwise
 
 const TIME_FORMATTER = new Intl.DateTimeFormat('fr-CA', {
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: 'America/Toronto',
-});
-
-const DATE_FORMATTER = new Intl.DateTimeFormat('fr-CA', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
     timeZone: 'America/Toronto',
 });
 
@@ -74,28 +79,35 @@ function startTimeLabel(iso: string): string {
     }
 }
 
-function relativeTimeLabel(iso: string | null): string {
-    if (!iso) return 'jamais mis à jour';
-
-    const date = new Date(iso);
-    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-
-    if (seconds < 30) return "à l'instant";
-    if (seconds < 60) return `il y a ${seconds}s`;
-
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `il y a ${minutes} min`;
-
-    const hours = Math.floor(minutes / 60);
-    return `il y a ${hours} h`;
-}
-
 function goalieDecisionLabel(decision: string | null): string {
     if (!decision) return '';
     if (decision === 'W') return 'V';
     if (decision === 'L') return 'D';
     if (decision === 'O') return 'DP';
     return decision;
+}
+
+/**
+ * Sorts games by start time ascending, earliest first. Ties are
+ * broken by gameId (ascending) so the order is stable across renders
+ * when two games share the same start time (which happens on
+ * Saturdays with matinee slates).
+ *
+ * The backend usually already returns them in this order, but the
+ * frontend guarantees it so the on-screen order never depends on the
+ * backend's sort behaviour.
+ */
+function sortGamesByStartTime(
+    games: GameDayGameSummary[],
+): GameDayGameSummary[] {
+    return [...games].sort((a, b) => {
+        const ta = new Date(a.startTimeUtc).getTime();
+        const tb = new Date(b.startTimeUtc).getTime();
+
+        if (ta !== tb) return ta - tb;
+
+        return a.gameId - b.gameId;
+    });
 }
 
 // ---------------------------------------------------------------------
@@ -413,10 +425,7 @@ function GameCard({
 export default function GameDayPage() {
     const [data, setData] = useState<GameDayScheduleResponse | null>(null);
     const [loading, setLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
-
-    const [pollKey, setPollKey] = useState(0);
 
     const [expandedGameId, setExpandedGameId] = useState<number | null>(null);
     const [boxscore, setBoxscore] = useState<NhlBoxscoreResponse | null>(null);
@@ -434,8 +443,6 @@ export default function GameDayPage() {
 
     const fetchGames = useCallback(
         async (force: boolean): Promise<GameDayScheduleResponse | null> => {
-            if (force) setRefreshing(true);
-
             try {
                 const result = await getTodayGames(force);
                 if (!isMountedRef.current) return null;
@@ -452,7 +459,6 @@ export default function GameDayPage() {
             } finally {
                 if (isMountedRef.current) {
                     setLoading(false);
-                    setRefreshing(false);
                 }
             }
         },
@@ -470,18 +476,21 @@ export default function GameDayPage() {
             const hasLive =
                 result?.games.some(isLive) ?? false;
 
+            // Force a synchronous backend refresh when the schedule
+            // is stale or empty. When the page has games and the
+            // backend cache is fresh, a normal read is enough.
             const needsForce =
                 !result?.isFresh || (result?.games.length ?? 0) === 0;
 
-            const shouldContinue =
-                hasLive || needsForce || result === null;
+            // Poll fast while a game is live, slow otherwise. We
+            // never stop: the page has no manual refresh button, so
+            // it must keep itself current through the whole day.
+            const delay = hasLive ? POLL_LIVE_MS : POLL_IDLE_MS;
 
-            if (shouldContinue) {
-                timeoutId = window.setTimeout(
-                    () => tick(needsForce),
-                    POLL_INTERVAL_MS,
-                );
-            }
+            timeoutId = window.setTimeout(
+                () => tick(needsForce),
+                delay,
+            );
         };
 
         void tick(true);
@@ -490,11 +499,7 @@ export default function GameDayPage() {
             cancelled = true;
             if (timeoutId != null) window.clearTimeout(timeoutId);
         };
-    }, [pollKey, fetchGames]);
-
-    const handleManualRefresh = () => {
-        setPollKey((k) => k + 1);
-    };
+    }, [fetchGames]);
 
     const handleToggleExpand = async (gameId: number) => {
         if (expandedGameId === gameId) {
@@ -531,8 +536,15 @@ export default function GameDayPage() {
         }
     };
 
-    const games = data?.games ?? [];
-    const hasLiveGames = games.some(isLive);
+    /**
+     * Games sorted by start time ascending (earliest first). Computed
+     * once per data change instead of once per render, so re-renders
+     * triggered by expanding a boxscore do not re-sort.
+     */
+    const games = useMemo(
+        () => sortGamesByStartTime(data?.games ?? []),
+        [data?.games],
+    );
 
     if (loading && !data) {
         return (
@@ -549,45 +561,9 @@ export default function GameDayPage() {
 
     return (
         <section className='w-full space-y-4'>
-            <div className='space-y-1 text-center'>
-                <h2>
-                    <NeonTitle keepPulseOnMobile>Game Day</NeonTitle>
-                </h2>
-                <p className='text-xs capitalize text-muted-foreground'>
-                    {DATE_FORMATTER.format(new Date())}
-                </p>
-            </div>
-
-            <div className='flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs'>
-                <div className='flex items-center gap-2'>
-                    <CalendarDays className='h-4 w-4 text-muted-foreground' />
-
-                    <span className='text-muted-foreground'>
-                        {relativeTimeLabel(data?.lastRefreshUtc ?? null)}
-                    </span>
-
-                    {hasLiveGames && (
-                        <span className='font-bold uppercase tracking-wide text-emerald-400'>
-                            · En direct
-                        </span>
-                    )}
-                </div>
-
-                <button
-                    type='button'
-                    onClick={handleManualRefresh}
-                    disabled={refreshing}
-                    className='flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50'
-                >
-                    <RefreshCw
-                        className={cn(
-                            'h-3.5 w-3.5',
-                            refreshing && 'animate-spin',
-                        )}
-                    />
-                    <span>Actualiser</span>
-                </button>
-            </div>
+            <h2 className='text-center'>
+                <NeonTitle keepPulseOnMobile>Game Day</NeonTitle>
+            </h2>
 
             {error && (
                 <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>

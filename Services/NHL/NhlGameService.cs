@@ -127,7 +127,7 @@ namespace NhlFantasyLeague.api.Services.NHL
         // =================================================================
 
         public async Task<List<NhlScheduleGame>> GetTodayScheduleAsync(
-            CancellationToken ct = default)
+      CancellationToken ct = default)
         {
             var response = await _httpClient
                 .GetFromJsonAsync<NhlScheduleResponse>(ScheduleNowUrl, ct);
@@ -137,15 +137,26 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return new List<NhlScheduleGame>();
             }
 
-            // Return the whole game week. The ShouldAttachBoxscore
-            // check downstream filters by state and grace window, so
-            // old games get skipped anyway. Including everything is
-            // cheap (the schedule is small) and avoids missing a
-            // game that started before midnight ET but is still in
-            // progress when the tick fires (rare but possible at
-            // week boundaries).
+            // The NHL's /v1/schedule/now endpoint returns the whole
+            // current game week (typically Saturday to Friday), not
+            // just today. Filter it down to today's ET calendar date,
+            // plus any game that is still LIVE or CRIT from an
+            // earlier ET date. That second clause handles the rare
+            // case where a 10 PM ET start runs past midnight: its
+            // GameDate is yesterday but it is still on screen.
+            var todayEt = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
+
             return response.GameWeek
                 .SelectMany(w => w.Games)
+                .Where(g =>
+                    g.GameDate == todayEt ||
+                    string.Equals(
+                        g.GameState, "LIVE",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(
+                        g.GameState, "CRIT",
+                        StringComparison.OrdinalIgnoreCase))
                 .ToList();
         }
 
