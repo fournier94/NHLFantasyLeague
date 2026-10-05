@@ -14,7 +14,7 @@ namespace NhlFantasyLeague.api.Services
         public long GameId { get; set; }
 
         [JsonPropertyName("gameDate")]
-        public DateOnly GameDate { get; set; }
+        public DateOnly? GameDate { get; set; }
 
         [JsonPropertyName("teamAbbrev")]
         public string TeamAbbreviation { get; set; } = string.Empty;

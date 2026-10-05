@@ -387,7 +387,20 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return new List<MonthDto>();
             }
 
-            var (firstDate, lastDate) = range.Value;
+            var (rawFirst, rawLast) = range.Value;
+
+            // Defensive clamp: the season's own start and end dates are
+            // the authoritative window. If a stray game log exists
+            // outside the season (bad data, a leftover row from a
+            // migration, a mistake), ignore it so the month loop does
+            // not stretch to hundreds of iterations. Without this, a
+            // single -infinity date makes the page render one row per
+            // month since year 1.
+            var clampStart = currentSeason.StartDate;
+            var clampEnd = currentSeason.EndDate;
+
+            var firstDate = rawFirst < clampStart ? clampStart : rawFirst;
+            var lastDate = rawLast > clampEnd ? clampEnd : rawLast;
 
             if (lastDate < firstDate)
             {
@@ -478,15 +491,20 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             var range = await _dbContext.PlayerGameLogs
-                .AsNoTracking()
-                .Where(g => g.SeasonId == seasonId)
-                .GroupBy(g => 1)
-                .Select(g => new
-                {
-                    First = g.Min(x => x.GameDate),
-                    Last = g.Max(x => x.GameDate)
-                })
-                .FirstOrDefaultAsync();
+      .AsNoTracking()
+      .Where(g =>
+          g.SeasonId == seasonId &&
+          // Belt-and-suspenders: ignore any row with a
+          // sentinel date so a single bad entry cannot
+          // stretch the calculated range to year 1.
+          g.GameDate > new DateOnly(1900, 1, 1))
+      .GroupBy(g => 1)
+      .Select(g => new
+      {
+          First = g.Min(x => x.GameDate),
+          Last = g.Max(x => x.GameDate)
+      })
+      .FirstOrDefaultAsync();
 
             var entry = new CachedSeasonRange(
                 range?.First,

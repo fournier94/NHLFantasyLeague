@@ -157,6 +157,16 @@ namespace NhlFantasyLeague.api.Services.NHL
                     continue;
                 }
 
+                // The NHL API occasionally returns a game-log entry
+                // without a gameDate. Skipping it prevents writing
+                // a row with DateOnly.MinValue to the database,
+                // which Postgres stores as -infinity and which then
+                // breaks every date range that spans the table.
+                if (!game.GameDate.HasValue)
+                {
+                    continue;
+                }
+
                 bool hatTrick = false;
                 bool goalieWin = false;
                 bool goalieOTLoss = false;
@@ -219,7 +229,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     {
                         PlayerId = player.Id,
                         SeasonId = season.Id,
-                        GameDate = game.GameDate,
+                        GameDate = game.GameDate.Value,
                         NhlGameId = game.GameId,
                         NhlTeamId = nhlTeam.NhlTeamId,
                         OpponentNhlTeamId = opponentTeam.NhlTeamId,
@@ -247,7 +257,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 else
                 {
                     existingLog.SeasonId = season.Id;
-                    existingLog.GameDate = game.GameDate;
+                    existingLog.GameDate = game.GameDate.Value;
                     existingLog.NhlTeamId = nhlTeam.NhlTeamId;
                     existingLog.OpponentNhlTeamId = opponentTeam.NhlTeamId;
                     existingLog.IsHomeGame = game.HomeRoadFlag == "H";
