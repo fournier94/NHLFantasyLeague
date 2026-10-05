@@ -3,12 +3,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Services;
+using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.CapFreeze;
 using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers.CapFreeze
 {
-    [AllowAnonymous]
+    [Authorize(Roles = AuthService.CommissionerRole)]
     [ApiController]
     [Route("api/[controller]")]
     public class CapFreezeContractController : ControllerBase
@@ -292,9 +293,10 @@ AppDbContext dbContext)
         public async Task<IActionResult> GetProtectedContracts()
         {
             // Kept in sync with the current-season constants used by
-            // PlayerDetailService / RosterAdminService. Bump this each
-            // October when the new season starts.
-            const int CurrentSeasonNhlCode = 20262027;
+            // PlayerDetailService / RosterAdminService. Bump the
+            // SeasonCodes constant each October.
+            const int CurrentSeasonNhlCode =
+                NhlFantasyLeague.api.Constants.SeasonCodes.Current;
 
             var locked = CapFreezeContractService
                 .GetProtectedContracts()

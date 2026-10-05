@@ -1,11 +1,14 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using NhlFantasyLeague.api.Services;
+using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.Jobs;
 using NhlFantasyLeague.api.Services.NHL;
 using NhlFantasyLeague.api.Services.Health;
 
 namespace NhlFantasyLeague.api.Controllers
 {
+    [Authorize(Roles = AuthService.CommissionerRole)]
     [ApiController]
     [Route("api/[controller]")]
     public class JobsController : ControllerBase

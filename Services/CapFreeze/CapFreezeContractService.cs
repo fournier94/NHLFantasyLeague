@@ -530,20 +530,16 @@ CapFreezeContractData contractData)
             // We do not fetch or modify their contracts automatically.
             // Since no CapFreeze contract page is successfully
             // synchronized here, the contract timestamp is NOT updated.
+            //
+            // Matched by NhlPlayerId, NOT by name: there is a second
+            // Elias Pettersson (goalie, SHL draft class) whose record
+            // must not be caught by this rule. Only the Vancouver
+            // forward (NhlPlayerId 8480012) is protected.
             // ---------------------------------------------------------
 
-            var isEliasPettersson =
-                string.Equals(
-                    player.FirstName?.Trim(),
-                    "Elias",
-                    StringComparison.OrdinalIgnoreCase)
-                &&
-                string.Equals(
-                    player.LastName?.Trim(),
-                    "Pettersson",
-                    StringComparison.OrdinalIgnoreCase);
+            const int EliasPetterssonNhlPlayerId = 8480012;
 
-            if (isEliasPettersson)
+            if (player.NhlPlayerId == EliasPetterssonNhlPlayerId)
             {
                 return await _dbContext.PlayerContracts
                     .Where(c => c.PlayerId == playerId)

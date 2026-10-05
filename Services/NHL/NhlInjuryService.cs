@@ -118,6 +118,44 @@ namespace NhlFantasyLeague.api.Services.NHL
                 };
             }
 
+            // Second guard: compare against the DB's current injured
+            // count. A sudden drop of more than 40% is almost always a
+            // truncated payload — ESPN reporting the wrong day, partial
+            // outage, etc. Refuse and let the next cycle retry.
+            var existingInjuredCount = await _dbContext.Players
+                .AsNoTracking()
+                .CountAsync(p => p.IsInjured, ct);
+
+            if (existingInjuredCount >= 10)
+            {
+                var ratio =
+                    (double)totalInjuredPlayers / existingInjuredCount;
+
+                if (ratio < 0.60)
+                {
+                    _logger.LogWarning(
+                        "ESPN injuries payload dropped from {Existing} to " +
+                        "{New} players ({Ratio:P0}). Treating as a partial " +
+                        "fetch and refusing to update.",
+                        existingInjuredCount, totalInjuredPlayers, ratio);
+
+                    await _health.RecordFailureAsync(
+                        ExternalSourceHealthService.EspnInjuries,
+                        $"Partial payload: {existingInjuredCount} -> " +
+                        $"{totalInjuredPlayers} injured players.",
+                        ct);
+
+                    return new NhlInjurySyncResult
+                    {
+                        Success = false,
+                        Message =
+                            $"ESPN injuries count dropped from " +
+                            $"{existingInjuredCount} to {totalInjuredPlayers}. " +
+                            "Refusing to update. Existing data left untouched."
+                    };
+                }
+            }
+
             // --- Team lookup (ONE query for the whole refresh) -------------
             //
             // The old code re-queried NhlTeams inside ResolveTeamIdAsync

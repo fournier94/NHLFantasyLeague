@@ -1,12 +1,19 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using NhlFantasyLeague.api.Models.Dtos;
 using NhlFantasyLeague.api.Services;
+using NhlFantasyLeague.api.Services.Auth;
 
 namespace NhlFantasyLeague.api.Controllers
 {
     /// <summary>
     /// Roster admin endpoints: assign, move, release and update players on
     /// fantasy teams, read a team roster and search players.
+    ///
+    /// Mutations (assign / move / release / release-all / update / swap /
+    /// set-status / backfill / history edit / history delete) are
+    /// commissioner-only. Reads (team roster, search, status history) are
+    /// available to any authenticated user.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
@@ -29,6 +36,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Team, player, season and optional status, salary and slot.</param>
         /// <returns>The created roster entry, or 400 with the reason when it fails.</returns>
         [HttpPost("assign")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> AssignPlayer([FromBody] AssignPlayerRequest request)
         {
             var result = await _rosterAdminService.AssignPlayerAsync(request);
@@ -47,6 +55,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Player, destination team and optional season.</param>
         /// <returns>The updated roster entry, or 400 with the reason when it fails.</returns>
         [HttpPost("move")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> MovePlayer([FromBody] MovePlayerRequest request)
         {
             var result = await _rosterAdminService.MovePlayerAsync(request);
@@ -65,6 +74,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Id of the roster entry to delete.</param>
         /// <returns>The result message, or 400 with the reason when it fails.</returns>
         [HttpPost("release")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> ReleasePlayer([FromBody] ReleasePlayerRequest request)
         {
             var result = await _rosterAdminService.ReleasePlayerAsync(request);
@@ -84,6 +94,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Optional season id; the current season is used when omitted.</param>
         /// <returns>The result message with the number of released players.</returns>
         [HttpPost("release-all")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> ReleaseAllPlayers([FromBody] ReleaseAllPlayersRequest request)
         {
             var result = await _rosterAdminService.ReleaseAllPlayersAsync(request);
@@ -102,6 +113,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Entry id plus the values to change.</param>
         /// <returns>The updated roster entry, or 400 with the reason when it fails.</returns>
         [HttpPost("update")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> UpdateEntry([FromBody] UpdateRosterEntryRequest request)
         {
             var result = await _rosterAdminService.UpdateEntryAsync(request);
@@ -157,6 +169,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Team, the two players, the effective instant and an optional note.</param>
         /// <returns>The swap result, or 400 with the reason when it fails.</returns>
         [HttpPost("swap-status")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> SwapRosterStatus([FromBody] SwapRosterStatusRequest request)
         {
             var result = await _rosterAdminService.SwapRosterStatusAsync(request);
@@ -177,6 +190,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Team, player, new status, effective instant and an optional note.</param>
         /// <returns>The update result, or 400 with the reason when it fails.</returns>
         [HttpPost("set-status")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> SetRosterStatus([FromBody] SetRosterStatusRequest request)
         {
             var result = await _rosterAdminService.SetRosterStatusAsync(request);
@@ -216,6 +230,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="request">Season id (optional) and the effective instant.</param>
         /// <returns>The number of history rows inserted.</returns>
         [HttpPost("backfill-status-history")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> BackfillStatusHistory([FromBody] BackfillStatusHistoryRequest request)
         {
             var result = await _rosterAdminService
@@ -237,6 +252,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <param name="id">History row id.</param>
         /// <param name="request">The new effective instant and an optional note.</param>
         [HttpPatch("status-history/{id}")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> UpdateStatusHistory(
             int id,
             [FromBody] UpdateRosterStatusHistoryRequest request)
@@ -258,6 +274,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// </summary>
         /// <param name="id">History row id.</param>
         [HttpDelete("status-history/{id}")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> DeleteStatusHistory(int id)
         {
             var result = await _rosterAdminService

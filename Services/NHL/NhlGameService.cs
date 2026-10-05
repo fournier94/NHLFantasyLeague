@@ -97,10 +97,19 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         // Tracks the last time we fetched each game's boxscore, so the
         // FINAL/OFF polling can back off over time without hitting the
-        // API on every tick. Keyed by NHL game id. Small (one entry per
-        // game per day) and safe to keep forever.
+        // API on every tick. Keyed by NHL game id. Pruned every refresh
+        // so it does not grow across the season.
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, DateTime>
             _lastBoxscoreFetchUtc = new();
+
+        /// <summary>
+        /// How long an entry in _lastBoxscoreFetchUtc stays before it
+        /// is eligible for pruning. One week is well past the point
+        /// where any game can be re-fetched, so pruning has no effect
+        /// on the live or final-game polling logic.
+        /// </summary>
+        private static readonly TimeSpan BoxscoreCacheRetention =
+            TimeSpan.FromDays(7);
 
         private readonly HttpClient _httpClient;
         private readonly AppDbContext _dbContext;
@@ -269,6 +278,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                     $"Persist: {ex.GetType().Name}: {ex.Message}");
             }
 
+            PruneBoxscoreCache(now);
+
             return result;
         }
 
@@ -290,6 +301,25 @@ namespace NhlFantasyLeague.api.Services.NHL
                 PeriodType = game.PeriodDescriptor?.PeriodType,
                 Boxscore = null,
             };
+        }
+
+        /// <summary>
+        /// Removes entries older than <see cref="BoxscoreCacheRetention"/>
+        /// from the boxscore cache. Called at the end of every live
+        /// refresh. The dictionary is tiny (one entry per game) but
+        /// pruning keeps it from growing unbounded across a season.
+        /// </summary>
+        private static void PruneBoxscoreCache(DateTime now)
+        {
+            var cutoff = now - BoxscoreCacheRetention;
+
+            foreach (var kvp in _lastBoxscoreFetchUtc)
+            {
+                if (kvp.Value < cutoff)
+                {
+                    _lastBoxscoreFetchUtc.TryRemove(kvp.Key, out _);
+                }
+            }
         }
 
         private static bool ShouldAttachBoxscore(

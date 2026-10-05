@@ -16,19 +16,17 @@ namespace NhlFantasyLeague.api.Services.CapFreeze
         private readonly CapFreezeMatchingService _capFreezeMatchingService;
         private readonly CapFreezeContractService _capFreezeContractService;
 
-        // Players that are handled manually and skipped by the CapFreeze
-        // status/contract sync (matched by NAME, so it survives DB rebuilds).
+        /// <summary>
+        /// NhlPlayerId of the Vancouver Canucks forward whose CapFreeze
+        /// records are manually protected. Matched by ID, NOT by name,
+        /// so the other Elias Pettersson in the DB (SHL goalie) is not
+        /// caught by this rule.
+        /// </summary>
+        private const int EliasPetterssonNhlPlayerId = 8480012;
+
         private static bool IsEliasPettersson(Player player)
         {
-            return string.Equals(
-                       player.FirstName?.Trim(),
-                       "Elias",
-                       StringComparison.OrdinalIgnoreCase)
-                   &&
-                   string.Equals(
-                       player.LastName?.Trim(),
-                       "Pettersson",
-                       StringComparison.OrdinalIgnoreCase);
+            return player.NhlPlayerId == EliasPetterssonNhlPlayerId;
         }
 
         private sealed record ManualPlayerOverride(

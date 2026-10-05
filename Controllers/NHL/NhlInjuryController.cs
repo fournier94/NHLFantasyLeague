@@ -1,10 +1,11 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers.NHL
 {
-    [AllowAnonymous]
+    [Authorize(Roles = AuthService.CommissionerRole)]
     [ApiController]
     [Route("api/[controller]")]
     public class NhlInjuryController : ControllerBase

@@ -3,12 +3,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Services;
+using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.CapFreeze;
 using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers.CapFreeze
 {
-    [AllowAnonymous]
+    [Authorize(Roles = AuthService.CommissionerRole)]
     [ApiController]
     [Route("api/[controller]")]
     public class CapFreezePlayerController : ControllerBase

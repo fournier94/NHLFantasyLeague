@@ -231,9 +231,10 @@ namespace NhlFantasyLeague.api.Controllers
             }
 
             if (!Enum.TryParse<PlayerPageStyle>(
-                    request.Style?.Trim(),
-                    ignoreCase: true,
-                    out var parsed))
+         request.Style?.Trim(),
+         ignoreCase: true,
+         out var parsed)
+     || !Enum.IsDefined(parsed))
             {
                 return BadRequest(new
                 {

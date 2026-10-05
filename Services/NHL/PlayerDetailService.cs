@@ -16,11 +16,13 @@ namespace NhlFantasyLeague.api.Services.NHL
     {
         private readonly AppDbContext _dbContext;
 
-        /// <summary>NHL season code of the current season (2026-27).</summary>
-        private const int CurrentSeasonNhlCode = 20262027;
+        /// <summary>NHL season code of the current season.</summary>
+        private const int CurrentSeasonNhlCode =
+            NhlFantasyLeague.api.Constants.SeasonCodes.Current;
 
-        /// <summary>NHL season code of the previous season (2025-26).</summary>
-        private const int PreviousSeasonNhlCode = 20252026;
+        /// <summary>NHL season code of the previous season.</summary>
+        private const int PreviousSeasonNhlCode =
+            NhlFantasyLeague.api.Constants.SeasonCodes.Previous;
 
         /// <summary>How many recent games to include in the game log.</summary>
         private const int RecentGameCount = 10;

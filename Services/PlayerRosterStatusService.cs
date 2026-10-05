@@ -181,16 +181,51 @@ namespace NhlFantasyLeague.api.Services.Health
             // ---------------------------------------------------------
 
             HashSet<string> ahlRosterNormalizedNames;
+            var ahlDataTrustworthy = false;
 
             try
             {
-                ahlRosterNormalizedNames =
+                var (names, teamsFetched, teamsFailed) =
                     await FetchAhlRosterNormalizedNamesAsync(ct);
 
-                await _health.RecordSuccessAsync(
-                    ExternalSourceHealthService.AhlRosters, ct);
+                ahlRosterNormalizedNames = names;
 
-                result.AhlPlayersFound = ahlRosterNormalizedNames.Count;
+                // SAFETY: a partial HockeyTech response (feed shape
+                // change, rate limiting, transient failures) returns
+                // an implausibly small set. Applying it would mark
+                // every AHL player as NotOnActiveRoster. Refuse to
+                // trust the data when more than 20% of teams failed.
+                var failureRatio = teamsFetched > 0
+                    ? (double)teamsFailed / teamsFetched
+                    : 1.0;
+
+                ahlDataTrustworthy =
+                    teamsFetched > 0 && failureRatio <= 0.20;
+
+                if (ahlDataTrustworthy)
+                {
+                    await _health.RecordSuccessAsync(
+                        ExternalSourceHealthService.AhlRosters, ct);
+
+                    result.AhlPlayersFound =
+                        ahlRosterNormalizedNames.Count;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "AHL roster fetch returned {Failed}/{Total} " +
+                        "failing team(s). Refusing to apply roster " +
+                        "locations from this partial payload.",
+                        teamsFailed, teamsFetched);
+
+                    await _health.RecordFailureAsync(
+                        ExternalSourceHealthService.AhlRosters,
+                        $"Partial payload: {teamsFailed}/{teamsFetched} " +
+                        "teams failed.",
+                        ct);
+
+                    ahlRosterNormalizedNames = new HashSet<string>();
+                }
             }
             catch (Exception ex)
             {
@@ -304,7 +339,8 @@ namespace NhlFantasyLeague.api.Services.Health
                     player.FirstName, player.LastName);
 
                 var onAhlRoster =
-                    ahlRosterNormalizedNames.Contains(normalizedName);
+     ahlDataTrustworthy &&
+     ahlRosterNormalizedNames.Contains(normalizedName);
 
                 // Injury wins over roster location. ESPN is the sole
                 // source of truth for the injury flag; this service
@@ -542,8 +578,11 @@ namespace NhlFantasyLeague.api.Services.Health
         // AHL rosters
         // =================================================================
 
-        private async Task<HashSet<string>> FetchAhlRosterNormalizedNamesAsync(
-      CancellationToken ct)
+        private async Task<(
+      HashSet<string> Names,
+      int TeamsFetched,
+      int TeamsFailed)> FetchAhlRosterNormalizedNamesAsync(
+CancellationToken ct)
         {
             var names = new HashSet<string>();
 
@@ -553,6 +592,7 @@ namespace NhlFantasyLeague.api.Services.Health
             // players whose NHL rights belong to different clubs, so
             // the roster itself is the source of truth.
             var teamIdsByName = await FetchAhlTeamIdsAsync(ct);
+            var teamsFailed = 0;
 
             _logger.LogInformation(
                 "Fetched {Count} AHL team ids for season {Season}.",
@@ -650,10 +690,11 @@ namespace NhlFantasyLeague.api.Services.Health
                     _logger.LogWarning(ex,
                         "AHL roster fetch for team {TeamId} failed.",
                         teamId);
+                    teamsFailed++;
                 }
             }
 
-            return names;
+            return (names, teamIdsByName.Count, teamsFailed);
         }
 
         /// <summary>

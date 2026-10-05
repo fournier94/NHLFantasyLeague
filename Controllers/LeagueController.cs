@@ -1,5 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using NhlFantasyLeague.api.Services;
+using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.Cache;
 
 namespace NhlFantasyLeague.api.Controllers
@@ -33,8 +35,12 @@ namespace NhlFantasyLeague.api.Controllers
         /// Creates or repairs the league, its seasons, its fantasy teams and
         /// their active-season links. Safe to call multiple times.
         /// Invalidates the league cache.
+        ///
+        /// Commissioner-only: this rewrites SalaryCap and SalaryFloor
+        /// on every existing season from the current constants.
         /// </summary>
         [HttpPost("setup")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> SetupLeague()
         {
             var result = await _leagueSetupService.SetupLeagueAsync();

@@ -17,14 +17,17 @@ namespace NhlFantasyLeague.api.Services
         private readonly Services.Jobs.ScheduledJobsRunner _jobs;
         private readonly Services.Cache.ResponseCacheService _cache;
 
-        /// <summary>NHL season code of two seasons ago (2024-25), used by the player cards.</summary>
-        private const int TwoSeasonsAgoNhlCode = 20242025;
+        /// <summary>NHL season code of two seasons ago, used by the player cards.</summary>
+        private const int TwoSeasonsAgoNhlCode =
+            NhlFantasyLeague.api.Constants.SeasonCodes.TwoSeasonsAgo;
 
-        /// <summary>NHL season code of the previous season (2025-26), used by the player cards.</summary>
-        private const int PreviousSeasonNhlCode = 20252026;
+        /// <summary>NHL season code of the previous season, used by the player cards.</summary>
+        private const int PreviousSeasonNhlCode =
+            NhlFantasyLeague.api.Constants.SeasonCodes.Previous;
 
-        /// <summary>NHL season code of the current season (2026-27), used by the player cards.</summary>
-        private const int CurrentSeasonNhlCode = 20262027;
+        /// <summary>NHL season code of the current season, used by the player cards.</summary>
+        private const int CurrentSeasonNhlCode =
+            NhlFantasyLeague.api.Constants.SeasonCodes.Current;
 
         /// <summary>How many seasons the future cap projection covers, starting with the current one.</summary>
         private const int FutureCapSeasonCount = 5;
@@ -92,8 +95,8 @@ namespace NhlFantasyLeague.api.Services
             }
 
             var fantasySalary = await ResolveSalaryFromContractsAsync(
-                player.Id,
-                season.NhlSeasonCode);
+      player.Id,
+      season.NhlSeasonCode);
 
             var entry = new RosterEntry
             {
@@ -108,6 +111,22 @@ namespace NhlFantasyLeague.api.Services
             entry.Player = player;
 
             _dbContext.RosterEntries.Add(entry);
+
+            // Append a history row so the scoring recompute knows
+            // this player became Active/Bench/Prospect on this team
+            // as of today. Without this, any game he plays before the
+            // next trade/swap would be credited to nobody, because
+            // the recompute only credits teams whose last history
+            // row at game time is Active.
+            var effectiveAt = NormalizeEffectiveAt(DateTime.UtcNow);
+
+            AddHistoryRow(
+                player.Id,
+                team.Id,
+                season.Id,
+                rosterStatus,
+                effectiveAt,
+                $"Assignment ({rosterStatus})");
 
             await _dbContext.SaveChangesAsync();
 
@@ -237,6 +256,21 @@ namespace NhlFantasyLeague.api.Services
                 $"'{PlayerName(entry.Player)}' released from " +
                 $"'{entry.FantasyTeam?.Name}' ({entry.Season?.Name}).";
 
+            // Append a history row with the terminal Released status
+            // BEFORE deleting the RosterEntry, so the recompute stops
+            // crediting this player's future games to his old team.
+            // Without this, the last history row stays Active and the
+            // old team keeps earning his FP after the release.
+            var effectiveAt = NormalizeEffectiveAt(DateTime.UtcNow);
+
+            AddHistoryRow(
+                entry.PlayerId,
+                entry.FantasyTeamId,
+                entry.SeasonId,
+                RosterStatus.Released,
+                effectiveAt,
+                "Released");
+
             _dbContext.RosterEntries.Remove(entry);
 
             await _dbContext.SaveChangesAsync();
@@ -272,6 +306,24 @@ namespace NhlFantasyLeague.api.Services
                     Message = $"No players are currently assigned to a fantasy team for {season.Name}.",
                     Entry = null
                 };
+            }
+
+            // Append a terminal Released history row per player before
+            // wiping the roster. The recompute reads history, not
+            // RosterEntry, so every player would otherwise keep his
+            // last Active row and every old team would keep earning
+            // FP for him after the reset.
+            var effectiveAt = NormalizeEffectiveAt(DateTime.UtcNow);
+
+            foreach (var entry in entries)
+            {
+                AddHistoryRow(
+                    entry.PlayerId,
+                    entry.FantasyTeamId,
+                    entry.SeasonId,
+                    RosterStatus.Released,
+                    effectiveAt,
+                    "Bulk release (full reset)");
             }
 
             _dbContext.RosterEntries.RemoveRange(entries);

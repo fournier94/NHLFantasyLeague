@@ -141,12 +141,25 @@ namespace NhlFantasyLeague.api.Services.Auth
                 CreatedAt = DateTime.UtcNow
             };
 
-            var result = await _userManager.CreateAsync(user, password);
-
-            if (!result.Succeeded)
+            try
             {
-                var message = string.Join(" ", result.Errors.Select(e => e.Description));
-                return (null, message);
+                var result = await _userManager.CreateAsync(user, password);
+
+                if (!result.Succeeded)
+                {
+                    var message = string.Join(" ", result.Errors.Select(e => e.Description));
+                    return (null, message);
+                }
+            }
+            catch (DbUpdateException)
+            {
+                // Race condition: between the check above and this save,
+                // another registration claimed the same FantasyTeamId.
+                // The unique filtered index on ApplicationUser.FantasyTeamId
+                // rejects the insert. Return the friendly message
+                // instead of a 500.
+                return (null,
+                    "Cette équipe est déjà réclamée par un autre compte.");
             }
 
             return (user, null);
