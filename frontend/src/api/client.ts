@@ -978,6 +978,54 @@ export function getProtectedContracts(): Promise<ProtectedContractsResponse> {
 }
 
 // ---------------------------------------------------------------------
+// System event logs (commissioner only)
+// ---------------------------------------------------------------------
+
+export interface SystemEventLog {
+    id: number;
+    timestampUtc: string;
+    lastSeenUtc: string;
+    /** How many identical events have been folded into this row. */
+    count: number;
+    source: string;
+    category: string;
+    severity: 'Warning' | 'Error';
+    message: string;
+    details: string | null;
+}
+
+export interface SystemEventLogFilters {
+    severity?: 'Warning' | 'Error';
+    /** Prefix match on Source, e.g. "ScheduledJob:" */
+    source?: string;
+    limit?: number;
+}
+
+export function getSystemEventLogs(
+    filters: SystemEventLogFilters = {},
+): Promise<SystemEventLog[]> {
+    const params = new URLSearchParams();
+    if (filters.severity) params.set('severity', filters.severity);
+    if (filters.source) params.set('source', filters.source);
+    if (filters.limit != null) params.set('limit', String(filters.limit));
+
+    const query = params.toString();
+    const path = query ? `/SystemEventLog?${query}` : '/SystemEventLog';
+
+    // Skip client cache: this is a live diagnostic view.
+    return apiGet<SystemEventLog[]>(path, { cacheTtlMs: 0 });
+}
+
+export function clearSystemEventLogs(): Promise<{
+    message: string;
+    removed: number;
+}> {
+    return apiDelete<{ message: string; removed: number }>(
+        '/SystemEventLog',
+    );
+}
+
+// ---------------------------------------------------------------------
 // Game Day
 // ---------------------------------------------------------------------
 

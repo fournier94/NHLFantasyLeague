@@ -2,8 +2,10 @@
 import {
     assignPlayer,
     assignUserTeam,
+    clearSystemEventLogs,
     demoteUser,
     getLeagueTeams,
+    getSystemEventLogs,
     getTeamRoster,
     getUsers,
     promoteUser,
@@ -24,6 +26,7 @@ import {
     type FantasyTeam,
     type PlayerSearchResult,
     type RosterEntry,
+    type SystemEventLog,
     type TeamRoster,
 } from '@/api/client';
 import { useAuraAll } from '@/lib/auraContext';
@@ -263,6 +266,19 @@ export default function AdminPage() {
     const [protectedLoading, setProtectedLoading] = useState(false);
     const [protectedError, setProtectedError] = useState<string | null>(null);
 
+    // System event logs section state.
+    const [eventLogs, setEventLogs] = useState<SystemEventLog[]>([]);
+    const [eventLogsLoading, setEventLogsLoading] = useState(false);
+    const [eventLogsError, setEventLogsError] = useState<string | null>(null);
+    const [eventLogsSeverityFilter, setEventLogsSeverityFilter] = useState<
+        '' | 'Warning' | 'Error'
+    >('');
+    const [eventLogsSourceFilter, setEventLogsSourceFilter] = useState('');
+    const [eventLogsExpandedId, setEventLogsExpandedId] = useState<
+        number | null
+    >(null);
+    const [eventLogsClearing, setEventLogsClearing] = useState(false);
+
     // --- Swap section state ---
     const [swapTeamId, setSwapTeamId] = useState('');
     const [swapTeamRoster, setSwapTeamRoster] = useState<TeamRoster | null>(null);
@@ -315,6 +331,11 @@ export default function AdminPage() {
     // Load protected contracts once on mount.
     useEffect(() => {
         void loadProtectedContracts();
+    }, []);
+
+    // Load system event logs once on mount.
+    useEffect(() => {
+        void loadEventLogs();
     }, []);
 
     useEffect(() => {
@@ -850,6 +871,82 @@ export default function AdminPage() {
         } finally {
             setProtectedLoading(false);
         }
+    }
+
+    async function loadEventLogs() {
+        setEventLogsLoading(true);
+        setEventLogsError(null);
+
+        try {
+            const filters: Parameters<typeof getSystemEventLogs>[0] = {
+                limit: 200,
+            };
+            if (eventLogsSeverityFilter) {
+                filters.severity = eventLogsSeverityFilter;
+            }
+            if (eventLogsSourceFilter.trim()) {
+                filters.source = eventLogsSourceFilter.trim();
+            }
+
+            const data = await getSystemEventLogs(filters);
+            setEventLogs(data);
+        } catch (err) {
+            setEventLogsError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setEventLogsLoading(false);
+        }
+    }
+
+    async function handleClearEventLogs() {
+        if (
+            !window.confirm(
+                'Effacer tous les journaux d’événements ? Cette action ' +
+                'est irréversible.',
+            )
+        ) {
+            return;
+        }
+
+        setEventLogsClearing(true);
+        setEventLogsError(null);
+
+        try {
+            const result = await clearSystemEventLogs();
+            setEventLogs([]);
+            setEventLogsExpandedId(null);
+            setUsersSuccess(result.message);
+            window.setTimeout(() => setUsersSuccess(null), 3000);
+        } catch (err) {
+            setEventLogsError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setEventLogsClearing(false);
+        }
+    }
+
+    function formatLogTimestamp(iso: string): string {
+        try {
+            const d = new Date(iso);
+            return new Intl.DateTimeFormat('fr-CA', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+            }).format(d);
+        } catch {
+            return iso;
+        }
+    }
+
+    function severityBadgeClass(severity: string): string {
+        if (severity === 'Error') {
+            return 'border-red-500/40 bg-red-500/10 text-red-300';
+        }
+        return 'border-amber-500/40 bg-amber-500/10 text-amber-300';
     }
 
     async function handlePromote(userId: number) {
@@ -2166,6 +2263,181 @@ export default function AdminPage() {
                 )}
             </div>
 
+
+            {/* ============================================================
+                Journaux d'événements (erreurs + avertissements)
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Journaux d'événements
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Erreurs et avertissements capturés automatiquement :
+                    échecs HTTP (429, 5xx), pannes des jobs planifiés.
+                    Les événements identiques dans une fenêtre de 60
+                    secondes sont regroupés.
+                </p>
+
+                {eventLogsError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {eventLogsError}
+                    </p>
+                )}
+
+                <div className='flex flex-wrap items-end gap-2'>
+                    <div>
+                        <label className='text-xs font-medium text-muted-foreground'>
+                            Sévérité
+                        </label>
+                        <select
+                            value={eventLogsSeverityFilter}
+                            onChange={(e) =>
+                                setEventLogsSeverityFilter(
+                                    e.target.value as '' | 'Warning' | 'Error',
+                                )
+                            }
+                            className='mt-0.5 block rounded-lg border border-border bg-card px-2 py-1.5 text-sm text-foreground'
+                        >
+                            <option value=''>Tout</option>
+                            <option value='Warning'>Avertissements</option>
+                            <option value='Error'>Erreurs</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className='text-xs font-medium text-muted-foreground'>
+                            Source (préfixe)
+                        </label>
+                        <input
+                            type='text'
+                            value={eventLogsSourceFilter}
+                            onChange={(e) =>
+                                setEventLogsSourceFilter(e.target.value)
+                            }
+                            placeholder='ex: NhlApi, ScheduledJob:'
+                            className='mt-0.5 block rounded-lg border border-border bg-card px-2 py-1.5 text-sm text-foreground'
+                        />
+                    </div>
+
+                    <button
+                        type='button'
+                        onClick={() => void loadEventLogs()}
+                        disabled={eventLogsLoading}
+                        className={secondaryButtonClass}
+                    >
+                        {eventLogsLoading ? 'Chargement...' : 'Rafraîchir'}
+                    </button>
+
+                    <button
+                        type='button'
+                        onClick={() => void handleClearEventLogs()}
+                        disabled={eventLogsClearing || eventLogs.length === 0}
+                        className={dangerButtonClass}
+                    >
+                        {eventLogsClearing ? 'Effacement...' : 'Tout effacer'}
+                    </button>
+                </div>
+
+                {!eventLogsLoading && eventLogs.length === 0 && !eventLogsError && (
+                    <p className='rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground'>
+                        Aucun événement enregistré. Bonne nouvelle.
+                    </p>
+                )}
+
+                {eventLogs.length > 0 && (
+                    <div className='space-y-1'>
+                        {eventLogs.map((log) => {
+                            const isExpanded = eventLogsExpandedId === log.id;
+
+                            return (
+                                <div
+                                    key={log.id}
+                                    className='rounded-lg border border-border bg-card'
+                                >
+                                    <button
+                                        type='button'
+                                        onClick={() =>
+                                            setEventLogsExpandedId(
+                                                isExpanded ? null : log.id,
+                                            )
+                                        }
+                                        className='flex w-full cursor-pointer items-start gap-2 px-3 py-2 text-left text-sm hover:bg-secondary/50'
+                                    >
+                                        <span
+                                            className={`mt-0.5 inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${severityBadgeClass(
+                                                log.severity,
+                                            )}`}
+                                        >
+                                            {log.severity}
+                                        </span>
+
+                                        <div className='min-w-0 flex-1'>
+                                            <div className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
+                                                <span className='font-mono text-xs text-muted-foreground'>
+                                                    {formatLogTimestamp(
+                                                        log.lastSeenUtc,
+                                                    )}
+                                                </span>
+
+                                                <span className='font-mono text-xs text-foreground'>
+                                                    {log.source}
+                                                </span>
+
+                                                <span className='font-mono text-xs text-muted-foreground'>
+                                                    · {log.category}
+                                                </span>
+
+                                                {log.count > 1 && (
+                                                    <span className='rounded bg-secondary px-1.5 py-0.5 text-[0.65rem] font-semibold text-foreground'>
+                                                        ×{log.count}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            <p className='mt-0.5 truncate text-foreground'>
+                                                {log.message}
+                                            </p>
+                                        </div>
+
+                                        <span className='mt-0.5 shrink-0 text-xs text-muted-foreground'>
+                                            {isExpanded ? '▲' : '▼'}
+                                        </span>
+                                    </button>
+
+                                    {isExpanded && (
+                                        <div className='border-t border-border px-3 py-2 text-xs'>
+                                            <p className='text-muted-foreground'>
+                                                <span className='font-semibold'>
+                                                    Première occurrence :
+                                                </span>{' '}
+                                                {formatLogTimestamp(
+                                                    log.timestampUtc,
+                                                )}
+                                            </p>
+
+                                            <p className='mt-1 text-muted-foreground'>
+                                                <span className='font-semibold'>
+                                                    Dernière occurrence :
+                                                </span>{' '}
+                                                {formatLogTimestamp(
+                                                    log.lastSeenUtc,
+                                                )}
+                                            </p>
+
+                                            {log.details && (
+                                                <pre className='mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 p-2 text-[0.7rem] text-muted-foreground'>
+                                                    {log.details}
+                                                </pre>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
 
             {/* ============================================================
                 Contrats verrouillés
