@@ -212,15 +212,19 @@ new(StringComparer.OrdinalIgnoreCase)
                 reviewLookup.TryAdd((review.CapFreezeName, review.PlayerId), review);
 
             // ---------------------------------------------------------
-            // MARK CURRENT PLAYERS AS UNSIGNED FIRST.
-            // Skipped: Elias Pettersson (handled manually), dead-cap
-            // players, and players already resolved earlier in THIS run.
+            // COLLECT CURRENT PLAYERS THAT MIGHT NEED TO BE RESET TO
+            // UNSIGNED. We do NOT actually reset them here — see the
+            // safety check further down. Skipped: Elias Pettersson
+            // (handled manually), dead-cap players, and players
+            // already resolved earlier in THIS run.
             // ---------------------------------------------------------
 
             var normalizedDeadCapNames =
                 deadCap
                     .Select(_capFreezeMatchingService.NormalizePlayerName)
                     .ToHashSet();
+
+            var playersToResetIfUnmatched = new List<Player>();
 
             foreach (var player in currentTeamPlayers)
             {
@@ -255,7 +259,7 @@ new(StringComparer.OrdinalIgnoreCase)
                 if (isDeadCap)
                     continue;
 
-                player.Status = PlayerStatus.Unsigned;
+                playersToResetIfUnmatched.Add(player);
             }
 
             // ---------------------------------------------------------
@@ -273,6 +277,45 @@ new(StringComparer.OrdinalIgnoreCase)
             var unmatchedPlayers = new List<string>();
             var pendingReviews = new List<string>();
             var skippedManualPlayers = new List<string>();
+
+            // ---------------------------------------------------------
+            // SAFETY: if CapFreeze returned zero entries for this team,
+            // something is wrong (page changed shape, fetch truncated,
+            // network failure returning 200 with an empty body). Do
+            // NOT touch anyone's status — keep whatever they had.
+            // ---------------------------------------------------------
+
+            if (playerLinks.Count == 0)
+            {
+                await _dbContext.SaveChangesAsync();
+
+                return new
+                {
+                    TeamSlug = teamSlug,
+                    NhlTeamId = nhlTeamId,
+                    ForwardsCount = forwards.Count,
+                    DefenseCount = defense.Count,
+                    GoaliesCount = goalies.Count,
+                    MinorsCount = minors.Count,
+                    UnsignedRfasCount = unsignedRfas.Count,
+                    TotalPlayersFound = 0,
+                    PlayersProcessed = 0,
+                    SkippedManualPlayers = new List<string>(),
+                    UnmatchedPlayers = new List<string>(),
+                    PendingReviews = new List<string>(),
+                    Players = new List<object>(),
+                    Skipped = "CapFreeze page returned zero players. No status changes applied."
+                };
+            }
+
+            // Now that we know the page had entries, it is safe to
+            // reset the collected candidates to Unsigned. They will
+            // be re-assigned by the matching loop below if they
+            // appear on the CapFreeze page.
+            foreach (var p in playersToResetIfUnmatched)
+            {
+                p.Status = PlayerStatus.Unsigned;
+            }
 
             // ---------------------------------------------------------
             // APPLY STATUS + CONTRACTS FOR MATCHED PLAYERS ONLY

@@ -364,18 +364,29 @@ namespace NhlFantasyLeague.api.Services.NHL
                     stats.GoalsAgainstAverage;
             }
 
-            foreach (var existingStat in existingStats.Values)
+            // SAFETY: only prune stale rows when the API response is
+            // plausibly complete. The NHL API rate-limits and can
+            // return partial or empty seasonTotals under load. Without
+            // this guard, a single partial response would wipe a
+            // player's entire career history. If the API returned
+            // fewer rows than we currently have, treat it as
+            // incomplete and keep the DB rows untouched. Stale rows
+            // are harmless; missing rows are not.
+            if (apiKeys.Count >= existingStats.Count)
             {
-                var stillExists = apiKeys.Contains(
-                    (
-                        existingStat.Season,
-                        existingStat.GameTypeId,
-                        existingStat.Sequence
-                    ));
-
-                if (!stillExists)
+                foreach (var existingStat in existingStats.Values)
                 {
-                    _dbContext.PlayerCareerStats.Remove(existingStat);
+                    var stillExists = apiKeys.Contains(
+                        (
+                            existingStat.Season,
+                            existingStat.GameTypeId,
+                            existingStat.Sequence
+                        ));
+
+                    if (!stillExists)
+                    {
+                        _dbContext.PlayerCareerStats.Remove(existingStat);
+                    }
                 }
             }
 
@@ -470,18 +481,26 @@ namespace NhlFantasyLeague.api.Services.NHL
                     stats.GoalsAgainstAverage;
             }
 
-            foreach (var existingStat in existingStats.Values)
+            // SAFETY: see SyncPlayerCareerStatsAsync for the full
+            // rationale. Short version: a partial or empty API
+            // response must never cause a mass delete of career
+            // history. Only prune when the API response is at least
+            // as large as what we currently have.
+            if (apiKeys.Count >= existingStats.Count)
             {
-                var stillExists = apiKeys.Contains(
-                    (
-                        existingStat.Season,
-                        existingStat.GameTypeId,
-                        existingStat.Sequence
-                    ));
-
-                if (!stillExists)
+                foreach (var existingStat in existingStats.Values)
                 {
-                    _dbContext.PlayerCareerStats.Remove(existingStat);
+                    var stillExists = apiKeys.Contains(
+                        (
+                            existingStat.Season,
+                            existingStat.GameTypeId,
+                            existingStat.Sequence
+                        ));
+
+                    if (!stillExists)
+                    {
+                        _dbContext.PlayerCareerStats.Remove(existingStat);
+                    }
                 }
             }
         }

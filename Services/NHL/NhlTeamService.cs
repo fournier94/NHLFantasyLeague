@@ -42,10 +42,16 @@ namespace NhlFantasyLeague.api.Services.NHL
             // Get NHL team metadata, which contains numeric team IDs.
             var teamMetadata = await GetTeamMetadataAsync();
 
-            if (currentTeams.Count == 0)
+            // SAFETY: NHL always has 32 teams. Anything below 30 means
+            // the API returned a partial response (rate limit, network
+            // truncation, upstream bug). Refuse to sync rather than
+            // deleting teams that simply weren't in the response.
+            if (currentTeams.Count < 30)
             {
                 throw new InvalidOperationException(
-                    "The NHL current standings endpoint returned no teams.");
+                    $"The NHL current standings endpoint returned only " +
+                    $"{currentTeams.Count} teams. Expected at least 30. " +
+                    "Aborting to avoid deleting teams on partial data.");
             }
 
             if (teamMetadata.Count == 0)

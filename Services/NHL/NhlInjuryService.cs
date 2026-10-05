@@ -186,6 +186,11 @@ namespace NhlFantasyLeague.api.Services.NHL
                 p.InjuryKind = InjuryKind.None;
                 p.InjuryShortDescription = null;
                 p.InjuryLongDescription = null;
+                p.InjuryType = null;
+                p.InjuryDetail = null;
+                p.InjurySide = null;
+                p.InjuryReturnDate = null;
+                p.InjuryFantasyStatus = null;
                 p.InjuryUpdatedAt = now;
             }
 
