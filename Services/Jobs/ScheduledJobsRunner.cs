@@ -12,7 +12,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
     ///
     /// JOBS
     ///
-    ///   Weekly deep refresh      Sunday 03:00 ET, once per week.
+    ///   Deep refresh             Sunday + Wednesday 03:00 ET, twice per week.
     ///   Post-game write          02:30 ET, once per day.
     ///   Season reconciliation    05:00, 10:00, 15:00 ET.
     ///   Daily cleanup            08:00 ET, once per day.
@@ -446,8 +446,15 @@ namespace NhlFantasyLeague.api.Services.Jobs
             // on the next 30-second tick.
             // -----------------------------------------------------------------
 
-            // ---- Priority 1: weekly deep refresh (Sundays) ------------
-            if (nowEt.DayOfWeek == DayOfWeek.Sunday &&
+            // ---- Priority 1: deep refresh (Sunday + Wednesday) --------
+            // Runs twice a week at 03:00 ET. The "completed today" flag
+            // is keyed per ET calendar day, so the job simply fires
+            // once on Sunday and once on Wednesday with no extra state.
+            var isDeepRefreshDay =
+                nowEt.DayOfWeek == DayOfWeek.Sunday ||
+                nowEt.DayOfWeek == DayOfWeek.Wednesday;
+
+            if (isDeepRefreshDay &&
                 timeOfDayEt >= WeeklyRefreshHourEt &&
                 ShouldFireOncePerDayJob(JobWeeklyRefresh, todayEt))
             {
@@ -1033,6 +1040,8 @@ namespace NhlFantasyLeague.api.Services.Jobs
 
                 using var scope = _scopeFactory.CreateScope();
 
+                var failedSteps = new List<string>();
+
                 try
                 {
                     var teamService = scope.ServiceProvider
@@ -1045,6 +1054,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Weekly team sync failed.");
+                    failedSteps.Add("teams sync");
                 }
 
                 try
@@ -1061,6 +1071,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 {
                     _logger.LogWarning(
                         ex, "Weekly player population failed.");
+                    failedSteps.Add("player population + CapFreeze");
                 }
 
                 try
@@ -1089,16 +1100,28 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Weekly recompute failed.");
+                    failedSteps.Add("team totals recompute");
                 }
 
-                _logger.LogInformation("Weekly deep refresh done.");
+                if (failedSteps.Count == 0)
+                {
+                    _logger.LogInformation("Weekly deep refresh done.");
 
-                // Mark the weekly job as completed for today ONLY after
-                // every sub-step has run. If any step escapes (they are
-                // individually caught, but a hard exception here is
-                // possible), the flag stays unset and the next tick
-                // retries.
-                MarkJobCompleted(JobWeeklyRefresh, completedEtDate);
+                    // Mark the weekly job as completed for today ONLY
+                    // when every sub-step succeeded. A partial success
+                    // is treated as a failure: the flag stays unset, so
+                    // the next tick retries with the 10-minute backoff.
+                    MarkJobCompleted(JobWeeklyRefresh, completedEtDate);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Weekly deep refresh finished with {Count} " +
+                        "failing step(s): {Steps}. Not marking as " +
+                        "completed; will retry with backoff.",
+                        failedSteps.Count,
+                        string.Join(", ", failedSteps));
+                }
             }
             catch (Exception ex)
             {
