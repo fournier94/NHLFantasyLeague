@@ -50,6 +50,13 @@
 
         public bool GoalieWin { get; set; }
 
+        /// <summary>
+        /// True when the goalie took the loss in this game. Set only
+        /// on FINAL/OFF. Needed so the live-delta logic can tell a
+        /// transition into a loss from a no-op tick.
+        /// </summary>
+        public bool GoalieLoss { get; set; }
+
         public bool GoalieOvertimeLoss { get; set; }
 
         public bool Shutout { get; set; }

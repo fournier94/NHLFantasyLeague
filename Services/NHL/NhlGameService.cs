@@ -546,8 +546,28 @@ namespace NhlFantasyLeague.api.Services.NHL
             var seasonStatByPlayerId = playerSeasonStats
                 .ToDictionary(s => s.PlayerId);
 
+            // ----- Bulk read 7: PlayerCareerStats (current season) ----
+            // The career table on PlayerPage shows one row per season.
+            // The "current season" row is what the Mon équipe GP/G/A/PTS
+            // columns and the PlayerPage career table read from. We
+            // load the lowest-sequence NHL regular-season row for this
+            // season so the live delta logic can keep it in sync.
+            var careerStats = await _dbContext.PlayerCareerStats
+                .Where(c =>
+                    dbPlayerIds.Contains(c.PlayerId) &&
+                    c.Season == seasonCode &&
+                    c.GameTypeId == 2 &&
+                    c.LeagueAbbreviation == "NHL")
+                .ToListAsync(ct);
+
+            var careerStatByPlayerId = careerStats
+                .GroupBy(c => c.PlayerId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderBy(c => c.Sequence).First());
+
             // ----- In-memory delta computation -------------------------
-            var teamDeltaByTeamId = new Dictionary<int, int>();
+            var teamDeltaByTeamId = new Dictionary<int, TeamStatDelta>();
             var newLogsToInsert = new List<PlayerGameLog>();
 
             foreach (var snapshot in snapshots)
@@ -570,21 +590,22 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
 
                 ProcessTeamStats(
-                    box,
-                    box.PlayerByGameStats.AwayTeam,
-                    nhlTeamId: awayTeam.NhlTeamId,
-                    opponentNhlTeamId: homeTeam.NhlTeamId,
-                    isHomeGame: false,
-                    gameDate: gameDate,
-                    seasonId: seasonId,
-                    gameIsFinal: gameIsFinal,
-                    playersByNhlId: playersByNhlId,
-                    logsByKey: logsByKey,
-                    newLogsToInsert: newLogsToInsert,
-                    historyByPlayerId: historyByPlayerId,
-                    seasonStatByPlayerId: seasonStatByPlayerId,
-                    teamDeltaByTeamId: teamDeltaByTeamId,
-                    result: result);
+       box,
+       box.PlayerByGameStats.AwayTeam,
+       nhlTeamId: awayTeam.NhlTeamId,
+       opponentNhlTeamId: homeTeam.NhlTeamId,
+       isHomeGame: false,
+       gameDate: gameDate,
+       seasonId: seasonId,
+       gameIsFinal: gameIsFinal,
+       playersByNhlId: playersByNhlId,
+       logsByKey: logsByKey,
+       newLogsToInsert: newLogsToInsert,
+       historyByPlayerId: historyByPlayerId,
+       seasonStatByPlayerId: seasonStatByPlayerId,
+       careerStatByPlayerId: careerStatByPlayerId,
+       teamDeltaByTeamId: teamDeltaByTeamId,
+       result: result);
 
                 ProcessTeamStats(
                     box,
@@ -600,6 +621,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     newLogsToInsert: newLogsToInsert,
                     historyByPlayerId: historyByPlayerId,
                     seasonStatByPlayerId: seasonStatByPlayerId,
+                    careerStatByPlayerId: careerStatByPlayerId,
                     teamDeltaByTeamId: teamDeltaByTeamId,
                     result: result);
             }
@@ -614,13 +636,31 @@ namespace NhlFantasyLeague.api.Services.NHL
             // ----- Apply team deltas -----------------------------------
             foreach (var kvp in teamDeltaByTeamId)
             {
-                if (teamSeasonByTeamId.TryGetValue(kvp.Key, out var ts))
+                if (!teamSeasonByTeamId.TryGetValue(kvp.Key, out var ts))
                 {
-                    ts.TotalFantasyPoints += kvp.Value;
-                    ts.TotalFantasyPointsComputedAt = DateTime.UtcNow;
-                    result.TeamSeasonsUpdated++;
-                    result.TotalFantasyPointsDelta += kvp.Value;
+                    continue;
                 }
+
+                var d = kvp.Value;
+
+                ts.TotalFantasyPoints += d.FantasyPoints;
+
+                ts.SkaterGamesPlayed += d.SkaterGamesPlayed;
+                ts.SkaterGoals += d.SkaterGoals;
+                ts.SkaterAssists += d.SkaterAssists;
+                ts.SkaterPoints += d.SkaterPoints;
+                ts.SkaterHatTricks += d.SkaterHatTricks;
+
+                ts.GoalieGamesPlayed += d.GoalieGamesPlayed;
+                ts.GoalieWins += d.GoalieWins;
+                ts.GoalieLosses += d.GoalieLosses;
+                ts.GoalieOvertimeLosses += d.GoalieOvertimeLosses;
+                ts.GoalieShutouts += d.GoalieShutouts;
+                ts.GoaliePoints += d.GoaliePoints;
+
+                ts.TotalFantasyPointsComputedAt = DateTime.UtcNow;
+                result.TeamSeasonsUpdated++;
+                result.TotalFantasyPointsDelta += d.FantasyPoints;
             }
 
             // ----- Register brand-new PlayerSeasonStat rows ------------
@@ -644,21 +684,22 @@ namespace NhlFantasyLeague.api.Services.NHL
         // =================================================================
 
         private static void ProcessTeamStats(
-            NhlBoxscoreResponse box,
-            NhlTeamPlayerStats teamStats,
-            int nhlTeamId,
-            int opponentNhlTeamId,
-            bool isHomeGame,
-            DateOnly gameDate,
-            int seasonId,
-            bool gameIsFinal,
-            Dictionary<int, PlayerLookup> playersByNhlId,
-            Dictionary<(long, int), PlayerGameLog> logsByKey,
-            List<PlayerGameLog> newLogsToInsert,
-            Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
-            Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
-            Dictionary<int, int> teamDeltaByTeamId,
-            PersistFinalGamesResult result)
+       NhlBoxscoreResponse box,
+       NhlTeamPlayerStats teamStats,
+       int nhlTeamId,
+       int opponentNhlTeamId,
+       bool isHomeGame,
+       DateOnly gameDate,
+       int seasonId,
+       bool gameIsFinal,
+       Dictionary<int, PlayerLookup> playersByNhlId,
+       Dictionary<(long, int), PlayerGameLog> logsByKey,
+       List<PlayerGameLog> newLogsToInsert,
+       Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
+       Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
+       Dictionary<int, PlayerCareerStat> careerStatByPlayerId,
+       Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
+       PersistFinalGamesResult result)
         {
             foreach (var skater in teamStats.Forwards)
             {
@@ -668,6 +709,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     gameDate, seasonId, gameIsFinal,
                     playersByNhlId, logsByKey, newLogsToInsert,
                     historyByPlayerId, seasonStatByPlayerId,
+                    careerStatByPlayerId,
                     teamDeltaByTeamId, result);
             }
 
@@ -679,6 +721,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     gameDate, seasonId, gameIsFinal,
                     playersByNhlId, logsByKey, newLogsToInsert,
                     historyByPlayerId, seasonStatByPlayerId,
+                    careerStatByPlayerId,
                     teamDeltaByTeamId, result);
             }
 
@@ -698,26 +741,28 @@ namespace NhlFantasyLeague.api.Services.NHL
                     gameDate, seasonId, gameIsFinal,
                     playersByNhlId, logsByKey, newLogsToInsert,
                     historyByPlayerId, seasonStatByPlayerId,
+                    careerStatByPlayerId,
                     teamDeltaByTeamId, result);
             }
         }
 
         private static void ProcessSkater(
-            NhlBoxscoreResponse box,
-            NhlSkaterStats stats,
-            int nhlTeamId,
-            int opponentNhlTeamId,
-            bool isHomeGame,
-            DateOnly gameDate,
-            int seasonId,
-            bool gameIsFinal,
-            Dictionary<int, PlayerLookup> playersByNhlId,
-            Dictionary<(long, int), PlayerGameLog> logsByKey,
-            List<PlayerGameLog> newLogsToInsert,
-            Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
-            Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
-            Dictionary<int, int> teamDeltaByTeamId,
-            PersistFinalGamesResult result)
+     NhlBoxscoreResponse box,
+     NhlSkaterStats stats,
+     int nhlTeamId,
+     int opponentNhlTeamId,
+     bool isHomeGame,
+     DateOnly gameDate,
+     int seasonId,
+     bool gameIsFinal,
+     Dictionary<int, PlayerLookup> playersByNhlId,
+     Dictionary<(long, int), PlayerGameLog> logsByKey,
+     List<PlayerGameLog> newLogsToInsert,
+     Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
+     Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
+     Dictionary<int, PlayerCareerStat> careerStatByPlayerId,
+     Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
+     PersistFinalGamesResult result)
         {
             // Skater stats are "final once accrued", so gameIsFinal
             // is not used here. The hat-trick bonus applies the moment
@@ -776,8 +821,25 @@ namespace NhlFantasyLeague.api.Services.NHL
                     seasonId: seasonId,
                     seasonStatByPlayerId: seasonStatByPlayerId);
 
+                ApplyCareerDeltas(
+                    player.Id,
+                    gamesPlayed: 0,
+                    goals: deltaG, assists: deltaA, points: deltaP,
+                    plusMinus: deltaPM, penaltyMinutes: deltaPIM,
+                    shots: deltaSOG, hatTricks: deltaHT,
+                    wins: 0, losses: 0, overtimeLosses: 0, shutouts: 0,
+                    careerStatByPlayerId: careerStatByPlayerId);
+
                 CreditTeam(
-                    player.Id, deltaFP, gameDate,
+                    player.Id,
+                    BuildSkaterDelta(
+                        fantasyPoints: deltaFP,
+                        gamesPlayed: 0,
+                        goals: deltaG,
+                        assists: deltaA,
+                        points: deltaP,
+                        hatTricks: deltaHT),
+                    gameDate,
                     historyByPlayerId, teamDeltaByTeamId);
 
                 result.GameLogsUpdated++;
@@ -819,28 +881,48 @@ namespace NhlFantasyLeague.api.Services.NHL
                     seasonId: seasonId,
                     seasonStatByPlayerId: seasonStatByPlayerId);
 
+                ApplyCareerDeltas(
+                    player.Id,
+                    gamesPlayed: 1,
+                    goals: stats.Goals, assists: stats.Assists,
+                    points: stats.Points, plusMinus: stats.PlusMinus,
+                    penaltyMinutes: stats.PenaltyMinutes,
+                    shots: stats.Shots,
+                    hatTricks: hatTrick ? 1 : 0,
+                    wins: 0, losses: 0, overtimeLosses: 0, shutouts: 0,
+                    careerStatByPlayerId: careerStatByPlayerId);
+
                 CreditTeam(
-                    player.Id, newFP, gameDate,
+                    player.Id,
+                    BuildSkaterDelta(
+                        fantasyPoints: newFP,
+                        gamesPlayed: 1,
+                        goals: stats.Goals,
+                        assists: stats.Assists,
+                        points: stats.Points,
+                        hatTricks: hatTrick ? 1 : 0),
+                    gameDate,
                     historyByPlayerId, teamDeltaByTeamId);
             }
         }
 
         private static void ProcessGoalie(
-            NhlBoxscoreResponse box,
-            NhlGoalieStats stats,
-            int nhlTeamId,
-            int opponentNhlTeamId,
-            bool isHomeGame,
-            DateOnly gameDate,
-            int seasonId,
-            bool gameIsFinal,
-            Dictionary<int, PlayerLookup> playersByNhlId,
-            Dictionary<(long, int), PlayerGameLog> logsByKey,
-            List<PlayerGameLog> newLogsToInsert,
-            Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
-            Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
-            Dictionary<int, int> teamDeltaByTeamId,
-            PersistFinalGamesResult result)
+         NhlBoxscoreResponse box,
+         NhlGoalieStats stats,
+         int nhlTeamId,
+         int opponentNhlTeamId,
+         bool isHomeGame,
+         DateOnly gameDate,
+         int seasonId,
+         bool gameIsFinal,
+         Dictionary<int, PlayerLookup> playersByNhlId,
+         Dictionary<(long, int), PlayerGameLog> logsByKey,
+         List<PlayerGameLog> newLogsToInsert,
+         Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
+         Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
+         Dictionary<int, PlayerCareerStat> careerStatByPlayerId,
+         Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
+         PersistFinalGamesResult result)
         {
             if (!playersByNhlId.TryGetValue(stats.PlayerId, out var player))
             {
@@ -857,7 +939,8 @@ namespace NhlFantasyLeague.api.Services.NHL
             var isOTLoss = gameIsFinal && string.Equals(
                 stats.Decision, "O", StringComparison.OrdinalIgnoreCase);
 
-            var isLoss = gameIsFinal && !isWin && !isOTLoss;
+            var isLoss = gameIsFinal && string.Equals(
+                stats.Decision, "L", StringComparison.OrdinalIgnoreCase);
 
             var isShutout = gameIsFinal && stats.Shutouts > 0;
 
@@ -875,6 +958,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 var deltaFP = newFP - existing.FantasyPoints;
 
                 var deltaW = (isWin ? 1 : 0) - (existing.GoalieWin ? 1 : 0);
+                var deltaL = (isLoss ? 1 : 0) - (existing.GoalieLoss ? 1 : 0);
                 var deltaOTL =
                     (isOTLoss ? 1 : 0) -
                     (existing.GoalieOvertimeLoss ? 1 : 0);
@@ -883,9 +967,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                 var deltaSA = stats.ShotsAgainst - existing.ShotsAgainst;
                 var deltaSV = stats.Saves - existing.Saves;
 
-                if (deltaFP == 0 && deltaW == 0 && deltaOTL == 0 &&
-                    deltaSO == 0 && deltaGA == 0 && deltaSA == 0 &&
-                    deltaSV == 0)
+                if (deltaFP == 0 && deltaW == 0 && deltaL == 0 &&
+                    deltaOTL == 0 && deltaSO == 0 && deltaGA == 0 &&
+                    deltaSA == 0 && deltaSV == 0)
                 {
                     return;
                 }
@@ -895,6 +979,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 existing.Saves = stats.Saves;
                 existing.Shutout = isShutout;
                 existing.GoalieWin = isWin;
+                existing.GoalieLoss = isLoss;
                 existing.GoalieOvertimeLoss = isOTLoss;
                 existing.SavePercentage = stats.SavePercentage;
                 existing.FantasyPoints = newFP;
@@ -906,7 +991,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     plusMinus: 0, penaltyMinutes: 0, shots: 0,
                     hatTricks: 0,
                     wins: deltaW,
-                    losses: isLoss ? 1 : 0,
+                    losses: deltaL,
                     overtimeLosses: deltaOTL,
                     shutouts: deltaSO,
                     saves: deltaSV,
@@ -915,8 +1000,29 @@ namespace NhlFantasyLeague.api.Services.NHL
                     seasonId: seasonId,
                     seasonStatByPlayerId: seasonStatByPlayerId);
 
+                ApplyCareerDeltas(
+                    player.Id,
+                    gamesPlayed: 0,
+                    goals: 0, assists: 0, points: 0,
+                    plusMinus: 0, penaltyMinutes: 0, shots: 0,
+                    hatTricks: 0,
+                    wins: deltaW,
+                    losses: deltaL,
+                    overtimeLosses: deltaOTL,
+                    shutouts: deltaSO,
+                    careerStatByPlayerId: careerStatByPlayerId);
+
                 CreditTeam(
-                    player.Id, deltaFP, gameDate,
+                    player.Id,
+                    BuildGoalieDelta(
+                        fantasyPoints: deltaFP,
+                        gamesPlayed: 0,
+                        wins: deltaW,
+                        losses: deltaL,
+                        overtimeLosses: deltaOTL,
+                        shutouts: deltaSO,
+                        points: 0),
+                    gameDate,
                     historyByPlayerId, teamDeltaByTeamId);
 
                 result.GameLogsUpdated++;
@@ -938,6 +1044,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     Saves = stats.Saves,
                     Shutout = isShutout,
                     GoalieWin = isWin,
+                    GoalieLoss = isLoss,
                     GoalieOvertimeLoss = isOTLoss,
                     SavePercentage = stats.SavePercentage,
                     FantasyPoints = newFP,
@@ -962,8 +1069,29 @@ namespace NhlFantasyLeague.api.Services.NHL
                     seasonId: seasonId,
                     seasonStatByPlayerId: seasonStatByPlayerId);
 
+                ApplyCareerDeltas(
+                    player.Id,
+                    gamesPlayed: 1,
+                    goals: 0, assists: 0, points: points,
+                    plusMinus: 0, penaltyMinutes: 0, shots: 0,
+                    hatTricks: 0,
+                    wins: isWin ? 1 : 0,
+                    losses: isLoss ? 1 : 0,
+                    overtimeLosses: isOTLoss ? 1 : 0,
+                    shutouts: isShutout ? 1 : 0,
+                    careerStatByPlayerId: careerStatByPlayerId);
+
                 CreditTeam(
-                    player.Id, newFP, gameDate,
+                    player.Id,
+                    BuildGoalieDelta(
+                        fantasyPoints: newFP,
+                        gamesPlayed: 1,
+                        wins: isWin ? 1 : 0,
+                        losses: isLoss ? 1 : 0,
+                        overtimeLosses: isOTLoss ? 1 : 0,
+                        shutouts: isShutout ? 1 : 0,
+                        points: points),
+                    gameDate,
                     historyByPlayerId, teamDeltaByTeamId);
             }
         }
@@ -1032,13 +1160,13 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         private static void CreditTeam(
-            int playerId,
-            int deltaFP,
-            DateOnly gameDate,
-            Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
-            Dictionary<int, int> teamDeltaByTeamId)
+       int playerId,
+       TeamStatDelta delta,
+       DateOnly gameDate,
+       Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
+       Dictionary<int, TeamStatDelta> teamDeltaByTeamId)
         {
-            if (deltaFP == 0) return;
+            if (delta.IsEmpty) return;
 
             if (!historyByPlayerId.TryGetValue(playerId, out var history) ||
                 history.Count == 0)
@@ -1070,9 +1198,98 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return;
             }
 
-            teamDeltaByTeamId[effective.FantasyTeamId] =
-                teamDeltaByTeamId.GetValueOrDefault(effective.FantasyTeamId) +
-                deltaFP;
+            if (!teamDeltaByTeamId.TryGetValue(
+                    effective.FantasyTeamId, out var teamDelta))
+            {
+                teamDelta = new TeamStatDelta();
+                teamDeltaByTeamId[effective.FantasyTeamId] = teamDelta;
+            }
+
+            teamDelta.Add(delta);
+        }
+
+        private static TeamStatDelta BuildSkaterDelta(
+            int fantasyPoints,
+            int gamesPlayed,
+            int goals,
+            int assists,
+            int points,
+            int hatTricks)
+        {
+            return new TeamStatDelta
+            {
+                FantasyPoints = fantasyPoints,
+                SkaterGamesPlayed = gamesPlayed,
+                SkaterGoals = goals,
+                SkaterAssists = assists,
+                SkaterPoints = points,
+                SkaterHatTricks = hatTricks,
+            };
+        }
+
+        private static TeamStatDelta BuildGoalieDelta(
+            int fantasyPoints,
+            int gamesPlayed,
+            int wins,
+            int losses,
+            int overtimeLosses,
+            int shutouts,
+            int points)
+        {
+            return new TeamStatDelta
+            {
+                FantasyPoints = fantasyPoints,
+                GoalieGamesPlayed = gamesPlayed,
+                GoalieWins = wins,
+                GoalieLosses = losses,
+                GoalieOvertimeLosses = overtimeLosses,
+                GoalieShutouts = shutouts,
+                GoaliePoints = points,
+            };
+        }
+
+        /// <summary>
+        /// Applies the same deltas as ApplyStatDeltas to the current
+        /// season's PlayerCareerStat row, which is what the PlayerPage
+        /// career table and the Mon équipe GP/G/A/PTS columns read
+        /// from. Keeping it in sync during live games means those
+        /// displays never lag behind a live stat change.
+        ///
+        /// Only the lowest-sequence row for the current season is
+        /// updated. Summing the column across sequences still yields
+        /// the correct season total, because the deltas always add to
+        /// the same row.
+        /// </summary>
+        private static void ApplyCareerDeltas(
+            int playerId,
+            int gamesPlayed,
+            int goals, int assists, int points,
+            int plusMinus, int penaltyMinutes, int shots, int hatTricks,
+            int wins, int losses, int overtimeLosses, int shutouts,
+            Dictionary<int, PlayerCareerStat> careerStatByPlayerId)
+        {
+            if (!careerStatByPlayerId.TryGetValue(playerId, out var stat))
+            {
+                // No current-season NHL career row yet. The landing
+                // page sync will create one on its next run.
+                return;
+            }
+
+            stat.GamesPlayed += gamesPlayed;
+            stat.Goals += goals;
+            stat.Assists += assists;
+            stat.Points += points;
+            stat.PlusMinus += plusMinus;
+            stat.PenaltyMinutes += penaltyMinutes;
+            stat.Shots += shots;
+
+            var currentHT = stat.HatTricks ?? 0;
+            stat.HatTricks = currentHT + hatTricks;
+
+            stat.Wins += wins;
+            stat.Losses += losses;
+            stat.OvertimeLosses += overtimeLosses;
+            stat.Shutouts += shutouts;
         }
 
         private static void CollectNhlPlayerIds(
@@ -1088,6 +1305,59 @@ namespace NhlFantasyLeague.api.Services.NHL
         {
             public int Id { get; set; }
             public int NhlPlayerId { get; set; }
+        }
+
+        /// <summary>
+        /// Accumulates per-team stat deltas for one persist tick,
+        /// split between the skater and goalie segments so the
+        /// FantasyTeamSeason aggregates stay accurate during live
+        /// games.
+        /// </summary>
+        private sealed class TeamStatDelta
+        {
+            public int FantasyPoints { get; set; }
+
+            // Skater segment
+            public int SkaterGamesPlayed { get; set; }
+            public int SkaterGoals { get; set; }
+            public int SkaterAssists { get; set; }
+            public int SkaterPoints { get; set; }
+            public int SkaterHatTricks { get; set; }
+
+            // Goalie segment
+            public int GoalieGamesPlayed { get; set; }
+            public int GoalieWins { get; set; }
+            public int GoalieLosses { get; set; }
+            public int GoalieOvertimeLosses { get; set; }
+            public int GoalieShutouts { get; set; }
+            public int GoaliePoints { get; set; }
+
+            public bool IsEmpty =>
+                FantasyPoints == 0 &&
+                SkaterGamesPlayed == 0 && SkaterGoals == 0 &&
+                SkaterAssists == 0 && SkaterPoints == 0 &&
+                SkaterHatTricks == 0 &&
+                GoalieGamesPlayed == 0 && GoalieWins == 0 &&
+                GoalieLosses == 0 && GoalieOvertimeLosses == 0 &&
+                GoalieShutouts == 0 && GoaliePoints == 0;
+
+            public void Add(TeamStatDelta other)
+            {
+                FantasyPoints += other.FantasyPoints;
+
+                SkaterGamesPlayed += other.SkaterGamesPlayed;
+                SkaterGoals += other.SkaterGoals;
+                SkaterAssists += other.SkaterAssists;
+                SkaterPoints += other.SkaterPoints;
+                SkaterHatTricks += other.SkaterHatTricks;
+
+                GoalieGamesPlayed += other.GoalieGamesPlayed;
+                GoalieWins += other.GoalieWins;
+                GoalieLosses += other.GoalieLosses;
+                GoalieOvertimeLosses += other.GoalieOvertimeLosses;
+                GoalieShutouts += other.GoalieShutouts;
+                GoaliePoints += other.GoaliePoints;
+            }
         }
     }
 
