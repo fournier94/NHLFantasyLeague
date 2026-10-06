@@ -60,7 +60,7 @@ export default function ConnexionPage() {
                 <h2 className='text-2xl font-semibold text-foreground'>
                     Connexion
                 </h2>
-                <p className='mt-1 text-sm text-muted-foreground'>
+                <p className='mt-1 text-sm text-white'>
                     Entrez votre nom d'utilisateur et votre mot de passe.
                 </p>
             </div>
@@ -69,7 +69,7 @@ export default function ConnexionPage() {
                 <div>
                     <label
                         htmlFor='userName'
-                        className='text-sm font-medium text-muted-foreground'
+                        className='text-sm font-medium text-white'
                     >
                         Nom d'utilisateur
                     </label>
@@ -87,7 +87,7 @@ export default function ConnexionPage() {
                 <div>
                     <label
                         htmlFor='password'
-                        className='text-sm font-medium text-muted-foreground'
+                        className='text-sm font-medium text-white'
                     >
                         Mot de passe
                     </label>
