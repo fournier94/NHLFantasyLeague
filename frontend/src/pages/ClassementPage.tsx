@@ -30,11 +30,9 @@ const GOLD = '#FFC72C';
 const SILVER = '#C0C0C0';
 const BRONZE = '#CD7F32';
 
-const ELECTRIC = '#0088FF';
 const ELECTRIC_BRIGHT = '#33BBFF';
 const ELECTRIC_SOFT = '#7DD3FC';
 
-const GREEN = '#22C55E';
 const RED_NEON = '#FF0F3D';
 const PINK_NEON = '#FF0066';
 
@@ -224,11 +222,9 @@ function TrendGlyph({ color = GOLD }: { color?: string }) {
 
 function RankCell({
     rank,
-    accent,
     isMine,
 }: {
     rank: number;
-    accent: string;
     isMine: boolean;
 }) {
     if (rank === 1) {
@@ -696,7 +692,6 @@ export default function ClassementPage() {
                                     <div className='flex items-center justify-center'>
                                         <RankCell
                                             rank={row.rank}
-                                            accent={accent.accent}
                                             isMine={isMine}
                                         />
                                     </div>
