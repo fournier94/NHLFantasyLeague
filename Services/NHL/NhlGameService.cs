@@ -285,10 +285,23 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         private static LiveGameSnapshot BuildSnapshot(NhlScheduleGame game)
         {
+            // The NHL /schedule/now endpoint does not reliably populate
+            // its gameDate field. When it is missing, System.Text.Json
+            // leaves DateOnly at its default (0001-01-01), which
+            // Postgres stores as -infinity and which no date-filtered
+            // query will ever match.
+            //
+            // Derive the ET calendar date from StartTimeUtc instead:
+            // StartTimeUtc is always populated, and the ET calendar
+            // date is the same date the NHL labels the game with
+            // (arena-local = ET for every NHL club).
+            var gameDate = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(game.StartTimeUtc));
+
             return new LiveGameSnapshot
             {
                 GameId = game.Id,
-                GameDate = game.GameDate,
+                GameDate = gameDate,
                 Season = game.Season,
                 GameType = game.GameType,
                 StartTimeUtc = game.StartTimeUtc,
@@ -812,6 +825,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     return;
                 }
 
+                existing.GameDate = gameDate;
                 existing.Goals = stats.Goals;
                 existing.Assists = stats.Assists;
                 existing.Points = stats.Points;
@@ -964,6 +978,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     return;
                 }
 
+                existing.GameDate = gameDate;
                 existing.GoalsAgainst = stats.GoalsAgainst;
                 existing.ShotsAgainst = stats.ShotsAgainst;
                 existing.Saves = stats.Saves;
