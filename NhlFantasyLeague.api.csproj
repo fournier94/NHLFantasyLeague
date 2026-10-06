@@ -26,6 +26,8 @@
     <None Remove="frontend\src\lib\playerNavigation.ts" />
     <None Remove="frontend\src\lib\scrollRestoration.ts" />
     <None Remove="frontend\src\pages\ClassementPage.tsx" />
+    <None Remove="frontend\src\pages\ClassementPageClassic.tsx" />
+    <None Remove="frontend\src\pages\ClassementPageDarkCyan.tsx" />
     <None Remove="frontend\src\pages\GameDayPage.tsx" />
     <None Remove="frontend\src\pages\InjuriesPage.tsx" />
     <None Remove="frontend\src\pages\InscriptionPage.tsx" />
@@ -55,6 +57,8 @@
     <TypeScriptCompile Include="frontend\src\lib\playerNavigation.ts" />
     <TypeScriptCompile Include="frontend\src\lib\scrollRestoration.ts" />
     <TypeScriptCompile Include="frontend\src\pages\ClassementPage.tsx" />
+    <TypeScriptCompile Include="frontend\src\pages\ClassementPageClassic.tsx" />
+    <TypeScriptCompile Include="frontend\src\pages\ClassementPageDarkCyan.tsx" />
     <TypeScriptCompile Include="frontend\src\pages\GameDayPage.tsx" />
     <TypeScriptCompile Include="frontend\src\pages\InjuriesPage.tsx" />
     <TypeScriptCompile Include="frontend\src\pages\InscriptionPage.tsx" />

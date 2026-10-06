@@ -113,7 +113,7 @@ function positionBorderColor(group: LineupPositionGroup): string {
  */
 function renderDailyPoints(value: number | null | undefined) {
     if (value == null) {
-        return <span className='text-muted-foreground'>X</span>;
+        return <span aria-hidden='true' />;
     }
 
     if (value === 0) {

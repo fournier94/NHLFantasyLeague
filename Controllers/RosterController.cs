@@ -161,6 +161,29 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
+        /// Returns which fantasy team currently owns each of the
+        /// given NHL players in the current season. Players not on
+        /// any fantasy team are omitted from the response.
+        ///
+        /// Used by the Game Day page to display the team name next
+        /// to each player in an expanded boxscore. Authenticated but
+        /// not commissioner-only: any logged-in user can see who
+        /// owns whom.
+        /// </summary>
+        [HttpGet("ownership")]
+        public async Task<IActionResult> GetOwnership(
+            [FromQuery] int[] nhlPlayerIds,
+            CancellationToken ct = default)
+        {
+            var rows = await _rosterAdminService
+                .GetPlayerOwnershipAsync(
+                    nhlPlayerIds ?? Array.Empty<int>(),
+                    ct);
+
+            return Ok(rows);
+        }
+
+        /// <summary>
         /// Atomically swaps the RosterStatus of two players on the same
         /// fantasy team at the same effective instant. Enforces same
         /// position group and the exact league shape

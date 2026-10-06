@@ -101,7 +101,7 @@ export function Layout() {
 
     return (
         <div
-            className='flex min-h-screen flex-col bg-background'
+            className='flex min-h-dvh flex-col bg-background'
             style={
                 {
                     '--header-height': `${headerHeight}px`,

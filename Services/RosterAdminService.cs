@@ -1383,6 +1383,58 @@ namespace NhlFantasyLeague.api.Services
                 .ToList();
         }
 
+        /// <summary>
+        /// Returns the fantasy team that currently owns each of the
+        /// given NHL players in the current season. Players who are
+        /// free agents (or unknown) are simply omitted from the
+        /// result, so callers can treat a missing entry as "no team".
+        ///
+        /// Used by the Game Day page to display the fantasy team
+        /// name next to each player in an expanded boxscore.
+        ///
+        /// Caps the input at 200 ids defensively; a single NHL
+        /// boxscore has at most ~40 players.
+        /// </summary>
+        public async Task<List<PlayerOwnershipRowDto>> GetPlayerOwnershipAsync(
+            IReadOnlyList<int> nhlPlayerIds,
+            CancellationToken ct = default)
+        {
+            if (nhlPlayerIds.Count == 0)
+            {
+                return new List<PlayerOwnershipRowDto>();
+            }
+
+            var currentSeason = await _dbContext.Seasons
+                .AsNoTracking()
+                .OrderByDescending(s => s.StartDate)
+                .FirstOrDefaultAsync(ct);
+
+            if (currentSeason == null)
+            {
+                return new List<PlayerOwnershipRowDto>();
+            }
+
+            var ids = nhlPlayerIds
+                .Distinct()
+                .Take(200)
+                .ToList();
+
+            return await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Where(e =>
+                    e.SeasonId == currentSeason.Id &&
+                    e.Player != null &&
+                    ids.Contains(e.Player.NhlPlayerId))
+                .Select(e => new PlayerOwnershipRowDto
+                {
+                    NhlPlayerId = e.Player!.NhlPlayerId,
+                    FantasyTeamId = e.FantasyTeamId,
+                    FantasyTeamName = e.FantasyTeam!.Name,
+                    RosterStatus = e.RosterStatus.ToString()
+                })
+                .ToListAsync(ct);
+        }
+
         private async Task<Season?> ResolveSeasonAsync(int? seasonId)
         {
             if (seasonId.HasValue)

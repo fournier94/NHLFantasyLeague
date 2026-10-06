@@ -467,6 +467,38 @@ export const getTeamRoster = (fantasyTeamId: number) =>
         cacheTtlMs: 5_000,
     });
 
+/** One row from GET /api/Roster/ownership. */
+export interface PlayerOwnership {
+    nhlPlayerId: number;
+    fantasyTeamId: number;
+    fantasyTeamName: string;
+    rosterStatus: string;
+}
+
+/**
+ * Returns which fantasy team currently owns each of the given NHL
+ * players in the current season. Used by the Game Day page to
+ * display the team name next to each player in an expanded
+ * boxscore. Players not on any fantasy team are omitted.
+ *
+ * Cached client-side for 30 seconds: a single boxscore is opened
+ * and closed repeatedly, and the ownership map is identical for
+ * every call within a short window.
+ */
+export function getPlayerOwnership(
+    nhlPlayerIds: number[],
+): Promise<PlayerOwnership[]> {
+    if (nhlPlayerIds.length === 0) return Promise.resolve([]);
+    const params = new URLSearchParams();
+    for (const id of nhlPlayerIds) {
+        params.append('nhlPlayerIds', String(id));
+    }
+    return apiGet<PlayerOwnership[]>(
+        `/Roster/ownership?${params.toString()}`,
+        { cacheTtlMs: 30_000 },
+    );
+}
+
 /** One player row returned by the roster search (GET /api/Roster/search). */
 export interface PlayerSearchResult {
     playerId: number;
@@ -1154,6 +1186,24 @@ export function getGameBoxscore(
     return apiGet<NhlBoxscoreResponse>(
         `/Games/${gameId}/boxscore`,
         { cacheTtlMs: 0 },
+    );
+}
+
+/**
+ * Schedule for a specific NHL calendar date (yyyy-MM-dd, ET). Used
+ * by the Game Day date picker to show the last 6 days.
+ *
+ * Cached client-side for 5 minutes. Past days don't change once
+ * the games are final, but a small TTL keeps score corrections
+ * (which the NHL occasionally issues after the fact) visible
+ * without hammering the NHL API.
+ */
+export function getGamesByDate(
+    date: string,
+): Promise<GameDayScheduleResponse> {
+    return apiGet<GameDayScheduleResponse>(
+        `/Games/by-date/${date}`,
+        { cacheTtlMs: 5 * 60_000 },
     );
 }
 

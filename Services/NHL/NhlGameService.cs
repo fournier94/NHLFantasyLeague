@@ -88,12 +88,12 @@ namespace NhlFantasyLeague.api.Services.NHL
                 "OFF",
             };
 
-        /// <summary>
-        /// Only poll FINAL/OFF boxscores within this window after
-        /// start time. Prevents refreshing yesterday's games.
-        /// </summary>
-        private static readonly TimeSpan FinalGameGraceWindow =
-            TimeSpan.FromHours(6);
+        // A fixed "hours since start" grace window was removed: it
+        // cut off ended games too early for the user-facing Game Day
+        // page, which needs the boxscore of any game played today.
+        // The equivalent protection against polling yesterday's
+        // games now lives inside ShouldAttachBoxscore as an ET-day
+        // comparison.
 
         // Tracks the last time we fetched each game's boxscore, so the
         // FINAL/OFF polling can back off over time without hitting the
@@ -219,6 +219,23 @@ namespace NhlFantasyLeague.api.Services.NHL
             {
                 var snapshot = BuildSnapshot(game);
 
+                // Preserve any boxscore we already fetched for this
+                // game in a previous tick. Without this, a game whose
+                // ShouldAttachBoxscore answer flips to false (ET day
+                // rollover, or a schedule entry that briefly falls
+                // outside the poll window) would lose its cached
+                // boxscore and become non-clickable on Game Day, even
+                // though we fetched it earlier.
+                //
+                // The cache is not yet replaced at this point in the
+                // method, so cache.Get returns the previous tick's
+                // snapshot.
+                var cached = cache.Get(game.Id);
+                if (cached?.Boxscore != null)
+                {
+                    snapshot.Boxscore = cached.Boxscore;
+                }
+
                 if (ShouldAttachBoxscore(game, now))
                 {
                     try
@@ -335,11 +352,46 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
         }
 
+        /// <summary>
+        /// Decides whether to fetch a fresh boxscore for one game on
+        /// the current tick.
+        ///
+        /// Rule: a game is only polled while it belongs to today's ET
+        /// calendar date. This covers the whole NHL slate (matinee
+        /// through late-night West Coast games) and automatically
+        /// stops polling games once the ET day rolls over. That is
+        /// what keeps yesterday's games out of the network pipeline
+        /// without needing a fixed number of hours.
+        ///
+        /// Within today:
+        ///   - LIVE / CRIT    -> fetched every tick.
+        ///   - FINAL / OFF    -> fetched on a per-game backoff: every
+        ///                        minute for the first 3 hours after
+        ///                        start, then every 5 minutes until
+        ///                        midnight ET.
+        ///
+        /// This means an ended game stays in the cache (and
+        /// clickable on the Game Day page) for the rest of the ET
+        /// day, instead of disappearing a few hours after its final
+        /// horn.
+        /// </summary>
         private static bool ShouldAttachBoxscore(
-     NhlScheduleGame game,
-     DateTime now)
+            NhlScheduleGame game,
+            DateTime now)
         {
             if (!BoxscoreStates.Contains(game.GameState))
+            {
+                return false;
+            }
+
+            // Only poll games that are "today" in ET. This replaces
+            // the previous hours-since-start cutoff.
+            var todayEt = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(now));
+            var gameDateEt = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(game.StartTimeUtc));
+
+            if (gameDateEt != todayEt)
             {
                 return false;
             }
@@ -349,9 +401,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                 || string.Equals(
                     game.GameState, "CRIT", StringComparison.OrdinalIgnoreCase);
 
-            var minutesSinceStart =
-                (now - game.StartTimeUtc).TotalMinutes;
-
             // LIVE / CRIT: fetch every tick, no backoff.
             if (isLive)
             {
@@ -359,18 +408,13 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return true;
             }
 
-            // FINAL / OFF: stop fetching entirely once we're past the
-            // grace window. Prevents refreshing yesterday's games.
-            if (minutesSinceStart > FinalGameGraceWindow.TotalMinutes)
-            {
-                return false;
-            }
+            // FINAL / OFF. Poll aggressively for the first 3 hours
+            // after start (covers the game ending and any immediate
+            // post-game corrections), then back off to once every 5
+            // minutes for the rest of the ET day.
+            var minutesSinceStart =
+                (now - game.StartTimeUtc).TotalMinutes;
 
-            // FINAL / OFF within the grace window. Poll aggressively
-            // for the first 3 hours after start (covers the game ending
-            // and the immediate post-game corrections), then back off to
-            // once every 5 minutes. This keeps the API load flat even
-            // though the live tick is now every 60 seconds.
             var minMinutesBetweenFetches =
                 minutesSinceStart < 180 ? 1 : 5;
 

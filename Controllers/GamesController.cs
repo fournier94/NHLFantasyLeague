@@ -31,13 +31,16 @@ namespace NhlFantasyLeague.api.Controllers
 
         private readonly LiveGameCache _cache;
         private readonly ScheduledJobsRunner _runner;
+        private readonly NhlGameService _gameService;
 
         public GamesController(
             LiveGameCache cache,
-            ScheduledJobsRunner runner)
+            ScheduledJobsRunner runner,
+            NhlGameService gameService)
         {
             _cache = cache;
             _runner = runner;
+            _gameService = gameService;
         }
 
         // =================================================================
@@ -84,28 +87,118 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         [HttpGet("{gameId:long}/boxscore")]
-        public IActionResult GetBoxscore(long gameId)
+        public async Task<IActionResult> GetBoxscore(
+      long gameId,
+      CancellationToken ct = default)
         {
+            // Try the in-memory live cache first. It has today's
+            // games with the freshest data.
             var snapshot = _cache.Get(gameId);
 
-            if (snapshot == null)
+            if (snapshot?.Boxscore != null)
+            {
+                return Ok(snapshot.Boxscore);
+            }
+
+            // Fall back to fetching from the NHL API directly. This
+            // handles historical games (any day before today) and
+            // today's games whose boxscore has not been cached yet.
+            try
+            {
+                var box = await _gameService.GetBoxscoreAsync(gameId, ct);
+
+                if (box == null)
+                {
+                    return NotFound(new
+                    {
+                        message = $"Game {gameId} boxscore is not available."
+                    });
+                }
+
+                return Ok(box);
+            }
+            catch (Exception ex)
             {
                 return NotFound(new
                 {
-                    message = $"Game {gameId} is not in the live cache."
+                    message = $"Game {gameId} boxscore could not be fetched.",
+                    detail = $"{ex.GetType().Name}: {ex.Message}"
                 });
             }
+        }
 
-            if (snapshot.Boxscore == null)
+        /// <summary>
+        /// Returns the schedule for a specific NHL calendar date
+        /// (yyyy-MM-dd, ET). Used by the Game Day date picker to show
+        /// the last 7 days of games. The historical range is limited
+        /// to the previous 7 days to keep the NHL API load bounded.
+        /// </summary>
+        [HttpGet("by-date/{date}")]
+        public async Task<IActionResult> GetByDate(
+            string date,
+            CancellationToken ct = default)
+        {
+            if (!DateOnly.TryParseExact(
+                    date,
+                    "yyyy-MM-dd",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var parsed))
             {
-                return NotFound(new
+                return BadRequest(new
                 {
-                    message = $"Game {gameId} has no cached boxscore yet. " +
-                              "Try again once the game is live or has finished."
+                    message = "Date must be in yyyy-MM-dd format."
                 });
             }
 
-            return Ok(snapshot.Boxscore);
+            var todayEt = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
+            var minDate = todayEt.AddDays(-7);
+
+            if (parsed < minDate || parsed > todayEt)
+            {
+                return BadRequest(new
+                {
+                    message = "Date must be within the last 7 days."
+                });
+            }
+
+            var schedule = await _gameService
+                .GetScheduleForDateAsync(parsed, ct);
+
+            var games = schedule
+                .Select(g => new GameDayGameSummary
+                {
+                    GameId = g.Id,
+                    GameDate = g.GameDate,
+                    StartTimeUtc = g.StartTimeUtc,
+                    GameState = g.GameState,
+                    AwayAbbreviation = g.AwayTeam.Abbreviation,
+                    HomeAbbreviation = g.HomeTeam.Abbreviation,
+                    AwayScore = g.AwayTeam.Score,
+                    HomeScore = g.HomeTeam.Score,
+                    PeriodNumber = g.PeriodDescriptor?.Number,
+                    PeriodType = g.PeriodDescriptor?.PeriodType,
+                    // Any state other than FUT / PRE means a boxscore
+                    // can be fetched on demand from the NHL API.
+                    HasBoxscore =
+                        !string.Equals(
+                            g.GameState, "FUT",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(
+                            g.GameState, "PRE",
+                            StringComparison.OrdinalIgnoreCase),
+                })
+                .ToList();
+
+            var response = new GameDayScheduleResponse
+            {
+                LastRefreshUtc = DateTime.UtcNow,
+                IsFresh = true,
+                Games = games,
+            };
+
+            return Ok(response);
         }
 
         // =================================================================

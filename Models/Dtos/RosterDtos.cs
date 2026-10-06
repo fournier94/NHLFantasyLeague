@@ -417,4 +417,19 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public DateOnly? InjuryReturnDate { get; set; } // projected return
         public string? InjuryFantasyStatus { get; set; } // "OUT", "IR", "Day-To-Day"
     }
+
+    /// <summary>
+    /// One row returned by GET /api/Roster/ownership. Maps an NHL
+    /// player id to the fantasy team that currently holds him for
+    /// the current season. Players not on any fantasy team are
+    /// omitted, so the response only contains rows for rostered
+    /// players.
+    /// </summary>
+    public class PlayerOwnershipRowDto
+    {
+        public int NhlPlayerId { get; set; }
+        public int FantasyTeamId { get; set; }
+        public string FantasyTeamName { get; set; } = string.Empty;
+        public string RosterStatus { get; set; } = string.Empty;
+    }
 }
