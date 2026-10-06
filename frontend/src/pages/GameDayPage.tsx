@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
     getGameBoxscore,
@@ -141,7 +142,11 @@ function SkaterRow({ skater }: { skater: NhlSkaterStats }) {
     const name = skater.name.default;
 
     return (
-        <div className='flex items-center justify-between gap-2 py-0.5 text-xs'>
+        <Link
+            to={`/joueurs/${skater.playerId}`}
+            onClick={(event) => event.stopPropagation()}
+            className='flex items-center justify-between gap-2 rounded px-1 py-0.5 text-xs transition-colors hover:bg-[#00A8FF]/10'
+        >
             <div className='min-w-0 flex-1 truncate text-foreground'>
                 {name}
             </div>
@@ -162,7 +167,7 @@ function SkaterRow({ skater }: { skater: NhlSkaterStats }) {
                     {skater.points}
                 </span>
             </div>
-        </div>
+        </Link>
     );
 }
 
@@ -171,7 +176,11 @@ function GoalieRow({ goalie }: { goalie: NhlGoalieStats }) {
     const name = goalie.name.default;
 
     return (
-        <div className='flex items-center justify-between gap-2 py-0.5 text-xs'>
+        <Link
+            to={`/joueurs/${goalie.playerId}`}
+            onClick={(event) => event.stopPropagation()}
+            className='flex items-center justify-between gap-2 rounded px-1 py-0.5 text-xs transition-colors hover:bg-[#00A8FF]/10'
+        >
             <div className='min-w-0 flex-1 truncate text-foreground'>
                 {name}
             </div>
@@ -184,7 +193,7 @@ function GoalieRow({ goalie }: { goalie: NhlGoalieStats }) {
                     {goalie.saves}/{goalie.shotsAgainst}
                 </span>
             </div>
-        </div>
+        </Link>
     );
 }
 
@@ -271,6 +280,7 @@ function BoxscorePanel({
             <div
                 className='border-t px-3 py-4 text-center text-xs text-muted-foreground'
                 style={{ borderColor: 'rgba(0, 168, 255, 0.2)' }}
+                onClick={(event) => event.stopPropagation()}
             >
                 Chargement du sommaire...
             </div>
@@ -283,6 +293,7 @@ function BoxscorePanel({
         <div
             className='max-h-[28rem] space-y-4 overflow-y-auto border-t px-3 py-3 md:max-h-none'
             style={{ borderColor: 'rgba(0, 168, 255, 0.2)' }}
+            onClick={(event) => event.stopPropagation()}
         >
             <TeamBoxscore
                 team={boxscore.playerByGameStats.awayTeam}
