@@ -121,11 +121,21 @@ function GameDayIcon({ className = 'h-6 w-6' }: { className?: string }) {
  * Red cross used on the mobile nav for the Blessures page. Same
  * shape as the InjuryBadge on PlayerCard / PlayerPage (a thick
  * cross), scaled to match the lucide icons.
+ *
+ * viewBox history:
+ *   - `0 0 24 24`          original (cross occupied 18/24 of the box)
+ *   - `3 3 18 18`          tightly cropped to the cross, ~33% larger
+ *   - `1.5 1.5 21 21`      halfway between the two
+ *
+ * The three options are all sub-pixel-identical from a layout
+ * standpoint: the SVG element is still h-6 w-6 and its parent Link
+ * still uses p-2, so nothing downstream changes. Only the fraction
+ * of the rendering box that the cross fills changes.
  */
 function InjuryIcon({ className = 'h-6 w-6' }: { className?: string }) {
     return (
         <svg
-            viewBox='0 0 24 24'
+            viewBox='1.5 1.5 21 21'
             className={className}
             xmlns='http://www.w3.org/2000/svg'
             style={{ filter: INJURY_AURA }}
