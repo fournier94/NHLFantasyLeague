@@ -5,6 +5,7 @@ using NhlFantasyLeague.api.Services;
 using System;
 using System.Diagnostics;
 using System.Net.Http;
+using Microsoft.Extensions.Logging;
 
 namespace NhlFantasyLeague.api.Services.NHL
 {
@@ -14,17 +15,20 @@ namespace NhlFantasyLeague.api.Services.NHL
         private readonly AppDbContext _dbContext;
         private readonly NhlPlayerService _playerService;
         private readonly NhlStatsService _nhlStatsService;
+        private readonly ILogger<NhlGameLogService> _logger;
 
         public NhlGameLogService(
             HttpClient httpClient,
             AppDbContext dbContext,
             NhlPlayerService playerService,
-            NhlStatsService nhlStatsService)
+            NhlStatsService nhlStatsService,
+            ILogger<NhlGameLogService> logger)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
             _playerService = playerService;
             _nhlStatsService = nhlStatsService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -759,6 +763,103 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         /// <summary>
+        /// Detects players who have a RosterEntry for the given
+        /// season but no RosterStatusHistory rows at all, and inserts
+        /// a synthetic history row for each at the season start date
+        /// with the player's current RosterStatus.
+        ///
+        /// Called at the top of every recompute. Makes the recompute
+        /// self-healing: the next recompute cycle after any missing-
+        /// history condition will repair it, so no game is ever
+        /// silently dropped for a rostered player.
+        ///
+        /// Idempotent. Returns the number of history rows inserted.
+        /// </summary>
+        private async Task<int> BackfillMissingHistoryAsync(
+            int seasonId,
+            DateOnly seasonStartDate,
+            CancellationToken ct)
+        {
+            // Only players currently on a team are candidates. A
+            // player who was released has no RosterEntry and should
+            // not be touched: his Released row is the correct history.
+            var entries = await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Where(e => e.SeasonId == seasonId)
+                .Select(e => new
+                {
+                    e.PlayerId,
+                    e.FantasyTeamId,
+                    e.RosterStatus,
+                })
+                .ToListAsync(ct);
+
+            if (entries.Count == 0)
+            {
+                return 0;
+            }
+
+            // Any player with at least one history row for the season
+            // is already tracked. That includes Released rows: once
+            // history exists, we never second-guess it.
+            var trackedPlayerIds = (await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Where(h => h.SeasonId == seasonId)
+                .Select(h => h.PlayerId)
+                .Distinct()
+                .ToListAsync(ct))
+                .ToHashSet();
+
+            // Season start at 00:00 UTC, matching the day-precision
+            // granularity every other EffectiveAt uses.
+            var seasonStartUtc = new DateTime(
+                seasonStartDate.Year,
+                seasonStartDate.Month,
+                seasonStartDate.Day,
+                0, 0, 0,
+                DateTimeKind.Utc);
+
+            var now = DateTime.UtcNow;
+            var inserted = 0;
+
+            foreach (var entry in entries)
+            {
+                if (trackedPlayerIds.Contains(entry.PlayerId))
+                {
+                    continue;
+                }
+
+                _dbContext.RosterStatusHistories.Add(
+                    new RosterStatusHistory
+                    {
+                        PlayerId = entry.PlayerId,
+                        FantasyTeamId = entry.FantasyTeamId,
+                        SeasonId = seasonId,
+                        RosterStatus = entry.RosterStatus,
+                        EffectiveAt = seasonStartUtc,
+                        CreatedAt = now,
+                        Note =
+                            "Auto-backfilled: no history row existed " +
+                            "for the season",
+                    });
+
+                inserted++;
+            }
+
+            if (inserted > 0)
+            {
+                await _dbContext.SaveChangesAsync(ct);
+
+                _logger.LogInformation(
+                    "Auto-backfilled {Count} missing " +
+                    "RosterStatusHistory row(s) for season id {SeasonId}.",
+                    inserted, seasonId);
+            }
+
+            return inserted;
+        }
+
+        /// <summary>
         /// Recomputes every FantasyTeamSeason aggregate from scratch for
         /// one season, then returns a per-team summary.
         ///
@@ -791,10 +892,10 @@ namespace NhlFantasyLeague.api.Services.NHL
             };
 
             var season = await _dbContext.Seasons
-                .AsNoTracking()
-                .FirstOrDefaultAsync(
-                    s => s.NhlSeasonCode == seasonCode,
-                    ct);
+     .AsNoTracking()
+     .FirstOrDefaultAsync(
+         s => s.NhlSeasonCode == seasonCode,
+         ct);
 
             if (season == null)
             {
@@ -803,6 +904,38 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 return result;
             }
+
+            // Self-healing integrity pass.
+            //
+            // The recompute credits a game to a fantasy team only when
+            // it finds a RosterStatusHistory row for the player that
+            // was effective at the moment the game started. If a
+            // RosterEntry exists with no matching history at all, the
+            // player's games are silently dropped.
+            //
+            // This pass detects that condition and repairs it: for any
+            // player who currently has a RosterEntry for the season
+            // but no RosterStatusHistory rows, it inserts one row at
+            // the season's start date with the player's current
+            // RosterStatus. Every game the player has played since the
+            // season began is then correctly credited.
+            //
+            // Because this runs on every recompute, and the recompute
+            // runs on every roster mutation and multiple times per
+            // day, any future drift — a legacy RosterEntry from before
+            // history tracking existed, a code path that forgot to
+            // write history, a manual DB edit — is automatically
+            // corrected within the next cycle. No manual backfill is
+            // ever needed again.
+            //
+            // Idempotent: players who already have any history row for
+            // the season (including a Released row) are skipped.
+            var historyRowsBackfilled = await BackfillMissingHistoryAsync(
+                season.Id,
+                season.StartDate,
+                ct);
+
+            result.HistoryRowsBackfilled = historyRowsBackfilled;
 
             // 1. Load every FantasyTeamSeason for the season and zero
             //    every aggregate. Idempotent: the recompute always
@@ -1032,10 +1165,19 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         /// <summary>
         /// Number of players who had games in the season but no history
-        /// row at all. They contribute 0. Typically means the
-        /// backfill endpoint has not been run yet.
+        /// row at all. They contribute 0. With the self-healing
+        /// backfill in place, this should trend to zero over time and
+        /// only ever contains genuinely untracked players.
         /// </summary>
         public int PlayersWithoutHistory { get; set; }
+
+        /// <summary>
+        /// Number of RosterStatusHistory rows auto-inserted by the
+        /// self-healing integrity pass at the top of the recompute.
+        /// Non-zero on the first run after a fix, or if any code path
+        /// ever again creates a RosterEntry without history.
+        /// </summary>
+        public int HistoryRowsBackfilled { get; set; }
 
         public List<string> Errors { get; set; } = new();
     }
