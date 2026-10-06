@@ -39,5 +39,14 @@ namespace NhlFantasyLeague.api.Models
 
         /// <summary>UTC instant the account was created.</summary>
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// UTC instant the user last made an authenticated request to
+        /// the API. Updated by LastActiveMiddleware on a throttled
+        /// schedule (at most once per 5 minutes per user). Null until
+        /// the user logs in for the first time after this feature
+        /// ships.
+        /// </summary>
+        public DateTime? LastActiveAt { get; set; }
     }
 }

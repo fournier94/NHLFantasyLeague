@@ -167,6 +167,41 @@ function formatSeasonCode(code: number): string {
 }
 
 /**
+ * Formats a UTC ISO timestamp as a short, human-readable "time
+ * since" string: "À l'instant", "Il y a 5 min", "Il y a 2 h",
+ * "Il y a 3 j". Falls back to a full date when the value is more
+ * than a week old, and returns "Jamais" when the value is null
+ * (user has never made an authenticated request since the feature
+ * shipped).
+ */
+function formatLastActive(iso: string | null): string {
+    if (!iso) return 'Jamais';
+
+    const date = new Date(iso);
+
+    if (Number.isNaN(date.getTime())) return '—';
+
+    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+
+    if (seconds < 60) return "À l'instant";
+
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `Il y a ${minutes} min`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `Il y a ${hours} h`;
+
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `Il y a ${days} j`;
+
+    return new Intl.DateTimeFormat('fr-CA', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+    }).format(date);
+}
+
+/**
  * Sort order used by the ROSTERS export: forwards first, then
  * defensemen, then goalies, then by last name within each group.
  */
@@ -2072,6 +2107,9 @@ export default function AdminPage() {
                                     <th className='px-2 py-2 text-left font-medium'>Utilisateur</th>
                                     <th className='px-2 py-2 text-left font-medium'>Équipe</th>
                                     <th className='px-2 py-2 text-center font-medium'>Commissaire</th>
+                                    <th className='px-2 py-2 text-left font-medium'>
+                                        Dernière activité
+                                    </th>
                                     <th className='px-2 py-2 text-center font-medium'>Actions</th>
                                 </tr>
                             </thead>
@@ -2095,6 +2133,9 @@ export default function AdminPage() {
                                         </td>
                                         <td className='px-2 py-2 text-center align-top'>
                                             {u.isCommissioner ? '✓' : ''}
+                                        </td>
+                                        <td className='px-2 py-2 text-left align-top text-muted-foreground'>
+                                            {formatLastActive(u.lastActiveAt)}
                                         </td>
                                         <td className='px-2 py-2 text-center align-top'>
                                             <div className='flex flex-wrap items-center justify-center gap-2'>

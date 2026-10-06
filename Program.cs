@@ -244,6 +244,12 @@ app.UseResponseCompression();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Updates ApplicationUser.LastActiveAt on every authenticated
+// request, throttled to at most one write per user per 5 minutes.
+// Registered after UseAuthorization so only requests that got
+// through the auth pipeline reach it.
+app.UseMiddleware<NhlFantasyLeague.api.Services.Auth.LastActiveMiddleware>();
+
 // Lightweight warm-up endpoint for the cron job.
 app.MapGet("/ping", () => Results.Ok("pong"))
    .AllowAnonymous();

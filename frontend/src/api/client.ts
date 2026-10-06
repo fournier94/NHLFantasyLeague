@@ -288,6 +288,8 @@ export interface AdminUserRow {
     /** True when the user is in the protected list and can't be demoted. */
     isProtected: boolean;
     createdAt: string;
+    /** UTC instant of the last authenticated request, or null. */
+    lastActiveAt: string | null;
 }
 
 export const login = (request: LoginRequest) =>

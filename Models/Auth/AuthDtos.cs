@@ -75,6 +75,13 @@ namespace NhlFantasyLeague.api.Models.Auth
         public bool IsProtected { get; set; }
 
         public DateTime CreatedAt { get; set; }
+
+        /// <summary>
+        /// UTC instant of the user's last authenticated request, or
+        /// null when the account has never made one since the feature
+        /// was added.
+        /// </summary>
+        public DateTime? LastActiveAt { get; set; }
     }
 
     public class AssignTeamRequest

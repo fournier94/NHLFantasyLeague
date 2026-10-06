@@ -59,7 +59,8 @@ namespace NhlFantasyLeague.api.Controllers
                         user, AuthService.CommissionerRole),
                     IsProtected = _authService.IsProtectedCommissioner(
                         user.UserName),
-                    CreatedAt = user.CreatedAt
+                    CreatedAt = user.CreatedAt,
+                    LastActiveAt = user.LastActiveAt
                 });
             }
 
