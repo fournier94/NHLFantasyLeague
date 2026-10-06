@@ -9,14 +9,17 @@ namespace NhlFantasyLeague.api.Controllers.NHL
     public class NhlPlayerDetailController : ControllerBase
     {
         /// <summary>
-        /// Five minutes. Player bio, contracts, career stats and roster
-        /// status change only on game nights and on explicit roster
-        /// edits; a 5-minute window keeps the page instant on any
-        /// repeated visit while still reflecting changes by the next
-        /// post-game write. Roster edits explicitly invalidate this
-        /// cache via RosterAdminService.OnRosterChanged.
+        /// Thirty seconds. Player bio, contracts and career tables
+        /// change slowly, but the current-season stats (GP, G, A,
+        /// PTS, FP) are updated by the live refresh every 60 seconds
+        /// during games. The live refresh also invalidates this cache
+        /// on every tick that persists a change, so a 30-second TTL is
+        /// the worst-case upper bound when the invalidation is missed
+        /// (e.g. a live tick that produced zero deltas, or a request
+        /// that raced the invalidation). Roster edits invalidate this
+        /// cache explicitly via RosterAdminService.OnRosterChanged.
         /// </summary>
-        private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
 
         private readonly PlayerDetailService _playerDetailService;
         private readonly ResponseCacheService _cache;

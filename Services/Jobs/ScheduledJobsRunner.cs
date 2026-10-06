@@ -720,13 +720,27 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 var result = await gameService
                     .RefreshLiveGamesCacheAsync(_cache, ct);
 
-                // Standings changed if any live deltas were persisted.
-                // The standings read cache is short (30 s), so dropping
-                // it now makes the next request see the fresh totals
-                // within the same tick.
+                // Any live delta affects one or more of the read
+                // caches below. Dropping them here means the very next
+                // request rebuilds from the freshly written rows:
+                //
+                //   standings:       FantasyTeamSeason totals
+                //   roster:          Mon équipe roster card (GP/G/A/PTS
+                //                    plus the today/yesterday FP
+                //                    columns)
+                //   player-detail:   PlayerPage top strip + career row
+                //   player-career:   PlayerPage career-only fetch
+                //
+                // The response cache is shared across all API
+                // instances; the next read after invalidation rebuilds
+                // from DB, so the worst-case lag is one live tick
+                // (60 s) plus the rebuild (a few ms).
                 if (result.GamesPersisted > 0)
                 {
                     _responseCache.Invalidate("standings:");
+                    _responseCache.Invalidate("roster:");
+                    _responseCache.Invalidate("player-detail:");
+                    _responseCache.Invalidate("player-career:");
                 }
 
                 if (result.Errors.Count > 0)
