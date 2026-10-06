@@ -66,12 +66,6 @@ function startTimeLabel(iso: string): string {
     }
 }
 
-/**
- * True when the given UTC instant falls on the user's local
- * calendar day (from local midnight to local midnight). This is
- * what "today" means to the user, and it matches the arena date
- * the NHL uses in ET for the vast majority of games.
- */
 function isTodayLocal(iso: string): boolean {
     const start = new Date(iso);
 
@@ -93,10 +87,6 @@ function isTodayLocal(iso: string): boolean {
     return start >= startOfToday && start < startOfTomorrow;
 }
 
-/**
- * Sorts games by start time ascending, earliest first. Ties are
- * broken by gameId ascending so the order is stable across renders.
- */
 function sortGamesByStartTime(
     games: GameDayGameSummary[],
 ): GameDayGameSummary[] {
@@ -107,6 +97,30 @@ function sortGamesByStartTime(
         if (ta !== tb) return ta - tb;
 
         return a.gameId - b.gameId;
+    });
+}
+
+/**
+ * Sorts skaters within one team's boxscore by what they produced
+ * tonight:
+ *
+ *   1. Points desc  (G + A)
+ *   2. Goals desc   (a goal beats an assist when points are tied)
+ *   3. Assists desc (tiebreak when both points and goals are tied)
+ *   4. Last name asc (deterministic order for identical stat lines)
+ *
+ * The reference used for step 4 is the NHL's localized name string,
+ * which is "First Last" in the default locale.
+ */
+function sortSkatersByProduction(
+    skaters: NhlSkaterStats[],
+): NhlSkaterStats[] {
+    return [...skaters].sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        if (b.goals !== a.goals) return b.goals - a.goals;
+        if (b.assists !== a.assists) return b.assists - a.assists;
+
+        return a.name.default.localeCompare(b.name.default);
     });
 }
 
@@ -183,7 +197,14 @@ function TeamBoxscore({
     abbreviation: string;
     label: string;
 }) {
-    const skaters = [...team.forwards, ...team.defense];
+    // Skaters are sorted by what they produced tonight: points
+    // desc, then goals desc, then assists desc. See
+    // sortSkatersByProduction.
+    const skaters = sortSkatersByProduction([
+        ...team.forwards,
+        ...team.defense,
+    ]);
+
     const goalies = team.goalies.filter(
         (g) =>
             g.decision != null ||
@@ -294,12 +315,12 @@ function TeamRow({
     isScheduled: boolean;
 }) {
     return (
-        <div className='flex items-center justify-between gap-3 px-4 py-1.5'>
-            <div className='flex min-w-0 flex-1 items-center gap-2.5'>
-                <NhlTeamLogo abbreviation={abbreviation} size={26} />
+        <div className='flex items-center justify-between gap-2 px-3 py-[3px]'>
+            <div className='flex min-w-0 flex-1 items-center gap-2'>
+                <NhlTeamLogo abbreviation={abbreviation} size={22} />
                 <span
                     className={cn(
-                        'truncate text-base font-bold tracking-wide',
+                        'truncate text-sm font-bold tracking-wide',
                         isScheduled || !isWinning
                             ? 'text-[#7DD3FC]'
                             : 'text-white',
@@ -319,7 +340,7 @@ function TeamRow({
 
             <span
                 className={cn(
-                    'shrink-0 text-xl font-bold tabular-nums',
+                    'shrink-0 text-base font-bold tabular-nums',
                     isScheduled
                         ? 'text-[#00A8FF]/50'
                         : isWinning
@@ -391,7 +412,7 @@ function GameCard({
         >
             {/* ---- Header bar: time / status / expand hint ---- */}
             <div
-                className='flex items-center justify-between gap-2 border-b px-4 py-2'
+                className='flex items-center justify-between gap-2 border-b px-3 py-1'
                 style={{
                     borderColor: 'rgba(0, 168, 255, 0.35)',
                     background: HEADER_GRADIENT,
@@ -399,15 +420,15 @@ function GameCard({
             >
                 <div className='flex items-center gap-2'>
                     {live && (
-                        <span className='relative inline-flex h-2 w-2'>
+                        <span className='relative inline-flex h-1.5 w-1.5'>
                             <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
-                            <span className='relative inline-flex h-2 w-2 rounded-full bg-emerald-500' />
+                            <span className='relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500' />
                         </span>
                     )}
 
                     <span
                         className={cn(
-                            'text-xs font-bold uppercase tracking-wider',
+                            'text-[0.65rem] font-bold uppercase tracking-wider',
                             live && 'text-emerald-400',
                             final && 'text-muted-foreground',
                             scheduled && 'text-[#00E5FF]',
@@ -434,23 +455,23 @@ function GameCard({
                     </span>
                 </div>
 
-                <div className='flex items-center gap-2 text-muted-foreground'>
+                <div className='flex items-center gap-1 text-muted-foreground'>
                     {clickable && (
-                        <span className='text-[0.65rem] uppercase tracking-wider'>
+                        <span className='text-[0.6rem] uppercase tracking-wider'>
                             {expanded ? 'Réduire' : 'Détails'}
                         </span>
                     )}
                     {clickable &&
                         (expanded ? (
-                            <ChevronUp className='h-4 w-4' />
+                            <ChevronUp className='h-3.5 w-3.5' />
                         ) : (
-                            <ChevronDown className='h-4 w-4' />
+                            <ChevronDown className='h-3.5 w-3.5' />
                         ))}
                 </div>
             </div>
 
             {/* ---- Team rows ---- */}
-            <div className='space-y-1 py-2'>
+            <div className='py-[3px]'>
                 <TeamRow
                     abbreviation={game.awayAbbreviation}
                     score={awayScore}
@@ -587,14 +608,6 @@ export default function GameDayPage() {
         }
     };
 
-    /**
-     * Today's games, sorted by start time ascending (earliest first).
-     * The backend returns the whole NHL game week, so we filter it
-     * on the client against the user's local calendar day. A game
-     * that started late yesterday and is still LIVE or CRIT is
-     * kept, so a West Coast game running past midnight ET does not
-     * disappear from the page.
-     */
     const games = useMemo(() => {
         const today = (data?.games ?? []).filter(
             (g) => isTodayLocal(g.startTimeUtc) || isLive(g),
@@ -635,7 +648,7 @@ export default function GameDayPage() {
             )}
 
             {games.length > 0 && (
-                <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
+                <div className='grid grid-cols-1 gap-2 md:grid-cols-2'>
                     {games.map((game) => (
                         <GameCard
                             key={game.gameId}
