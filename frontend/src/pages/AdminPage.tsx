@@ -20,9 +20,12 @@ import {
     recomputeTeamTotals,
     updateStatusHistory,
     getProtectedContracts,
+    startRefreshAllGameLogs,
+    getJobStatus,
     type RosterStatusHistoryRow,
     type ProtectedPlayerContract,
     type AdminUserRow,
+    type BackgroundJobStatus,
     type FantasyTeam,
     type PlayerSearchResult,
     type RosterEntry,
@@ -313,6 +316,79 @@ export default function AdminPage() {
         number | null
     >(null);
     const [eventLogsClearing, setEventLogsClearing] = useState(false);
+
+    // --- Maintenance tools state ---
+    const [refreshAllJobId, setRefreshAllJobId] = useState<string | null>(
+        null,
+    );
+    const [refreshAllJob, setRefreshAllJob] =
+        useState<BackgroundJobStatus | null>(null);
+    const [refreshAllStarting, setRefreshAllStarting] = useState(false);
+    const [refreshAllError, setRefreshAllError] = useState<string | null>(
+        null,
+    );
+
+    // Poll the background job while it runs. Stops as soon as the
+    // job reports Completed or Failed, so no timer is left running.
+    useEffect(() => {
+        if (!refreshAllJobId) return;
+
+        let cancelled = false;
+        let timeoutId: number | null = null;
+
+        const poll = async () => {
+            try {
+                const status = await getJobStatus(refreshAllJobId);
+
+                if (cancelled) return;
+
+                setRefreshAllJob(status);
+
+                if (status.status === 'Running') {
+                    timeoutId = window.setTimeout(poll, 3000);
+                }
+            } catch {
+                // Stop polling on error. The last known status stays
+                // on screen and the user can refresh if needed.
+            }
+        };
+
+        void poll();
+
+        return () => {
+            cancelled = true;
+            if (timeoutId != null) window.clearTimeout(timeoutId);
+        };
+    }, [refreshAllJobId]);
+
+    async function handleStartRefreshAll() {
+        if (
+            !window.confirm(
+                'Lancer le rafraîchissement de tous les logs de match ? ' +
+                'Cela peut prendre plusieurs minutes et va réécrire les ' +
+                'données de chaque partie déjà en base.',
+            )
+        ) {
+            return;
+        }
+
+        setRefreshAllStarting(true);
+        setRefreshAllError(null);
+
+        try {
+            const result = await startRefreshAllGameLogs();
+            setRefreshAllJobId(result.jobId);
+            setRefreshAllJob(null);
+        } catch (err) {
+            setRefreshAllError(
+                err instanceof Error
+                    ? err.message
+                    : 'Erreur inconnue.',
+            );
+        } finally {
+            setRefreshAllStarting(false);
+        }
+    }
 
     // --- Swap section state ---
     const [swapTeamId, setSwapTeamId] = useState('');
@@ -2476,6 +2552,86 @@ export default function AdminPage() {
                                 </div>
                             );
                         })}
+                    </div>
+                )}
+            </div>
+
+            {/* ============================================================
+                Outils de maintenance
+                ============================================================ */}
+            <div className='max-w-2xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Outils de maintenance
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Actions ponctuelles pour repeupler ou réparer les
+                    données. Ces opérations s'exécutent en arrière-plan
+                    et peuvent prendre plusieurs minutes.
+                </p>
+
+                {refreshAllError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {refreshAllError}
+                    </p>
+                )}
+
+                <button
+                    type='button'
+                    onClick={() => void handleStartRefreshAll()}
+                    disabled={
+                        refreshAllStarting ||
+                        refreshAllJob?.status === 'Running'
+                    }
+                    className={secondaryButtonClass}
+                >
+                    {refreshAllStarting
+                        ? 'Démarrage...'
+                        : refreshAllJob?.status === 'Running'
+                            ? 'En cours...'
+                            : 'Rafraîchir tous les logs de match'}
+                </button>
+
+                <p className='text-xs text-muted-foreground'>
+                    Retélécharge la saison régulière complète pour chaque
+                    joueur depuis l'API LNH. Utile après l'ajout d'une
+                    colonne à la table des logs de match (par exemple le
+                    TOI).
+                </p>
+
+                {refreshAllJob && (
+                    <div className='rounded-lg border border-border bg-card px-3 py-2 text-sm'>
+                        <p className='text-foreground'>
+                            <span className='font-semibold'>
+                                Statut :
+                            </span>{' '}
+                            {refreshAllJob.status}
+                        </p>
+
+                        {refreshAllJob.progressTotal > 0 && (
+                            <p className='text-muted-foreground'>
+                                {refreshAllJob.progressCurrent} /{' '}
+                                {refreshAllJob.progressTotal}
+                            </p>
+                        )}
+
+                        {refreshAllJob.message && (
+                            <p className='text-muted-foreground'>
+                                {refreshAllJob.message}
+                            </p>
+                        )}
+
+                        {refreshAllJob.error && (
+                            <p className='text-destructive'>
+                                {refreshAllJob.error}
+                            </p>
+                        )}
+
+                        {refreshAllJob.status === 'Completed' && (
+                            <p className='text-emerald-400'>
+                                Terminé.
+                            </p>
+                        )}
                     </div>
                 )}
             </div>

@@ -1099,6 +1099,14 @@ export interface NhlPeriodDescriptor {
     periodType: string;
 }
 
+export interface NhlGameClock {
+    /** Time remaining in the current period, formatted "MM:SS". */
+    timeRemaining: string;
+    secondsRemaining: number;
+    running: boolean;
+    inIntermission: boolean;
+}
+
 export interface NhlSkaterStats {
     playerId: number;
     sweaterNumber: number | null;
@@ -1154,6 +1162,8 @@ export interface NhlBoxscoreResponse {
     gameType: number;
     gameDate: string;
     gameState: string;
+    /** Live game clock, or null before the game starts. */
+    clock: NhlGameClock | null;
     periodDescriptor: NhlPeriodDescriptor | null;
     awayTeam: NhlBoxscoreTeam;
     homeTeam: NhlBoxscoreTeam;
@@ -1406,4 +1416,66 @@ export function cancelTradeOffer(
     return apiDelete<{ message: string }>(
         `/Marketplace/offers/${id}`,
     );
+}
+
+// ---------------------------------------------------------------------
+// Background jobs (commissioner only)
+// ---------------------------------------------------------------------
+
+export interface BackgroundJobStatus {
+    id: string;
+    name: string;
+    /** "Running", "Completed" or "Failed". */
+    status: string;
+    startedAt: string;
+    completedAt: string | null;
+    error: string | null;
+    message: string | null;
+    progressCurrent: number;
+    progressTotal: number;
+    result: unknown;
+}
+
+export interface StartJobResponse {
+    jobId: string;
+    name: string;
+    startedAt: string;
+    message: string;
+}
+
+/**
+ * Starts the "refresh every player's game logs for the season"
+ * background job. Re-downloads the full game log for every player,
+ * upserts PlayerGameLog rows, and recomputes PlayerSeasonStat.
+ *
+ * Used by the admin page for backfilling columns after they are
+ * added (e.g. TimeOnIce).
+ */
+export function startRefreshAllGameLogs(
+    seasonCode = 20262027,
+    delayMsBetweenPlayers = 500,
+): Promise<StartJobResponse> {
+    const params = new URLSearchParams();
+    params.set('seasonCode', String(seasonCode));
+    params.set(
+        'delayMsBetweenPlayers',
+        String(delayMsBetweenPlayers),
+    );
+
+    return apiPost<StartJobResponse>(
+        `/Jobs/refresh-all/start?${params.toString()}`,
+        {},
+    );
+}
+
+/**
+ * Returns the current state of a background job. Skips the client
+ * cache so the progress numbers are always fresh.
+ */
+export function getJobStatus(
+    jobId: string,
+): Promise<BackgroundJobStatus> {
+    return apiGet<BackgroundJobStatus>(`/Jobs/${jobId}`, {
+        cacheTtlMs: 0,
+    });
 }

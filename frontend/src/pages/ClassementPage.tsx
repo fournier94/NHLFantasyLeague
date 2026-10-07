@@ -11,6 +11,7 @@ import {
     type RosterEntry,
     type GameDayGameSummary,
     type NhlBoxscoreResponse,
+    type NhlPeriodDescriptor,
     type NhlSkaterStats,
     type NhlGoalieStats,
 } from '@/api/client';
@@ -461,7 +462,7 @@ function ColumnHeader({
  * "MM:SS" string rather than a single digit count.
  */
 const MY_PLAYERS_GRID_COLUMNS =
-    '22px minmax(0,1fr) 22px 22px 26px 30px 42px 26px 30px';
+    '22px minmax(0,1fr) 62px 22px 22px 26px 30px 42px 26px 30px';
 
 interface PlayerGameStats {
     entry: RosterEntry;
@@ -479,6 +480,15 @@ interface PlayerGameStats {
      * dress, matching the other columns.
      */
     fantasyPoints: number | null;
+    /**
+     * Short human-readable state of the game the player is in:
+     *   - "À venir"               : not started yet
+     *   - "2e · 10:32"            : live, period 2, 10:32 left
+     *   - "2e · Entracte"         : between periods
+     *   - "Terminé"               : final horn
+     *   - "—"                     : unknown / boxscore missing
+     */
+    gameClockLabel: string;
 }
 
 type MyPlayersVariant = 'today' | 'yesterday';
@@ -606,12 +616,15 @@ function MyPlayersSection({
             }
 
             // Only fetch boxscores for games that involve at least
-            // one team the user has a player on.
+            // one team the user has a player on AND whose boxscore
+            // actually exists. Skipping FUT/PRE games avoids a 404
+            // per scheduled-but-not-yet-started game, which is what
+            // floods the browser console during the day.
             const relevantGameIds = new Set<number>();
 
             for (const entry of roster.entries) {
                 const g = gameByTeam.get(entry.nhlTeamAbbreviation);
-                if (g) relevantGameIds.add(g.gameId);
+                if (g && g.hasBoxscore) relevantGameIds.add(g.gameId);
             }
 
             const boxes = await Promise.all(
@@ -718,6 +731,7 @@ function MyPlayersSection({
                     timeOnIce,
                     shots,
                     fantasyPoints,
+                    gameClockLabel: gameClockLabel(box, game),
                 });
             }
 
@@ -835,12 +849,15 @@ function MyPlayersSection({
                         }}
                     >
                         <div />
-                        <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
-                            Joueur
-                        </div>
-                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                            G
-                        </div>
+                            <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
+                                Joueur
+                            </div>
+                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                                Temps
+                            </div>
+                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                                G
+                            </div>
                         <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
                             A
                         </div>
@@ -914,6 +931,13 @@ function MyPlayersSection({
                                         p.entry.lastName,
                                     )}
                                 </Link>
+
+                                <div
+                                    className='text-center text-[0.6rem] font-semibold tabular-nums'
+                                    style={{ color: GOLD }}
+                                >
+                                    {p.gameClockLabel}
+                                </div>
 
                                 <div className='text-center text-[#7DD3FC]'>
                                     {formatStat(p.goals)}
@@ -1010,6 +1034,69 @@ function formatPlusMinus(v: number | null): string {
     if (v == null) return '—';
     if (v > 0) return `+${v}`;
     return String(v);
+}
+
+/**
+ * Short French label for a period: "1re", "2e", "3e", "Prol." (OT),
+ * "TAB" (shootout). Falls back to "Ne" for anything unexpected.
+ */
+function formatPeriodLabel(period: NhlPeriodDescriptor): string {
+    if (period.periodType === 'OT') return 'Prol.';
+    if (period.periodType === 'SO') return 'TAB';
+    if (period.number === 1) return '1re';
+    if (period.number === 2) return '2e';
+    if (period.number === 3) return '3e';
+    return `${period.number}e`;
+}
+
+/**
+ * Human-readable state of the game the player is currently in.
+ *
+ *   - Not started (FUT / PRE)         -> "À venir"
+ *   - Live, in progress (LIVE / CRIT) -> "2e · 10:32"
+ *   - Live, between periods           -> "2e · Entracte"
+ *   - Finished (FINAL / OFF)          -> "Terminé"
+ *   - Unknown state / no boxscore     -> "—"
+ *
+ * Falls back to the schedule summary's gameState when the boxscore
+ * could not be fetched, so a row still gets a meaningful label.
+ */
+function gameClockLabel(
+    box: NhlBoxscoreResponse | null,
+    summary: GameDayGameSummary,
+): string {
+    const state = (box?.gameState ?? summary.gameState).toUpperCase();
+
+    if (state === 'FUT' || state === 'PRE') {
+        return 'À venir';
+    }
+
+    if (state === 'LIVE' || state === 'CRIT') {
+        const period = box?.periodDescriptor ?? null;
+        const clock = box?.clock ?? null;
+
+        if (!period) {
+            return 'En direct';
+        }
+
+        const periodText = formatPeriodLabel(period);
+
+        if (clock?.inIntermission) {
+            return `${periodText} · Entracte`;
+        }
+
+        if (clock?.timeRemaining) {
+            return `${periodText} · ${clock.timeRemaining}`;
+        }
+
+        return periodText;
+    }
+
+    if (state === 'FINAL' || state === 'OFF') {
+        return 'Terminé';
+    }
+
+    return '—';
 }
 
 function findSkater(

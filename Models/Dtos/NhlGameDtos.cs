@@ -130,6 +130,14 @@ namespace NhlFantasyLeague.api.Models.Dtos
         [JsonPropertyName("gameState")]
         public string GameState { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Live game clock: time remaining in the current period and
+        /// whether we are between periods. Null before the first period
+        /// and for games whose boxscore has not been fetched yet.
+        /// </summary>
+        [JsonPropertyName("clock")]
+        public NhlGameClock? Clock { get; set; }
+
         [JsonPropertyName("periodDescriptor")]
         public NhlPeriodDescriptor? PeriodDescriptor { get; set; }
 
@@ -141,6 +149,30 @@ namespace NhlFantasyLeague.api.Models.Dtos
 
         [JsonPropertyName("playerByGameStats")]
         public NhlPlayerByGameStats PlayerByGameStats { get; set; } = new();
+    }
+
+    /// <summary>
+    /// The live game clock returned by the NHL boxscore endpoint.
+    /// Present from the moment the game starts; missing (null) when
+    /// the game has not started yet.
+    /// </summary>
+    public class NhlGameClock
+    {
+        /// <summary>Time remaining in the current period, formatted "MM:SS".</summary>
+        [JsonPropertyName("timeRemaining")]
+        public string TimeRemaining { get; set; } = string.Empty;
+
+        /// <summary>Same value as seconds, handy for sorting or comparisons.</summary>
+        [JsonPropertyName("secondsRemaining")]
+        public int SecondsRemaining { get; set; }
+
+        /// <summary>True while the clock is actually running.</summary>
+        [JsonPropertyName("running")]
+        public bool Running { get; set; }
+
+        /// <summary>True when the game is between periods.</summary>
+        [JsonPropertyName("inIntermission")]
+        public bool InIntermission { get; set; }
     }
 
     public class NhlBoxscoreTeam
