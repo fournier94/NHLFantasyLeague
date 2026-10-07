@@ -735,19 +735,25 @@ function MyPlayersSection({
                 });
             }
 
-            // Sort: players who dressed first (highest PTS on top),
-            // then players who didn't dress alphabetically.
+            // Sort rules, applied in this order:
+            //   1. Team abbreviation, alphabetical. Groups players
+            //      who share an NHL team into contiguous blocks.
+            //   2. Position group: forwards first, then defense,
+            //      then goalie (positionOrder = 0 / 1 / 2).
+            //   3. Last name, so teammates of the same position
+            //      group are ordered alphabetically.
             result.sort((a, b) => {
-                const aHasStats = a.points != null;
-                const bHasStats = b.points != null;
+                const teamCmp = a.entry.nhlTeamAbbreviation.localeCompare(
+                    b.entry.nhlTeamAbbreviation,
+                );
 
-                if (aHasStats !== bHasStats) {
-                    return aHasStats ? -1 : 1;
-                }
+                if (teamCmp !== 0) return teamCmp;
 
-                if (aHasStats && bHasStats && a.points !== b.points) {
-                    return (b.points ?? 0) - (a.points ?? 0);
-                }
+                const posCmp =
+                    positionOrder(a.entry.position) -
+                    positionOrder(b.entry.position);
+
+                if (posCmp !== 0) return posCmp;
 
                 return a.entry.lastName.localeCompare(b.entry.lastName);
             });
@@ -924,7 +930,12 @@ function MyPlayersSection({
 
                                 <Link
                                     to={`/joueurs/${p.entry.nhlPlayerId}`}
-                                    className='truncate pl-0.5 text-left font-semibold text-foreground transition-colors hover:text-[#33BBFF]'
+                                    className={cn(
+                                        'truncate pl-0.5 text-left font-semibold transition-colors',
+                                        isGoaliePosition(p.entry.position)
+                                            ? 'text-[#22C55E] hover:brightness-125'
+                                            : 'text-foreground hover:text-[#33BBFF]',
+                                    )}
                                 >
                                     {shortName(
                                         p.entry.firstName,
@@ -1050,9 +1061,84 @@ function formatPeriodLabel(period: NhlPeriodDescriptor): string {
 }
 
 /**
+ * Formatter for NHL game start times, rendered in Eastern Time.
+ * fr-CA with hour12:false produces "19:00"; we replace the colon
+ * with an "h" to get the compact "19h00" that fits the narrow
+ * "Temps" column.
+ */
+const GAME_TIME_FORMATTER = new Intl.DateTimeFormat('fr-CA', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'America/Toronto',
+    hour12: false,
+});
+
+/**
+ * Formats a UTC ISO instant as the game's start time in ET, e.g.
+ * "19h00". Returns "—" when the instant cannot be parsed.
+ */
+function formatStartTimeEt(startTimeUtc: string): string {
+    const d = new Date(startTimeUtc);
+    if (Number.isNaN(d.getTime())) return '—';
+    return GAME_TIME_FORMATTER.format(d).replace(':', 'h');
+}
+
+/**
+ * Sort key for a player's position inside a team group.
+ *   0 = Forward (or unknown)
+ *   1 = Defense
+ *   2 = Goalie
+ *
+ * Used by the "Mes joueurs" tables to keep forwards first, then
+ * defensemen, then the goalie inside each team block.
+ */
+function positionOrder(position: string | null | undefined): number {
+    const p = (position ?? '').trim().toUpperCase();
+
+    if (
+        p === 'G' ||
+        p === 'GK' ||
+        p === 'GOALIE' ||
+        p === 'GOALTENDER' ||
+        p === 'GARDIEN' ||
+        p === 'GARDIEN DE BUT'
+    ) {
+        return 2;
+    }
+
+    if (
+        p === 'D' ||
+        p === 'LD' ||
+        p === 'RD' ||
+        p === 'DEFENSE' ||
+        p === 'DEFENCE' ||
+        p === 'DEFENSEMAN' ||
+        p === 'DEFENCEMAN' ||
+        p === 'DEFENSEUR' ||
+        p === 'ARRIERE' ||
+        p === 'LEFT DEFENSE' ||
+        p === 'RIGHT DEFENSE'
+    ) {
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * True when the raw position string denotes a goalie. Used to
+ * render the player name in green in the "Mes joueurs" tables.
+ */
+function isGoaliePosition(
+    position: string | null | undefined,
+): boolean {
+    return positionOrder(position) === 2;
+}
+
+/**
  * Human-readable state of the game the player is currently in.
  *
- *   - Not started (FUT / PRE)         -> "À venir"
+ *   - Not started (FUT / PRE)         -> "19h00" (start time, ET)
  *   - Live, in progress (LIVE / CRIT) -> "2e · 10:32"
  *   - Live, between periods           -> "2e · Entracte"
  *   - Finished (FINAL / OFF)          -> "Terminé"
@@ -1068,7 +1154,10 @@ function gameClockLabel(
     const state = (box?.gameState ?? summary.gameState).toUpperCase();
 
     if (state === 'FUT' || state === 'PRE') {
-        return 'À venir';
+        // Game has not started yet: show the scheduled start time
+        // in Eastern Time instead of a generic label, so the user
+        // knows exactly when the puck drops.
+        return formatStartTimeEt(summary.startTimeUtc);
     }
 
     if (state === 'LIVE' || state === 'CRIT') {
