@@ -1736,7 +1736,7 @@ function GameLogTable({
 
     return (
         <TableShell>
-            <table className='w-full min-w-[560px] text-xs tabular-nums'>
+            <table className='w-full min-w-[620px] text-xs tabular-nums'>
                 <TableHead>
                     <tr>
                         <th className={thLeft}>Date</th>
@@ -1747,6 +1747,7 @@ function GameLogTable({
                                 <th className={thRight}>Déc.</th>
                                 <th className={thRight}>BA</th>
                                 <th className={thRight}>AR</th>
+                                <th className={thRight}>TOI</th>
                                 <th className={thRight}>FP</th>
                             </>
                         ) : (
@@ -1757,6 +1758,7 @@ function GameLogTable({
                                 <th className={thRight}>PIM</th>
                                 <th className={thRight}>+/-</th>
                                 <th className={thRight}>SOG</th>
+                                <th className={thRight}>TOI</th>
                                 <th className={thRight}>FP</th>
                             </>
                         )}
@@ -1794,6 +1796,9 @@ function GameLogTable({
                                         </td>
                                         <td className={tdRight}>{game.saves}</td>
                                         <td className={tdRight}>
+                                            {game.timeOnIce ?? '—'}
+                                        </td>
+                                        <td className={tdRight}>
                                             {game.fantasyPoints}
                                         </td>
                                     </>
@@ -1811,6 +1816,9 @@ function GameLogTable({
                                                 : game.plusMinus}
                                         </td>
                                         <td className={tdRight}>{game.shots}</td>
+                                        <td className={tdRight}>
+                                            {game.timeOnIce ?? '—'}
+                                        </td>
                                         <td className={tdRight}>
                                             {game.fantasyPoints}
                                         </td>

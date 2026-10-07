@@ -3,11 +3,21 @@ import { Link } from 'react-router-dom';
 import { Crown } from 'lucide-react';
 import {
     getStandings,
+    getTeamRoster,
+    getTodayGames,
+    getGamesByDate,
+    getGameBoxscore,
     type StandingsRow,
+    type RosterEntry,
+    type GameDayGameSummary,
+    type NhlBoxscoreResponse,
+    type NhlSkaterStats,
+    type NhlGoalieStats,
 } from '@/api/client';
 import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
 import { NeonTitle } from '@/components/ui/NeonTitle';
+import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 
 type SortKey =
     | 'totalGames'
@@ -33,10 +43,163 @@ const BRONZE = '#CD7F32';
 const ELECTRIC_BRIGHT = '#33BBFF';
 const ELECTRIC_SOFT = '#7DD3FC';
 
+/**
+ * Cyan used for the PTS column header and values, matching the exact
+ * color MonEquipePage uses on its lineup table (see LineupHeader and
+ * LineupRow in MonEquipePage.tsx).
+ */
+const PTS_HIGHLIGHT = '#00F0FF';
+
 const RED_NEON = '#FF0F3D';
-const PINK_NEON = '#FF0066';
 
 const GRID_COLUMNS = '6% 20% repeat(9, calc((100% - 26%) / 9))';
+
+/**
+ * Accent used for the neon left bar on every row of the two
+ * "Mes joueurs" tables. Kept separate from the standings table's
+ * rank-based accent because those tables do not have a rank — every
+ * row belongs to the current user, so a single consistent blue tube
+ * reads better and matches the header cyan.
+ */
+const PLAYER_ROW_ACCENT = {
+    accent: '#0088FF',
+    mid: '#33BBFF',
+    core: '#7DD3FC',
+};
+
+// ---------------------------------------------------------------------
+// Auto-refresh
+// ---------------------------------------------------------------------
+
+/**
+ * Cadence used by the auto-refresh scheduler on ClassementPage.
+ *
+ *   FAST   (30s) : at least one game is LIVE or CRIT right now.
+ *   MEDIUM (60s) : no live game, but at least one game is scheduled
+ *                  today and has not started yet (FUT / PRE).
+ *   SLOW   (5m)  : no live or scheduled games today.
+ *
+ * The backend's own response cache on `standings:*` is 30 s, so
+ * polling faster than the FAST cadence would not return fresher data
+ * anyway.
+ */
+const REFRESH_FAST_MS = 30_000;
+const REFRESH_MEDIUM_MS = 60_000;
+const REFRESH_SLOW_MS = 5 * 60_000;
+
+/**
+ * Schedules periodic refreshes of the page's data. Returns a tick
+ * counter the caller uses as a dependency to know when to re-fetch.
+ *
+ * The interval is decided by looking at today's NHL schedule:
+ *   - a live game -> fast
+ *   - a scheduled game -> medium
+ *   - no game today -> slow
+ *
+ * The schedule is re-checked on every tick, so the cadence adapts
+ * automatically as the day progresses (e.g. it accelerates the moment
+ * a game goes from PRE to LIVE).
+ *
+ * Polling is paused while the tab is hidden. When the tab becomes
+ * visible again, the counter is bumped immediately so the user sees
+ * current data on the very first frame after switching back.
+ */
+function useAutoRefreshTick(): number {
+    const [tick, setTick] = useState(0);
+
+    useEffect(() => {
+        let cancelled = false;
+        let timeoutId: number | null = null;
+
+        const scheduleNext = (delayMs: number) => {
+            timeoutId = window.setTimeout(() => {
+                if (cancelled) return;
+                setTick((t) => t + 1);
+                void checkAndReschedule();
+            }, delayMs);
+        };
+
+        const checkAndReschedule = async () => {
+            if (cancelled) return;
+
+            // Pause while hidden. The visibility effect below will
+            // fire an immediate tick when the tab comes back.
+            if (
+                typeof document !== 'undefined' &&
+                document.visibilityState === 'hidden'
+            ) {
+                scheduleNext(REFRESH_FAST_MS);
+                return;
+            }
+
+            try {
+                const data = await getTodayGames();
+
+                if (cancelled) return;
+
+                const hasLive = data.games.some(
+                    (g) =>
+                        g.gameState === 'LIVE' ||
+                        g.gameState === 'CRIT',
+                );
+
+                if (hasLive) {
+                    scheduleNext(REFRESH_FAST_MS);
+                    return;
+                }
+
+                const hasScheduledToday = data.games.some(
+                    (g) =>
+                        g.gameState === 'FUT' ||
+                        g.gameState === 'PRE',
+                );
+
+                scheduleNext(
+                    hasScheduledToday
+                        ? REFRESH_MEDIUM_MS
+                        : REFRESH_SLOW_MS,
+                );
+            } catch {
+                // Network hiccup. Retry at the slow cadence so we do
+                // not hammer an unhealthy API.
+                scheduleNext(REFRESH_SLOW_MS);
+            }
+        };
+
+        // Kick off the first cycle without bumping the tick. The
+        // page's own initial-load effects already fetched everything
+        // once, so a bump here would double-fetch on mount.
+        void checkAndReschedule();
+
+        return () => {
+            cancelled = true;
+            if (timeoutId != null) {
+                window.clearTimeout(timeoutId);
+            }
+        };
+    }, []);
+
+    // When the tab becomes visible again, fire one immediate tick so
+    // the user sees current data without waiting for the next timer.
+    useEffect(() => {
+        const onVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                setTick((t) => t + 1);
+            }
+        };
+
+        document.addEventListener('visibilitychange', onVisibility);
+
+        return () => {
+            document.removeEventListener(
+                'visibilitychange',
+                onVisibility,
+            );
+        };
+    }, []);
+
+    return tick;
+}
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -134,65 +297,6 @@ function renderDailyTotal(value: number) {
 }
 
 // ---------------------------------------------------------------------
-// Decorative SVG — jagged red wings flanking the title
-// ---------------------------------------------------------------------
-
-function WingRight() {
-    return (
-        <svg
-            viewBox='0 0 140 44'
-            width='130'
-            height='42'
-            aria-hidden='true'
-            className='pointer-events-none'
-        >
-            <defs>
-                <linearGradient id='wingR' x1='0' y1='0' x2='1' y2='0'>
-                    <stop offset='0%' stopColor={PINK_NEON} stopOpacity='1' />
-                    <stop offset='55%' stopColor={RED_NEON} stopOpacity='0.9' />
-                    <stop offset='100%' stopColor={RED_NEON} stopOpacity='0.1' />
-                </linearGradient>
-            </defs>
-            <polygon
-                points='0,22 16,14 26,24 38,12 48,26 62,10 74,26 86,14 96,24 110,16 140,22 110,28 96,20 86,30 74,16 62,32 48,16 38,30 26,20 16,30 0,22'
-                fill='url(#wingR)'
-                style={{
-                    filter: `drop-shadow(0 0 3px ${PINK_NEON}) drop-shadow(0 0 6px ${RED_NEON})`,
-                }}
-            />
-        </svg>
-    );
-}
-
-function WingLeft() {
-    return (
-        <svg
-            viewBox='0 0 140 44'
-            width='130'
-            height='42'
-            aria-hidden='true'
-            className='pointer-events-none'
-            style={{ transform: 'scaleX(-1)' }}
-        >
-            <defs>
-                <linearGradient id='wingL' x1='0' y1='0' x2='1' y2='0'>
-                    <stop offset='0%' stopColor={PINK_NEON} stopOpacity='1' />
-                    <stop offset='55%' stopColor={RED_NEON} stopOpacity='0.9' />
-                    <stop offset='100%' stopColor={RED_NEON} stopOpacity='0.1' />
-                </linearGradient>
-            </defs>
-            <polygon
-                points='0,22 16,14 26,24 38,12 48,26 62,10 74,26 86,14 96,24 110,16 140,22 110,28 96,20 86,30 74,16 62,32 48,16 38,30 26,20 16,30 0,22'
-                fill='url(#wingL)'
-                style={{
-                    filter: `drop-shadow(0 0 3px ${PINK_NEON}) drop-shadow(0 0 6px ${RED_NEON})`,
-                }}
-            />
-        </svg>
-    );
-}
-
-// ---------------------------------------------------------------------
 // Small line-chart glyph used in the FP column
 // ---------------------------------------------------------------------
 
@@ -229,25 +333,33 @@ function RankCell({
 }) {
     if (rank === 1) {
         return (
-            <div
-                className='relative h-4 w-4 shrink-0'
+            <span
+                className='inline-flex h-6 w-6 items-center justify-center'
                 aria-label='Première place'
             >
-                <Crown
-                    className='absolute inset-0 h-4 w-4'
-                    strokeWidth={3}
-                    style={{ color: GOLD }}
+                <svg
+                    viewBox='0 0 24 24'
+                    className='h-4 w-4'
                     fill='none'
+                    stroke={GOLD}
+                    strokeWidth={2.4}
+                    strokeLinejoin='round'
                     aria-hidden='true'
-                />
-                <Crown
-                    className='absolute inset-0 h-4 w-4'
-                    strokeWidth={1.2}
-                    style={{ color: '#FFF4C9' }}
+                >
+                    <path d='M3 8l4.5 4L12 5l4.5 7L21 8l-2 10H5L3 8z' />
+                </svg>
+                <svg
+                    viewBox='0 0 24 24'
+                    className='absolute h-4 w-4'
                     fill='none'
+                    stroke='#FFF4C9'
+                    strokeWidth={1}
+                    strokeLinejoin='round'
                     aria-hidden='true'
-                />
-            </div>
+                >
+                    <path d='M3 8l4.5 4L12 5l4.5 7L21 8l-2 10H5L3 8z' />
+                </svg>
+            </span>
         );
     }
 
@@ -336,6 +448,597 @@ function ColumnHeader({
 }
 
 // ---------------------------------------------------------------------
+// "Mes joueurs" sections (today + yesterday)
+// ---------------------------------------------------------------------
+
+/**
+ * Compact grid for the "Mes joueurs" table.
+ *
+ * Columns: logo | name | G | A | PTS | +/- | TOI | SOG.
+ * Total fixed width is ~190px, which leaves enough room for a
+ * short name on a 375px phone once the page padding is accounted
+ * for. TOI gets the widest fixed column because it holds an
+ * "MM:SS" string rather than a single digit count.
+ */
+const MY_PLAYERS_GRID_COLUMNS =
+    '22px minmax(0,1fr) 22px 22px 26px 30px 42px 26px 30px';
+
+interface PlayerGameStats {
+    entry: RosterEntry;
+    gameId: number;
+    goals: number | null;
+    assists: number | null;
+    points: number | null;
+    plusMinus: number | null;
+    timeOnIce: string | null;
+    shots: number | null;
+    /**
+     * Fantasy points for that single game, computed on the frontend
+     * from the boxscore values (same formula the backend uses for
+     * PlayerGameLog.FantasyPoints). Null when the player did not
+     * dress, matching the other columns.
+     */
+    fantasyPoints: number | null;
+}
+
+type MyPlayersVariant = 'today' | 'yesterday';
+
+const VARIANT_CONFIG: Record<
+    MyPlayersVariant,
+    {
+        title: string;
+        emptyMessage: string;
+        loadingMessage: string;
+        errorMessage: string;
+    }
+> = {
+    today: {
+        title: "Aujourd'hui",
+        emptyMessage: "Aucun de vos joueurs ne joue aujourd'hui.",
+        loadingMessage: 'Chargement des joueurs du jour...',
+        errorMessage:
+            'Impossible de charger les statistiques du jour.',
+    },
+    yesterday: {
+        title: 'Hier',
+        emptyMessage: "Aucun de vos joueurs n'a joué hier.",
+        loadingMessage: "Chargement des joueurs d'hier...",
+        errorMessage:
+            "Impossible de charger les statistiques d'hier.",
+    },
+};
+
+/**
+ * Renders the list of players on the current user's fantasy team who
+ * played on the target day (today or yesterday), with their per-game
+ * stats for that day.
+ *
+ * Data flow:
+ *   1. Get the user's roster (GET /api/Roster/team/{id}).
+ *   2. Get the NHL schedule for the target day:
+ *        - today     -> GET /api/Games/today, then keep only the
+ *                       games that fall on the user's local calendar
+ *                       day (the endpoint returns the whole game
+ *                       week).
+ *        - yesterday -> GET /api/Games/by-date/{yyyy-MM-dd}, which
+ *                       is already filtered to that ET date on the
+ *                       server.
+ *   3. Work out which of those games involve a team the user has a
+ *      player on. Only fetch those boxscores.
+ *   4. Match each roster player to their entry in the boxscore by
+ *      NHL player id and read off G / A / PTS / +/- / TOI / SOG.
+ *
+ * The table uses the same visual chrome as the standings table:
+ * cyan hairline borders, the same header gradient, a #050A16
+ * background, and a contained neon tube on the left edge of every
+ * row.
+ *
+ * When `refreshTick` changes, the section silently re-fetches
+ * without flashing the loading state or the error state. The very
+ * first load (the one that runs on mount) still shows the loading
+ * state as before.
+ */
+function MyPlayersSection({
+    variant,
+    refreshTick,
+}: {
+    variant: MyPlayersVariant;
+    refreshTick: number;
+}) {
+    const { user } = useAuth();
+    const teamId = user?.fantasyTeamId ?? null;
+
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [players, setPlayers] = useState<PlayerGameStats[]>([]);
+
+    const config = VARIANT_CONFIG[variant];
+
+    /**
+     * Shared fetch routine. `silent` skips the loading/error toggles
+     * so an auto-refresh never flashes the UI.
+     */
+    const loadPlayers = async (
+        cancelledRef: { cancelled: boolean },
+        silent: boolean,
+    ) => {
+        if (teamId == null) {
+            if (!silent) {
+                setLoading(false);
+                setPlayers([]);
+            }
+            return;
+        }
+
+        if (!silent) {
+            setLoading(true);
+            setError(null);
+        }
+
+        try {
+            const roster = await getTeamRoster(teamId);
+
+            if (cancelledRef.cancelled) return;
+
+            // Pick the games that belong to the target day.
+            let games: GameDayGameSummary[];
+
+            if (variant === 'today') {
+                const schedule = await getTodayGames();
+                games = schedule.games.filter(
+                    (g) => isTodayLocal(g.startTimeUtc) || isLive(g),
+                );
+            } else {
+                const yesterdayIso = toIsoDate(
+                    new Date(Date.now() - 86_400_000),
+                );
+                const schedule = await getGamesByDate(yesterdayIso);
+                games = schedule.games;
+            }
+
+            if (cancelledRef.cancelled) return;
+
+            const gameByTeam = new Map<string, GameDayGameSummary>();
+
+            for (const g of games) {
+                gameByTeam.set(g.awayAbbreviation, g);
+                gameByTeam.set(g.homeAbbreviation, g);
+            }
+
+            // Only fetch boxscores for games that involve at least
+            // one team the user has a player on.
+            const relevantGameIds = new Set<number>();
+
+            for (const entry of roster.entries) {
+                const g = gameByTeam.get(entry.nhlTeamAbbreviation);
+                if (g) relevantGameIds.add(g.gameId);
+            }
+
+            const boxes = await Promise.all(
+                Array.from(relevantGameIds).map((id) =>
+                    getGameBoxscore(id).catch(() => null),
+                ),
+            );
+
+            if (cancelledRef.cancelled) return;
+
+            const boxById = new Map<number, NhlBoxscoreResponse>();
+
+            for (const box of boxes) {
+                if (box) boxById.set(box.id, box);
+            }
+
+            const result: PlayerGameStats[] = [];
+
+            for (const entry of roster.entries) {
+                const game = gameByTeam.get(entry.nhlTeamAbbreviation);
+                if (!game) continue;
+
+                const box = boxById.get(game.gameId) ?? null;
+                const isGoalie =
+                    entry.position?.toUpperCase() === 'G';
+
+                let goals: number | null = null;
+                let assists: number | null = null;
+                let points: number | null = null;
+                let plusMinus: number | null = null;
+                let timeOnIce: string | null = null;
+                let shots: number | null = null;
+                let fantasyPoints: number | null = null;
+
+                if (box) {
+                    const skater = isGoalie
+                        ? null
+                        : findSkater(box, entry.nhlPlayerId);
+
+                    const goalie = isGoalie
+                        ? findGoalie(box, entry.nhlPlayerId)
+                        : null;
+
+                    if (skater) {
+                        goals = skater.goals;
+                        assists = skater.assists;
+                        points = skater.points;
+                        plusMinus = skater.plusMinus;
+                        timeOnIce = skater.timeOnIce;
+                        shots = skater.shots;
+
+                        // Skater FP: 1 point per G/A, +3 for a hat
+                        // trick (3+ goals in the game). Same formula
+                        // as NhlGameService.ProcessSkater.
+                        fantasyPoints =
+                            skater.points +
+                            (skater.goals >= 3 ? 3 : 0);
+                    } else if (goalie) {
+                        goals = goalie.goals;
+                        assists = goalie.assists;
+                        points = goalie.points;
+                        plusMinus = null;
+                        timeOnIce = goalie.timeOnIce;
+                        shots = null;
+
+                        // Goalie FP: G + A, +2 for a win, +1 for
+                        // an overtime loss, +3 for a shutout.
+                        // Same formula as NhlGameService.ProcessGoalie.
+                        //
+                        // The backend only awards the shutout bonus
+                        // when the game is final. The NHL only sets
+                        // `decision` at the final horn, so checking
+                        // that `decision` is present is enough to
+                        // know the game is over and the shutout can
+                        // be scored.
+                        let goalieFp =
+                            goalie.goals + goalie.assists;
+
+                        if (goalie.decision === 'W') {
+                            goalieFp += 2;
+                        }
+                        if (goalie.decision === 'O') {
+                            goalieFp += 1;
+                        }
+                        if (
+                            goalie.decision != null &&
+                            goalie.goalsAgainst === 0 &&
+                            goalie.shotsAgainst > 0
+                        ) {
+                            goalieFp += 3;
+                        }
+
+                        fantasyPoints = goalieFp;
+                    }
+                }
+
+                result.push({
+                    entry,
+                    gameId: game.gameId,
+                    goals,
+                    assists,
+                    points,
+                    plusMinus,
+                    timeOnIce,
+                    shots,
+                    fantasyPoints,
+                });
+            }
+
+            // Sort: players who dressed first (highest PTS on top),
+            // then players who didn't dress alphabetically.
+            result.sort((a, b) => {
+                const aHasStats = a.points != null;
+                const bHasStats = b.points != null;
+
+                if (aHasStats !== bHasStats) {
+                    return aHasStats ? -1 : 1;
+                }
+
+                if (aHasStats && bHasStats && a.points !== b.points) {
+                    return (b.points ?? 0) - (a.points ?? 0);
+                }
+
+                return a.entry.lastName.localeCompare(b.entry.lastName);
+            });
+
+            if (cancelledRef.cancelled) return;
+
+            setPlayers(result);
+
+            if (!silent) {
+                setLoading(false);
+            }
+        } catch {
+            if (cancelledRef.cancelled) return;
+
+            if (!silent) {
+                setError(config.errorMessage);
+                setLoading(false);
+            }
+            // Silent mode swallows errors: the next tick will retry.
+        }
+    };
+
+    // Initial load. Fires on mount and whenever the team, the
+    // variant, or the error message (i.e. the display context)
+    // changes. Shows the loading state.
+    useEffect(() => {
+        const ref = { cancelled: false };
+
+        void loadPlayers(ref, false);
+
+        return () => {
+            ref.cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [teamId, variant, config.errorMessage]);
+
+    // Auto-refresh tick. Fires only when the scheduler bumps the
+    // counter, so it is silent by construction. Skipped on the very
+    // first render because refreshTick starts at 0 and the initial
+    // load effect above already fetched everything.
+    useEffect(() => {
+        if (refreshTick === 0) return;
+
+        const ref = { cancelled: false };
+
+        void loadPlayers(ref, true);
+
+        return () => {
+            ref.cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [refreshTick]);
+
+    if (teamId == null) return null;
+
+    if (loading) {
+        return (
+            <div className='mt-1 text-center text-sm text-muted-foreground'>
+                {config.loadingMessage}
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className='mt-1 text-center text-sm text-destructive'>
+                {error}
+            </div>
+        );
+    }
+
+    return (
+        <div className='mt-1'>
+            <h3 className='text-center'>
+                <NeonTitle variant='subsection' keepPulseOnMobile>
+                    {config.title}
+                </NeonTitle>
+            </h3>
+
+            {players.length === 0 ? (
+                <p className='mt-2 rounded-lg border border-border bg-card px-3 py-4 text-center text-sm text-muted-foreground'>
+                    {config.emptyMessage}
+                </p>
+            ) : (
+                <div className='relative mt-2'>
+                    {/* ---- Header row (same chrome as the standings
+                        table's header) ---- */}
+                    <div
+                        className='grid items-center rounded-t-lg border-b px-2 py-2.5 text-[0.6rem] sm:text-[0.7rem]'
+                        style={{
+                            gridTemplateColumns: MY_PLAYERS_GRID_COLUMNS,
+                            borderColor: 'rgba(51, 187, 255, 0.35)',
+                            borderTop: '1px solid #33BBFF',
+                            borderLeft: '1px solid #33BBFF',
+                            borderRight: '1px solid #33BBFF',
+                            background:
+                                'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
+                            backgroundColor: '#050A16',
+                        }}
+                    >
+                        <div />
+                        <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            Joueur
+                        </div>
+                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            G
+                        </div>
+                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            A
+                        </div>
+                        <div
+                            className='text-center font-bold uppercase tracking-wider'
+                            style={{ color: PTS_HIGHLIGHT }}
+                        >
+                            PTS
+                        </div>
+                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            +/-
+                        </div>
+                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                                TOI
+                            </div>
+                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                                SOG
+                            </div>
+                            <div
+                                className='text-center font-bold uppercase tracking-wider'
+                                style={{ color: GOLD }}
+                            >
+                                FP
+                            </div>
+                        </div>
+
+                    {/* ---- Data rows wrapper (same chrome as the
+                        standings table's row wrapper) ---- */}
+                    <div
+                        className='relative overflow-hidden rounded-b-lg'
+                        style={{
+                            borderRight: '1px solid #33BBFF',
+                            borderBottom: '1px solid #33BBFF',
+                            backgroundColor: '#050A16',
+                        }}
+                    >
+                        {players.map((p) => (
+                            <div
+                                key={p.entry.id}
+                                className='relative grid items-center border-b px-2 py-1.5 text-[0.75rem] tabular-nums transition-colors last:border-b-0 hover:bg-[#0088FF]/5 sm:py-2 sm:text-[0.85rem]'
+                                style={{
+                                    gridTemplateColumns:
+                                        MY_PLAYERS_GRID_COLUMNS,
+                                    backgroundImage: leftBarGradient(
+                                        PLAYER_ROW_ACCENT.accent,
+                                        PLAYER_ROW_ACCENT.mid,
+                                        PLAYER_ROW_ACCENT.core,
+                                    ),
+                                    borderLeft: '6px solid transparent',
+                                    backgroundOrigin: 'border-box',
+                                    backgroundClip: 'border-box',
+                                    borderBottomColor:
+                                        'rgba(51, 187, 255, 0.12)',
+                                }}
+                            >
+                                <div className='flex items-center justify-center'>
+                                    <NhlTeamLogo
+                                        abbreviation={
+                                            p.entry.nhlTeamAbbreviation
+                                        }
+                                        size={18}
+                                    />
+                                </div>
+
+                                <Link
+                                    to={`/joueurs/${p.entry.nhlPlayerId}`}
+                                    className='truncate pl-0.5 text-left font-semibold text-foreground transition-colors hover:text-[#33BBFF]'
+                                >
+                                    {shortName(
+                                        p.entry.firstName,
+                                        p.entry.lastName,
+                                    )}
+                                </Link>
+
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {formatStat(p.goals)}
+                                </div>
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {formatStat(p.assists)}
+                                </div>
+                                <div
+                                    className='text-center font-semibold'
+                                    style={{ color: PTS_HIGHLIGHT }}
+                                >
+                                    {formatStat(p.points)}
+                                </div>
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {formatPlusMinus(p.plusMinus)}
+                                </div>
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {p.timeOnIce ?? '—'}
+                                </div>
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {formatStat(p.shots)}
+                                </div>
+                                <div
+                                    className='text-center font-semibold'
+                                    style={{ color: GOLD }}
+                                >
+                                    {formatStat(p.fantasyPoints)}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------
+// Small helpers used by the sections above
+// ---------------------------------------------------------------------
+
+/**
+ * Formats a Date as a local ISO date (yyyy-MM-dd). Same logic the
+ * GameDay page uses for its date picker.
+ */
+function toIsoDate(d: Date): string {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * True when the given UTC instant falls on the user's local
+ * calendar day. Mirrors the helper in GameDayPage so both pages
+ * agree on what "today" means.
+ */
+function isTodayLocal(iso: string): boolean {
+    const start = new Date(iso);
+
+    if (Number.isNaN(start.getTime())) {
+        return false;
+    }
+
+    const now = new Date();
+
+    const startOfToday = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+    );
+
+    const startOfTomorrow = new Date(startOfToday);
+    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+
+    return start >= startOfToday && start < startOfTomorrow;
+}
+
+function isLive(g: GameDayGameSummary): boolean {
+    return g.gameState === 'LIVE' || g.gameState === 'CRIT';
+}
+
+function shortName(firstName: string, lastName: string): string {
+    const initial = firstName.trim().charAt(0);
+
+    return initial ? `${initial}. ${lastName}` : lastName;
+}
+
+function formatStat(v: number | null): string {
+    return v == null ? '—' : String(v);
+}
+
+function formatPlusMinus(v: number | null): string {
+    if (v == null) return '—';
+    if (v > 0) return `+${v}`;
+    return String(v);
+}
+
+function findSkater(
+    box: NhlBoxscoreResponse,
+    nhlPlayerId: number,
+): NhlSkaterStats | null {
+    const all = [
+        ...box.playerByGameStats.awayTeam.forwards,
+        ...box.playerByGameStats.awayTeam.defense,
+        ...box.playerByGameStats.homeTeam.forwards,
+        ...box.playerByGameStats.homeTeam.defense,
+    ];
+
+    return all.find((s) => s.playerId === nhlPlayerId) ?? null;
+}
+
+function findGoalie(
+    box: NhlBoxscoreResponse,
+    nhlPlayerId: number,
+): NhlGoalieStats | null {
+    const all = [
+        ...box.playerByGameStats.awayTeam.goalies,
+        ...box.playerByGameStats.homeTeam.goalies,
+    ];
+
+    return all.find((g) => g.playerId === nhlPlayerId) ?? null;
+}
+
+// ---------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------
 
@@ -352,6 +1055,12 @@ export default function ClassementPage() {
     const [sortDirection, setSortDirection] =
         useState<SortDirection>('desc');
 
+    // Schedule-aware refresh tick. Every bump triggers a silent
+    // re-fetch of both the standings table and the two "Mes joueurs"
+    // tables, with no loading flash and no page reload.
+    const refreshTick = useAutoRefreshTick();
+
+    // Initial load. Runs once on mount.
     useEffect(() => {
         let cancelled = false;
 
@@ -379,6 +1088,29 @@ export default function ClassementPage() {
             cancelled = true;
         };
     }, []);
+
+    // Silent refresh on auto-refresh tick. Skipped on the first
+    // render because refreshTick starts at 0 and the initial load
+    // above already fetched everything.
+    useEffect(() => {
+        if (refreshTick === 0) return;
+
+        let cancelled = false;
+
+        getStandings()
+            .then((data) => {
+                if (!cancelled) {
+                    setRows(data);
+                }
+            })
+            .catch(() => {
+                // Silent: the next tick will retry.
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [refreshTick]);
 
     function getSortValue(row: StandingsRow, key: SortKey): number {
         switch (key) {
@@ -431,10 +1163,39 @@ export default function ClassementPage() {
 
     if (loading) {
         return (
-            <section className='w-full space-y-4'>
-                <h2 className='text-center'>
-                    <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
-                </h2>
+            <section className='-mt-4 flex min-h-full w-full flex-col gap-3 sm:-mt-6'>
+                <div className='flex flex-col items-center gap-1 pb-1'>
+                    <Crown
+                        className='h-6 w-6'
+                        strokeWidth={2.2}
+                        style={{ color: GOLD }}
+                    />
+                    <div className='flex w-full max-w-3xl items-center gap-3 px-4'>
+                        <div
+                            className='h-px flex-1'
+                            style={{
+                                background:
+                                    'linear-gradient(to right, transparent, rgba(0, 168, 255, 0.9))',
+                                boxShadow:
+                                    '0 0 6px rgba(0, 168, 255, 0.7)',
+                            }}
+                        />
+                        <h2 className='shrink-0 text-center'>
+                            <NeonTitle keepPulseOnMobile>
+                                Classement
+                            </NeonTitle>
+                        </h2>
+                        <div
+                            className='h-px flex-1'
+                            style={{
+                                background:
+                                    'linear-gradient(to left, transparent, rgba(0, 168, 255, 0.9))',
+                                boxShadow:
+                                    '0 0 6px rgba(0, 168, 255, 0.7)',
+                            }}
+                        />
+                    </div>
+                </div>
                 <p className='text-center text-muted-foreground'>
                     Chargement...
                 </p>
@@ -444,76 +1205,78 @@ export default function ClassementPage() {
 
     if (error) {
         return (
-            <section className='w-full space-y-4'>
-                <h2 className='text-center'>
-                    <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
-                </h2>
+            <section className='-mt-4 flex min-h-full w-full flex-col gap-3 sm:-mt-6'>
+                <div className='flex flex-col items-center gap-1 pb-1'>
+                    <Crown
+                        className='h-6 w-6'
+                        strokeWidth={2.2}
+                        style={{ color: GOLD }}
+                    />
+                    <div className='flex w-full max-w-3xl items-center gap-3 px-4'>
+                        <div
+                            className='h-px flex-1'
+                            style={{
+                                background:
+                                    'linear-gradient(to right, transparent, rgba(0, 168, 255, 0.9))',
+                                boxShadow:
+                                    '0 0 6px rgba(0, 168, 255, 0.7)',
+                            }}
+                        />
+                        <h2 className='shrink-0 text-center'>
+                            <NeonTitle keepPulseOnMobile>
+                                Classement
+                            </NeonTitle>
+                        </h2>
+                        <div
+                            className='h-px flex-1'
+                            style={{
+                                background:
+                                    'linear-gradient(to left, transparent, rgba(0, 168, 255, 0.9))',
+                                boxShadow:
+                                    '0 0 6px rgba(0, 168, 255, 0.7)',
+                            }}
+                        />
+                    </div>
+                </div>
                 <p className='text-center text-destructive'>{error}</p>
             </section>
         );
     }
 
     return (
-        <section className='flex min-h-full w-full flex-col gap-3'>
+        <section className='-mt-4 flex min-h-full w-full flex-col gap-3 sm:-mt-6'>
             {/* ============================================================
-                Header: red wings + crown + neon title + divider
+                Header: crown above, Classement title flanked by the
+                cyan hairlines. No red aura behind the crown.
                 ============================================================ */}
-            <div className='relative flex flex-col items-center gap-1 pb-1'>
-                <div className='pointer-events-none absolute inset-x-0 top-[46px] flex items-center justify-center gap-1'>
-                    <WingLeft />
-                    <WingRight />
-                </div>
-
-                <div className='relative z-10'>
-                    <span
-                        aria-hidden='true'
-                        className='pointer-events-none absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full'
-                        style={{
-                            background: `radial-gradient(circle, rgba(255, 15, 61, 0.45) 0%, rgba(255, 0, 102, 0.15) 55%, transparent 80%)`,
-                        }}
-                    />
-                    <Crown
-                        className='relative h-6 w-6'
-                        strokeWidth={2.2}
-                        style={{
-                            color: GOLD,
-                            filter: `drop-shadow(0 0 4px rgba(255, 199, 44, 0.9))`,
-                        }}
-                    />
-                </div>
-
-                <h2 className='relative z-10 text-center'>
-                    <NeonTitle keepPulseOnMobile>Classement</NeonTitle>
-                </h2>
-
-                {/* Divider — matches the reference styling: softer
-                    cyan-blue lines with a soft outer glow, and a
-                    brighter cyan for the text with a stronger
-                    matching text-shadow. */}
-                <div className='relative z-10 mt-8 flex w-full max-w-3xl items-center gap-3 px-4'>
+            <div className='flex flex-col items-center gap-1 pb-1'>
+                <Crown
+                    className='h-6 w-6'
+                    strokeWidth={2.2}
+                    style={{ color: GOLD }}
+                />
+                <div className='flex w-full max-w-3xl items-center gap-3 px-4'>
                     <div
                         className='h-px flex-1'
                         style={{
                             background:
                                 'linear-gradient(to right, transparent, rgba(0, 168, 255, 0.9))',
-                            boxShadow: '0 0 6px rgba(0, 168, 255, 0.7)',
+                            boxShadow:
+                                '0 0 6px rgba(0, 168, 255, 0.7)',
                         }}
                     />
-                    <span
-                        className='text-[0.65rem] uppercase tracking-[0.3em] text-[#00E5FF]'
-                        style={{
-                            textShadow:
-                                '0 0 8px rgba(0, 229, 255, 0.7)',
-                        }}
-                    >
-                        Ligue de Mousse
-                    </span>
+                    <h2 className='shrink-0 text-center'>
+                        <NeonTitle keepPulseOnMobile>
+                            Classement
+                        </NeonTitle>
+                    </h2>
                     <div
                         className='h-px flex-1'
                         style={{
                             background:
                                 'linear-gradient(to left, transparent, rgba(0, 168, 255, 0.9))',
-                            boxShadow: '0 0 6px rgba(0, 168, 255, 0.7)',
+                            boxShadow:
+                                '0 0 6px rgba(0, 168, 255, 0.7)',
                         }}
                     />
                 </div>
@@ -591,7 +1354,7 @@ export default function ClassementPage() {
                             activeSortField={sortKey}
                             sortDirection={sortDirection}
                             onClick={handleSort}
-                            color={ELECTRIC_BRIGHT}
+                            color={PTS_HIGHLIGHT}
                         />
                         <ColumnHeader
                             label='HIER'
@@ -769,7 +1532,7 @@ export default function ClassementPage() {
 
                                     <div
                                         className='text-center font-semibold'
-                                        style={{ color: ELECTRIC_BRIGHT }}
+                                        style={{ color: PTS_HIGHLIGHT }}
                                     >
                                         {row.skaterPoints +
                                             row.goaliePoints}
@@ -802,6 +1565,22 @@ export default function ClassementPage() {
                     </div>
                 </div>
             )}
+
+            {/* ============================================================
+                Aujourd'hui
+                ============================================================ */}
+            <MyPlayersSection
+                variant='today'
+                refreshTick={refreshTick}
+            />
+
+            {/* ============================================================
+                Hier
+                ============================================================ */}
+            <MyPlayersSection
+                variant='yesterday'
+                refreshTick={refreshTick}
+            />
         </section>
     );
 }

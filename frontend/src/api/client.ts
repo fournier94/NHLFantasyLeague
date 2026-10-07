@@ -827,6 +827,8 @@ export interface GameLogRow {
     penaltyMinutes: number;
     plusMinus: number;
     shots: number;
+    /** Time on ice in this game, formatted "MM:SS", or null. */
+    timeOnIce: string | null;
     fantasyPoints: number;
 
     goalieWin: boolean;
@@ -1111,6 +1113,8 @@ export interface NhlSkaterStats {
     powerPlayGoals: number;
     shots: number;
     headshot: string | null;
+    /** Time on ice in this game, formatted "MM:SS". */
+    timeOnIce: string | null;
 }
 
 export interface NhlGoalieStats {
@@ -1127,6 +1131,8 @@ export interface NhlGoalieStats {
     shutouts: number;
     savePctg: number;
     starter: boolean;
+    /** Time on ice in this game, formatted "MM:SS". */
+    timeOnIce: string | null;
 }
 
 export interface NhlTeamPlayerStats {

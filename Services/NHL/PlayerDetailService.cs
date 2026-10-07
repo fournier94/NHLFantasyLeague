@@ -389,6 +389,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                         PenaltyMinutes = g.PenaltyMinutes,
                         PlusMinus = g.PlusMinus,
                         Shots = g.Shots,
+                        TimeOnIce = g.TimeOnIce,
                         FantasyPoints = g.FantasyPoints,
                         GoalieWin = g.GoalieWin,
                         GoalieOvertimeLoss = g.GoalieOvertimeLoss,

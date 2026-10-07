@@ -46,6 +46,15 @@ namespace NhlFantasyLeague.api.Services
         [JsonPropertyName("shots")]
         public int Shots { get; set; }
 
+        /// <summary>
+        /// Time on ice in this game, formatted "MM:SS". Populated for
+        /// every skater and goalie who dressed. Null when the NHL API
+        /// has not yet published it (rare, mostly pre-game) or for a
+        /// game with no per-player entry.
+        /// </summary>
+        [JsonPropertyName("toi")]
+        public string? TimeOnIce { get; set; }
+
         [JsonPropertyName("decision")]
         public string? Decision { get; set; }
 

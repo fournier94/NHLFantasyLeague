@@ -62,10 +62,10 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// loaded once from the database with AsNoTracking.
         /// </summary>
         public async Task<int> SavePlayerGameLogsAsync(
-            int nhlPlayerId,
-            int seasonCode,
-            int gameType = 2,
-            Dictionary<string, NhlTeam>? preloadedTeams = null)
+      int nhlPlayerId,
+      int seasonCode,
+      int gameType = 2,
+      Dictionary<string, NhlTeam>? preloadedTeams = null)
         {
             var playerResponse = await _playerService.GetPlayerAsync(nhlPlayerId);
 
@@ -244,6 +244,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                         PenaltyMinutes = game.PenaltyMinutes,
                         PlusMinus = game.PlusMinus,
                         Shots = game.Shots,
+                        TimeOnIce = game.TimeOnIce,
                         HatTrick = hatTrick,
                         GoalieWin = goalieWin,
                         GoalieOvertimeLoss = goalieOTLoss,
@@ -323,6 +324,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                     existingLog.PenaltyMinutes = guardedPim;
                     existingLog.PlusMinus = guardedPlusMinus;
                     existingLog.Shots = guardedShots;
+                    existingLog.TimeOnIce = MaxToi(
+                        existingLog.TimeOnIce,
+                        game.TimeOnIce);
                     existingLog.HatTrick = guardedHatTrick;
                     existingLog.GoalieWin = guardedGoalieWin;
                     existingLog.GoalieOvertimeLoss = guardedGoalieOTLoss;
@@ -342,6 +346,64 @@ namespace NhlFantasyLeague.api.Services.NHL
                 seasonCode);
 
             return savedCount;
+        }
+
+        /// <summary>
+        /// Parses an "MM:SS" time-on-ice string into total seconds.
+        /// Returns -1 when the value is null, empty, or cannot be
+        /// parsed, so callers can distinguish "no value" from "00:00".
+        /// </summary>
+        private static int ParseToiToSeconds(string? toi)
+        {
+            if (string.IsNullOrWhiteSpace(toi))
+            {
+                return -1;
+            }
+
+            var parts = toi.Split(':');
+
+            if (parts.Length != 2)
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[0], out var minutes))
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[1], out var seconds))
+            {
+                return -1;
+            }
+
+            return minutes * 60 + seconds;
+        }
+
+        /// <summary>
+        /// Returns whichever of the two "MM:SS" strings represents the
+        /// larger amount of ice time. Used by the update guard so a
+        /// stale re-fetch can never decrease a game's recorded TOI.
+        /// Nulls and unparsable values are treated as "no value".
+        /// </summary>
+        private static string? MaxToi(string? current, string? incoming)
+        {
+            var currentSeconds = ParseToiToSeconds(current);
+            var incomingSeconds = ParseToiToSeconds(incoming);
+
+            if (currentSeconds < 0)
+            {
+                return incoming;
+            }
+
+            if (incomingSeconds < 0)
+            {
+                return current;
+            }
+
+            return incomingSeconds > currentSeconds
+                ? incoming
+                : current;
         }
 
         /// <summary>

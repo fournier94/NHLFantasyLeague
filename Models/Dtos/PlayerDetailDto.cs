@@ -340,6 +340,14 @@
         public int PenaltyMinutes { get; set; }
         public int PlusMinus { get; set; }
         public int Shots { get; set; }
+
+        /// <summary>
+        /// Time on ice in this game, formatted "MM:SS". Null for rows
+        /// stored before the column was added, or when the NHL API
+        /// does not provide a value.
+        /// </summary>
+        public string? TimeOnIce { get; set; }
+
         public int FantasyPoints { get; set; }
 
         // Goalie-specific

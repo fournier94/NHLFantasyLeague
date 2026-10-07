@@ -46,6 +46,13 @@
         /// <summary>Shots on goal in this game, from the NHL game log.</summary>
         public int Shots { get; set; }
 
+        /// <summary>
+        /// Time on ice in this game, formatted "MM:SS". Null for rows
+        /// saved before the column was added, or when the NHL API does
+        /// not provide a value.
+        /// </summary>
+        public string? TimeOnIce { get; set; }
+
         public bool HatTrick { get; set; }
 
         public bool GoalieWin { get; set; }

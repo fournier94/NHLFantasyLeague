@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
     CalendarDays,
+    Crown,
     Download,
     LogIn,
     LogOut,
@@ -10,7 +11,6 @@ import {
     Search,
     ShieldCheck,
     Stethoscope,
-    Trophy,
     User,
     Users,
     X,
@@ -62,7 +62,7 @@ const MOBILE_NAV_ITEMS = [
     { to: '/mon-equipe', label: 'Mon equipe', icon: Users },
     { to: '/game-day', label: 'Game Day', icon: CalendarDays },
     { to: '/blessures', label: 'Blessures', icon: Stethoscope },
-    { to: '/classement', label: 'Classement', icon: Trophy },
+    { to: '/classement', label: 'Classement', icon: Crown },
 ];
 
 /** Colors used for the mobile shortcut icons. */
@@ -89,7 +89,11 @@ const INJURY_AURA = [
     `drop-shadow(0 0 14px rgba(239, 68, 68, 0.4))`,
 ].join(' ');
 
-const TROPHY_AURA = [
+/**
+ * Gold aura for the Classement shortcut (crown icon in the mobile
+ * top bar).
+ */
+const GOLD_AURA = [
     `drop-shadow(0 0 6px rgba(255, 199, 44, 0.85))`,
     `drop-shadow(0 0 14px rgba(255, 199, 44, 0.4))`,
 ].join(' ');
@@ -396,7 +400,7 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <Trophy className={NAV_ICON_CLASS} />
+                        <Crown className={NAV_ICON_CLASS} />
                         <span>Classement</span>
                     </Link>
 
@@ -507,7 +511,9 @@ export function TopBar() {
                         <GameDayIcon className={NAV_ICON_CLASS} />
                     </Link>
 
-                    {/* Golden Classement shortcut — mobile only. */}
+                    {/* Golden Classement shortcut — mobile only.
+                        Uses the Crown icon in the same gold aura the
+                        page header uses. */}
                     <Link
                         to='/classement'
                         aria-label='Classement'
@@ -516,11 +522,11 @@ export function TopBar() {
                             : 'text-foreground'
                             }`}
                     >
-                        <Trophy
+                        <Crown
                             className={NAV_ICON_CLASS}
                             style={{
                                 color: GOLD,
-                                filter: TROPHY_AURA,
+                                filter: GOLD_AURA,
                             }}
                         />
                     </Link>
@@ -670,35 +676,6 @@ export function TopBar() {
                                         </>
                                     )}
 
-                                    {/*
-                                     * Install section. Sits at the very
-                                     * bottom of the hamburger, below
-                                     * Déconnexion (or below the Connexion
-                                     * / Inscription pair when logged out).
-                                     *
-                                     * Layout note: the icon is stacked
-                                     * ABOVE the text and the text is allowed
-                                     * to wrap. A single-row layout would
-                                     * overflow the ~120px of horizontal
-                                     * space the button actually has once
-                                     * the sheet padding and the icon are
-                                     * taken out.
-                                     *
-                                     * Exactly one of three variants renders,
-                                     * or nothing:
-                                     *
-                                     *   - Chromium (desktop + Android):
-                                     *     a real button that triggers the
-                                     *     browser's native install prompt.
-                                     *   - iOS Safari: a hint with a small
-                                     *     illustration showing where the
-                                     *     Share button lives.
-                                     *   - Firefox (desktop + Android): a
-                                     *     hint pointing at the browser menu.
-                                     *
-                                     * Nothing shows once the app is
-                                     * already installed.
-                                     */}
                                     {!isInstalled &&
                                         (canInstall ||
                                             isIosSafari ||

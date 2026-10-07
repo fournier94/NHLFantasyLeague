@@ -218,6 +218,13 @@ namespace NhlFantasyLeague.api.Models.Dtos
         [JsonPropertyName("shots")]
         public int Shots { get; set; }
 
+        /// <summary>
+        /// Time on ice in this game, formatted "MM:SS". Populated for
+        /// every skater who dressed. Updates live during the game.
+        /// </summary>
+        [JsonPropertyName("toi")]
+        public string? TimeOnIce { get; set; }
+
         [JsonPropertyName("headshot")]
         public string? Headshot { get; set; }
     }
@@ -263,6 +270,14 @@ namespace NhlFantasyLeague.api.Models.Dtos
 
         [JsonPropertyName("starter")]
         public bool Starter { get; set; }
+
+        /// <summary>
+        /// Time on ice in this game, formatted "MM:SS". Populated for
+        /// every goalie who dressed, including a backup who never
+        /// entered the game ("00:00").
+        /// </summary>
+        [JsonPropertyName("toi")]
+        public string? TimeOnIce { get; set; }
     }
 
     public class NhlLocalizedName
