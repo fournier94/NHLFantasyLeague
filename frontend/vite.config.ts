@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => ({
             // what name shows under it, and how the window opens.
             manifest: {
                 name: 'Ligue de Mousse',
-                short_name: 'Ligue',
+                short_name: 'Mousse',
                 description:
                     "Application de la ligue de hockey fantasy Ligue de Mousse.",
                 lang: 'fr',
