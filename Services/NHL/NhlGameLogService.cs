@@ -260,26 +260,78 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
                 else
                 {
+                    // GUARD: never let a re-fetch DECREASE a per-game
+                    // counting stat. The /player/{id}/game-log endpoint
+                    // is derived and can serve a stale or partial
+                    // snapshot for hours after a game, especially in
+                    // the morning. This method is no longer called by
+                    // any scheduled job (the reconciliation now uses
+                    // the boxscore path), but the manual backfill and
+                    // refresh endpoints still reach it, so the guard
+                    // stays as defense in depth.
+
+                    var guardedGoals =
+                        Math.Max(existingLog.Goals, game.Goals);
+
+                    var guardedAssists =
+                        Math.Max(existingLog.Assists, game.Assists);
+
+                    var guardedPoints =
+                        guardedGoals + guardedAssists;
+
+                    var guardedHatTrick =
+                        existingLog.HatTrick || hatTrick;
+
+                    var guardedGoalieWin =
+                        existingLog.GoalieWin || goalieWin;
+
+                    var guardedGoalieOTLoss =
+                        existingLog.GoalieOvertimeLoss || goalieOTLoss;
+
+                    var guardedShutout =
+                        existingLog.Shutout || shutout;
+
+                    var guardedShots =
+                        Math.Max(existingLog.Shots, game.Shots);
+
+                    var guardedPim =
+                        Math.Max(existingLog.PenaltyMinutes, game.PenaltyMinutes);
+
+                    var guardedShotsAgainst =
+                        Math.Max(existingLog.ShotsAgainst, game.ShotsAgainst);
+
+                    var guardedGoalsAgainst =
+                        Math.Max(existingLog.GoalsAgainst, game.GoalsAgainst);
+
+                    var guardedPlusMinus = game.PlusMinus;
+
+                    var guardedFantasyPoints = guardedPoints;
+
+                    if (guardedHatTrick) guardedFantasyPoints += 3;
+                    if (guardedGoalieWin) guardedFantasyPoints += 2;
+                    if (guardedGoalieOTLoss) guardedFantasyPoints += 1;
+                    if (guardedShutout) guardedFantasyPoints += 3;
+
                     existingLog.SeasonId = season.Id;
                     existingLog.GameDate = game.GameDate.Value;
                     existingLog.NhlTeamId = nhlTeam.NhlTeamId;
                     existingLog.OpponentNhlTeamId = opponentTeam.NhlTeamId;
                     existingLog.IsHomeGame = game.HomeRoadFlag == "H";
-                    existingLog.Goals = game.Goals;
-                    existingLog.Assists = game.Assists;
-                    existingLog.Points = points;
-                    existingLog.PenaltyMinutes = game.PenaltyMinutes;
-                    existingLog.PlusMinus = game.PlusMinus;
-                    existingLog.Shots = game.Shots;
-                    existingLog.HatTrick = hatTrick;
-                    existingLog.GoalieWin = goalieWin;
-                    existingLog.GoalieOvertimeLoss = goalieOTLoss;
-                    existingLog.Shutout = shutout;
-                    existingLog.GoalsAgainst = game.GoalsAgainst;
-                    existingLog.ShotsAgainst = game.ShotsAgainst;
-                    existingLog.Saves = game.ShotsAgainst - game.GoalsAgainst;
+                    existingLog.Goals = guardedGoals;
+                    existingLog.Assists = guardedAssists;
+                    existingLog.Points = guardedPoints;
+                    existingLog.PenaltyMinutes = guardedPim;
+                    existingLog.PlusMinus = guardedPlusMinus;
+                    existingLog.Shots = guardedShots;
+                    existingLog.HatTrick = guardedHatTrick;
+                    existingLog.GoalieWin = guardedGoalieWin;
+                    existingLog.GoalieOvertimeLoss = guardedGoalieOTLoss;
+                    existingLog.Shutout = guardedShutout;
+                    existingLog.GoalsAgainst = guardedGoalsAgainst;
+                    existingLog.ShotsAgainst = guardedShotsAgainst;
+                    existingLog.Saves = guardedShotsAgainst - guardedGoalsAgainst;
                     existingLog.SavePercentage = game.SavePercentage;
-                    existingLog.FantasyPoints = fantasyPoints;
+                    existingLog.FantasyPoints = guardedFantasyPoints;
                 }
             }
 

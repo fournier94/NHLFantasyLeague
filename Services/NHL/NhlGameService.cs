@@ -1097,7 +1097,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                         losses: deltaL,
                         overtimeLosses: deltaOTL,
                         shutouts: deltaSO,
-                        points: 0),
+                        points: deltaP),
                     gameDate,
                     historyByPlayerId, teamDeltaByTeamId);
 
