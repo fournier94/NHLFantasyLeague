@@ -982,7 +982,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             // SA and Saves are written. The delta approach handles
             // the transition automatically when the game ends.
             var isWin = gameIsFinal && string.Equals(
-                stats.Decision, "W", StringComparison.OrdinalIgnoreCase);
+     stats.Decision, "W", StringComparison.OrdinalIgnoreCase);
 
             var isOTLoss = gameIsFinal && string.Equals(
                 stats.Decision, "O", StringComparison.OrdinalIgnoreCase);
@@ -990,7 +990,29 @@ namespace NhlFantasyLeague.api.Services.NHL
             var isLoss = gameIsFinal && string.Equals(
                 stats.Decision, "L", StringComparison.OrdinalIgnoreCase);
 
-            var isShutout = gameIsFinal && stats.Shutouts > 0;
+            // The NHL boxscore endpoint does NOT return a per-game
+            // "shutouts" field on goalies. stats.Shutouts therefore
+            // always stays at 0 through this path, and cannot be used
+            // to detect a shutout. Derive it from the real condition
+            // instead:
+            //
+            //   - game is final,
+            //   - the goalie allowed no goals,
+            //   - he actually faced shots (excludes a 0-second goalie
+            //     entry with 0/0),
+            //   - he was the goalie of record (a pulled starter with
+            //     no decision is not credited with a shutout).
+            //
+            // This matches the NHL rule: a goalie earns a shutout by
+            // playing the whole game (regulation + any OT) and
+            // allowing no goals. A shootout loss still counts as a
+            // shutout, which is why we do not require a specific
+            // decision value.
+            var isShutout =
+                gameIsFinal &&
+                stats.GoalsAgainst == 0 &&
+                stats.ShotsAgainst > 0 &&
+                stats.Decision != null;
 
             var points = stats.Goals + stats.Assists;
 
@@ -1022,7 +1044,24 @@ namespace NhlFantasyLeague.api.Services.NHL
                     return;
                 }
 
+                // A goalie's own G / A / PTS can change after review
+                // (an assist added, a goal awarded), so update those
+                // fields on the log row and pass their deltas to
+                // ApplyStatDeltas. Without this, the log row and the
+                // PlayerSeasonStat row drift on any goalie-point
+                // change.
+                var newGoals = stats.Goals;
+                var newAssists = stats.Assists;
+                var newPoints = newGoals + newAssists;
+
+                var deltaG = newGoals - existing.Goals;
+                var deltaA = newAssists - existing.Assists;
+                var deltaP = newPoints - existing.Points;
+
                 existing.GameDate = gameDate;
+                existing.Goals = newGoals;
+                existing.Assists = newAssists;
+                existing.Points = newPoints;
                 existing.GoalsAgainst = stats.GoalsAgainst;
                 existing.ShotsAgainst = stats.ShotsAgainst;
                 existing.Saves = stats.Saves;
@@ -1036,7 +1075,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 ApplyStatDeltas(
                     player.Id,
                     gamesPlayed: 0,
-                    goals: 0, assists: 0, points: 0,
+                    goals: deltaG, assists: deltaA, points: deltaP,
                     plusMinus: 0, penaltyMinutes: 0, shots: 0,
                     hatTricks: 0,
                     wins: deltaW,
