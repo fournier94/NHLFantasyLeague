@@ -462,7 +462,7 @@ function ColumnHeader({
  * "MM:SS" string rather than a single digit count.
  */
 const MY_PLAYERS_GRID_COLUMNS =
-    '22px minmax(0,1fr) 62px 22px 22px 26px 30px 42px 26px 30px';
+    '34px minmax(0,1fr) 62px 22px 22px 28px 44px 32px';
 
 interface PlayerGameStats {
     entry: RosterEntry;
@@ -847,20 +847,20 @@ function MyPlayersSection({
                 <div className='relative mt-2'>
                     {/* ---- Header row (same chrome as the standings
                         table's header) ---- */}
-                    <div
-                        className='grid items-center rounded-t-lg border-b px-2 py-2.5 text-[0.6rem] sm:text-[0.7rem]'
-                        style={{
-                            gridTemplateColumns: MY_PLAYERS_GRID_COLUMNS,
-                            borderColor: 'rgba(51, 187, 255, 0.35)',
-                            borderTop: '1px solid #33BBFF',
-                            borderLeft: '1px solid #33BBFF',
-                            borderRight: '1px solid #33BBFF',
-                            background:
-                                'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
-                            backgroundColor: '#050A16',
-                        }}
-                    >
-                        <div />
+                        <div
+                            className='grid items-center rounded-t-lg border-b px-2 py-2.5 text-[0.7rem] sm:text-[0.8rem]'
+                            style={{
+                                gridTemplateColumns: MY_PLAYERS_GRID_COLUMNS,
+                                borderColor: 'rgba(51, 187, 255, 0.35)',
+                                borderTop: '1px solid #33BBFF',
+                                borderLeft: '1px solid #33BBFF',
+                                borderRight: '1px solid #33BBFF',
+                                background:
+                                    'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
+                                backgroundColor: '#050A16',
+                            }}
+                        >
+                            <div />
                             <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
                                 Joueur
                             </div>
@@ -870,23 +870,17 @@ function MyPlayersSection({
                             <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
                                 G
                             </div>
-                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                            A
-                        </div>
-                        <div
-                            className='text-center font-bold uppercase tracking-wider'
-                            style={{ color: PTS_HIGHLIGHT }}
-                        >
-                            PTS
-                        </div>
-                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                            +/-
-                        </div>
                             <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                                TOI
+                                A
+                            </div>
+                            <div
+                                className='text-center font-bold uppercase tracking-wider'
+                                style={{ color: PTS_HIGHLIGHT }}
+                            >
+                                PTS
                             </div>
                             <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                                SOG
+                                TOI
                             </div>
                             <div
                                 className='text-center font-bold uppercase tracking-wider'
@@ -906,85 +900,80 @@ function MyPlayersSection({
                             backgroundColor: '#050A16',
                         }}
                     >
-                        {players.map((p) => (
-                            <div
-                                key={p.entry.id}
-                                className='relative grid items-center border-b px-2 py-1.5 text-[0.75rem] tabular-nums transition-colors last:border-b-0 hover:bg-[#0088FF]/5 sm:py-2 sm:text-[0.85rem]'
-                                style={{
-                                    gridTemplateColumns:
-                                        MY_PLAYERS_GRID_COLUMNS,
-                                    backgroundImage: leftBarGradient(
-                                        PLAYER_ROW_ACCENT.accent,
-                                        PLAYER_ROW_ACCENT.mid,
-                                        PLAYER_ROW_ACCENT.core,
-                                    ),
-                                    borderLeft: '6px solid transparent',
-                                    backgroundOrigin: 'border-box',
-                                    backgroundClip: 'border-box',
-                                    borderBottomColor:
-                                        'rgba(51, 187, 255, 0.12)',
-                                }}
-                            >
-                                <div className='flex items-center justify-center'>
-                                    <NhlTeamLogo
-                                        abbreviation={
-                                            p.entry.nhlTeamAbbreviation
-                                        }
-                                        size={18}
-                                    />
-                                </div>
-
-                                <Link
-                                    to={`/joueurs/${p.entry.nhlPlayerId}`}
-                                    className={cn(
-                                        'truncate pl-0.5 text-left font-semibold transition-colors',
-                                        isGoaliePosition(p.entry.position)
-                                            ? 'text-[#22C55E] hover:brightness-125'
-                                            : 'text-foreground hover:text-[#33BBFF]',
-                                    )}
-                                >
-                                    {shortName(
-                                        p.entry.firstName,
-                                        p.entry.lastName,
-                                    )}
-                                </Link>
-
+                            {players.map((p) => (
                                 <div
-                                    className='text-center text-[0.6rem] font-semibold tabular-nums'
-                                    style={{ color: GOLD }}
+                                    key={p.entry.id}
+                                    className='relative grid items-center border-b px-2 py-1.5 text-[0.85rem] tabular-nums transition-colors last:border-b-0 hover:bg-[#0088FF]/5 sm:py-2 sm:text-[0.95rem]'
+                                    style={{
+                                        gridTemplateColumns:
+                                            MY_PLAYERS_GRID_COLUMNS,
+                                        backgroundImage: leftBarGradient(
+                                            PLAYER_ROW_ACCENT.accent,
+                                            PLAYER_ROW_ACCENT.mid,
+                                            PLAYER_ROW_ACCENT.core,
+                                        ),
+                                        borderLeft: '6px solid transparent',
+                                        backgroundOrigin: 'border-box',
+                                        backgroundClip: 'border-box',
+                                        borderBottomColor:
+                                            'rgba(51, 187, 255, 0.12)',
+                                    }}
                                 >
-                                    {p.gameClockLabel}
-                                </div>
+                                    <div
+                                        className='flex items-center justify-center'
+                                        style={{ height: 20 }}
+                                    >
+                                        <NhlTeamLogo
+                                            abbreviation={p.entry.nhlTeamAbbreviation}
+                                            size={32}
+                                        />
+                                    </div>
 
-                                <div className='text-center text-[#7DD3FC]'>
-                                    {formatStat(p.goals)}
+                                    <Link
+                                        to={`/joueurs/${p.entry.nhlPlayerId}`}
+                                        className={cn(
+                                            'truncate pl-0.5 text-left font-semibold transition-colors',
+                                            isGoaliePosition(p.entry.position)
+                                                ? 'text-[#22C55E] hover:brightness-125'
+                                                : 'text-foreground hover:text-[#33BBFF]',
+                                        )}
+                                    >
+                                        {shortName(
+                                            p.entry.firstName,
+                                            p.entry.lastName,
+                                        )}
+                                    </Link>
+
+                                    <div
+                                        className='text-center text-[0.7rem] font-semibold tabular-nums'
+                                        style={{ color: GOLD }}
+                                    >
+                                        {p.gameClockLabel}
+                                    </div>
+
+                                    <div className='text-center text-[#7DD3FC]'>
+                                        {formatStat(p.goals)}
+                                    </div>
+                                    <div className='text-center text-[#7DD3FC]'>
+                                        {formatStat(p.assists)}
+                                    </div>
+                                    <div
+                                        className='text-center font-semibold'
+                                        style={{ color: PTS_HIGHLIGHT }}
+                                    >
+                                        {formatStat(p.points)}
+                                    </div>
+                                    <div className='text-center text-[#7DD3FC]'>
+                                        {p.timeOnIce ?? '—'}
+                                    </div>
+                                    <div
+                                        className='text-center font-semibold'
+                                        style={{ color: GOLD }}
+                                    >
+                                        {formatStat(p.fantasyPoints)}
+                                    </div>
                                 </div>
-                                <div className='text-center text-[#7DD3FC]'>
-                                    {formatStat(p.assists)}
-                                </div>
-                                <div
-                                    className='text-center font-semibold'
-                                    style={{ color: PTS_HIGHLIGHT }}
-                                >
-                                    {formatStat(p.points)}
-                                </div>
-                                <div className='text-center text-[#7DD3FC]'>
-                                    {formatPlusMinus(p.plusMinus)}
-                                </div>
-                                <div className='text-center text-[#7DD3FC]'>
-                                    {p.timeOnIce ?? '—'}
-                                </div>
-                                <div className='text-center text-[#7DD3FC]'>
-                                    {formatStat(p.shots)}
-                                </div>
-                                <div
-                                    className='text-center font-semibold'
-                                    style={{ color: GOLD }}
-                                >
-                                    {formatStat(p.fantasyPoints)}
-                                </div>
-                            </div>
-                        ))}
+                            ))}
                     </div>
                 </div>
             )}
@@ -1045,12 +1034,6 @@ function shortName(firstName: string, lastName: string): string {
 
 function formatStat(v: number | null): string {
     return v == null ? '—' : String(v);
-}
-
-function formatPlusMinus(v: number | null): string {
-    if (v == null) return '—';
-    if (v > 0) return `+${v}`;
-    return String(v);
 }
 
 /**
