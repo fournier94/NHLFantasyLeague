@@ -14,6 +14,7 @@ const InscriptionPage = lazy(() => import('@/pages/InscriptionPage'));
 const LiguePage = lazy(() => import('@/pages/LiguePage'));
 const GameDayPage = lazy(() => import('@/pages/GameDayPage'));
 const InjuriesPage = lazy(() => import('@/pages/InjuriesPage'));
+const MarketplacePage = lazy(() => import('@/pages/MarketplacePage'));
 
 /**
  * Root redirect. Sends a logged-in user to /mon-equipe and an
@@ -92,6 +93,7 @@ export default function App() {
                             <Route path='/classement' element={<ClassementPage />} />
                             <Route path='/game-day' element={<GameDayPage />} />
                             <Route path='/blessures' element={<InjuriesPage />} />
+                            <Route path='/marketplace' element={<MarketplacePage />} />
                             <Route path='/ligue' element={<LiguePage />} />
                             <Route path='/joueurs/:nhlPlayerId' element={<PlayerPage />} />
 

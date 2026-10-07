@@ -138,6 +138,13 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// <summary>Player position (C, LW, RW, D or G).</summary>
         public string Position { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Player age in years, computed from BirthDate. Null when the
+        /// birth date is unknown. Used by the marketplace browse tab to
+        /// filter candidate players against a demand's max age.
+        /// </summary>
+        public int? Age { get; set; }
+
         /// <summary>NHL team abbreviation of the player, for example "MTL".</summary>
         public string NhlTeamAbbreviation { get; set; } = string.Empty;
 

@@ -36,6 +36,24 @@ import {
     LEAGUE_LOGO_PULSE_REST_SCALE,
 } from '@/lib/auraConfig';
 
+// ---------------------------------------------------------------------
+// Single size knob for every non-logo icon in the top bar.
+//
+// Change this one constant to scale every icon (mobile shortcuts,
+// search, hamburger, desktop nav links, profil) at once. The league
+// logo is intentionally excluded: it keeps its own fixed h-10 size.
+//
+// Responsive via Tailwind variants. Tiers are stacked so the
+// tightest match wins:
+//   h-6 w-6                   -> default (>= 400px)
+//   max-[400px]:h-5 w-5       -> under 400px
+//
+// Adjust the pixel values or add more tiers as needed. Nothing here
+// uses JavaScript; Tailwind compiles this into plain @media rules.
+// ---------------------------------------------------------------------
+const NAV_ICON_CLASS =
+    'h-6 w-6 max-[400px]:h-5 max-[400px]:w-5';
+
 /** Nav items rendered inside the mobile hamburger. */
 const MOBILE_NAV_ITEMS = [
     { to: '/mon-equipe', label: 'Mon equipe', icon: Users },
@@ -49,16 +67,13 @@ const GOLD = '#FFC72C';
 const GAMEDAY_CYAN = '#00E5FF';
 const INJURY_RED = '#EF4444';
 const SEARCH_WHITE = '#FFFFFF';
+const MARKETPLACE_VIOLET = '#A855F7';
 
 /**
  * Two-layer glow, matching the crown effect on the Classement page:
  *
  *   drop-shadow(0 0 6px  rgba(color, 0.85))   <- inner, tight
  *   drop-shadow(0 0 14px rgba(color, 0.4))    <- outer, soft bloom
- *
- * A single solid inner ring plus a wider, dimmer halo reads cleaner
- * than the previous three-layer chain and matches the visual language
- * of the crown.
  */
 
 const GAMEDAY_AURA = [
@@ -81,16 +96,16 @@ const SEARCH_AURA = [
     `drop-shadow(0 0 14px rgba(255, 255, 255, 0.4))`,
 ].join(' ');
 
+const MARKETPLACE_AURA = [
+    `drop-shadow(0 0 6px rgba(168, 85, 247, 0.85))`,
+    `drop-shadow(0 0 14px rgba(168, 85, 247, 0.4))`,
+].join(' ');
+
 /**
  * Crossed hockey sticks with a puck, drawn as a small inline SVG.
  * Cyan neon look to match the reference image.
- *
- * The viewBox is intentionally cropped (2 1 20 20 instead of
- * 0 0 24 24) so the sticks + puck fill more of the rendered icon
- * box. This makes the visible content ~20% larger than the h-6 w-6
- * would suggest, without touching the icon's actual dimensions.
  */
-function GameDayIcon({ className = 'h-6 w-6' }: { className?: string }) {
+function GameDayIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     return (
         <svg
             viewBox='2 1 20 20'
@@ -103,36 +118,17 @@ function GameDayIcon({ className = 'h-6 w-6' }: { className?: string }) {
             style={{ filter: GAMEDAY_AURA }}
             aria-hidden='true'
         >
-            {/* Left hockey stick: shaft from top-right down to
-                bottom-left, then a blade that hooks left. */}
             <path d='M20 3 L12 13 L8 17 Q7 19 5 19 L3 19' />
-
-            {/* Right hockey stick: mirror image of the left. */}
             <path d='M4 3 L12 13 L16 17 Q17 19 19 19 L21 19' />
-
-            {/* Puck at the crossing point, drawn last so it sits on
-                top of both shafts. */}
             <ellipse cx='12' cy='12.5' rx='3.5' ry='2.2' />
         </svg>
     );
 }
 
 /**
- * Red cross used on the mobile nav for the Blessures page. Same
- * shape as the InjuryBadge on PlayerCard / PlayerPage (a thick
- * cross), scaled to match the lucide icons.
- *
- * viewBox history:
- *   - `0 0 24 24`          original (cross occupied 18/24 of the box)
- *   - `3 3 18 18`          tightly cropped to the cross, ~33% larger
- *   - `1.5 1.5 21 21`      halfway between the two
- *
- * The three options are all sub-pixel-identical from a layout
- * standpoint: the SVG element is still h-6 w-6 and its parent Link
- * still uses p-2, so nothing downstream changes. Only the fraction
- * of the rendering box that the cross fills changes.
+ * Red cross used on the mobile nav for the Blessures page.
  */
-function InjuryIcon({ className = 'h-6 w-6' }: { className?: string }) {
+function InjuryIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     return (
         <svg
             viewBox='1.5 1.5 21 21'
@@ -143,6 +139,35 @@ function InjuryIcon({ className = 'h-6 w-6' }: { className?: string }) {
         >
             <rect x='9' y='3' width='6' height='18' fill={INJURY_RED} />
             <rect x='3' y='9' width='18' height='6' fill={INJURY_RED} />
+        </svg>
+    );
+}
+
+/**
+ * Marketplace icon: two horizontal arrows facing opposite directions.
+ * viewBox is cropped (2 3 20 18) so the arrows fill the icon box the
+ * same way GameDayIcon's puck and sticks fill theirs.
+ */
+function MarketplaceIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
+    return (
+        <svg
+            viewBox='2 3 20 18'
+            className={className}
+            fill='none'
+            stroke={MARKETPLACE_VIOLET}
+            strokeWidth='1.9'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+            style={{ filter: MARKETPLACE_AURA }}
+            aria-hidden='true'
+        >
+            {/* Top arrow, pointing right */}
+            <path d='M4 8 H17' />
+            <path d='M14 5 L17 8 L14 11' />
+
+            {/* Bottom arrow, pointing left */}
+            <path d='M20 16 H7' />
+            <path d='M10 13 L7 16 L10 19' />
         </svg>
     );
 }
@@ -296,6 +321,8 @@ export function TopBar() {
         <>
             <nav className='relative flex flex-1 items-center gap-x-6'>
                 <Link to='/' className='flex items-center'>
+                    {/* League logo: FIXED size. Never touched by
+                        NAV_ICON_CLASS. */}
                     <img
                         src='/images/league/logo_07_beaver.png'
                         alt='Ligue Keeper'
@@ -309,9 +336,7 @@ export function TopBar() {
                 </Link>
 
                 {/*
-                 * Desktop nav. Reduced to Classement + Admin +
-                 * Profil + username. Déconnexion lives in the
-                 * right-side group next to the search icon.
+                 * Desktop nav.
                  */}
                 <div className='hidden flex-1 items-center justify-around md:flex'>
                     <Link
@@ -321,7 +346,7 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <CalendarDays className='h-5 w-5' />
+                        <CalendarDays className={NAV_ICON_CLASS} />
                         <span>Game Day</span>
                     </Link>
 
@@ -332,7 +357,7 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <Stethoscope className='h-5 w-5' />
+                        <Stethoscope className={NAV_ICON_CLASS} />
                         <span>Blessures</span>
                     </Link>
 
@@ -343,8 +368,19 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <Trophy className='h-5 w-5' />
+                        <Trophy className={NAV_ICON_CLASS} />
                         <span>Classement</span>
+                    </Link>
+
+                    <Link
+                        to='/marketplace'
+                        className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/marketplace'
+                            ? 'font-medium text-primary'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                    >
+                        <MarketplaceIcon className={NAV_ICON_CLASS} />
+                        <span>Marketplace</span>
                     </Link>
 
                     <div className='flex items-center gap-4'>
@@ -357,7 +393,7 @@ export function TopBar() {
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                <ShieldCheck className='h-5 w-5' />
+                                <ShieldCheck className={NAV_ICON_CLASS} />
                                 <span>Admin</span>
                             </Link>
                         )}
@@ -371,7 +407,7 @@ export function TopBar() {
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                <User className='h-6 w-6' />
+                                <User className={NAV_ICON_CLASS} />
                             </Link>
                         )}
 
@@ -389,7 +425,7 @@ export function TopBar() {
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                <LogIn className='h-5 w-5' />
+                                <LogIn className={NAV_ICON_CLASS} />
                                 <span>Connexion</span>
                             </Link>
                         )}
@@ -397,12 +433,16 @@ export function TopBar() {
                 </div>
 
                 {/*
-                 * Right-aligned group: three shortcut icons
-                 * (Blessures, Classement, Game Day) + Search +
-                 * Déconnexion (desktop) + Hamburger (mobile).
-                 * gap-5 gives each icon 20px of breathing room.
+                 * Right-aligned group: mobile shortcut icons
+                 * (Blessures, Marketplace, Game Day, Classement)
+                 * + Search + Déconnexion (desktop) + Hamburger
+                 * (mobile).
+                 *
+                 * Gap is slightly tighter on mobile (gap-3) than
+                 * on tablet+ (gap-5) so the six icons fit on a
+                 * 375px phone while still having breathing room.
                  */}
-                <div className='ml-auto flex items-center gap-5'>
+                <div className='ml-auto flex items-center gap-3 md:gap-5'>
                     {/* Blessures shortcut — mobile only. */}
                     <Link
                         to='/blessures'
@@ -412,7 +452,31 @@ export function TopBar() {
                             : 'text-foreground'
                             }`}
                     >
-                        <InjuryIcon className='h-6 w-6' />
+                        <InjuryIcon className={NAV_ICON_CLASS} />
+                    </Link>
+
+                    {/* Marketplace shortcut — mobile only. */}
+                    <Link
+                        to='/marketplace'
+                        aria-label='Marketplace'
+                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/marketplace'
+                            ? 'text-primary'
+                            : 'text-foreground'
+                            }`}
+                    >
+                        <MarketplaceIcon className={NAV_ICON_CLASS} />
+                    </Link>
+
+                    {/* Game Day shortcut — mobile only. */}
+                    <Link
+                        to='/game-day'
+                        aria-label='Game Day'
+                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/game-day'
+                            ? 'text-primary'
+                            : 'text-foreground'
+                            }`}
+                    >
+                        <GameDayIcon className={NAV_ICON_CLASS} />
                     </Link>
 
                     {/* Golden Classement shortcut — mobile only. */}
@@ -425,24 +489,12 @@ export function TopBar() {
                             }`}
                     >
                         <Trophy
-                            className='h-6 w-6'
+                            className={NAV_ICON_CLASS}
                             style={{
                                 color: GOLD,
                                 filter: TROPHY_AURA,
                             }}
                         />
-                    </Link>
-
-                    {/* Game Day shortcut — mobile only. */}
-                    <Link
-                        to='/game-day'
-                        aria-label='Game Day'
-                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/game-day'
-                            ? 'text-primary'
-                            : 'text-foreground'
-                            }`}
-                    >
-                        <GameDayIcon className='h-6 w-6' />
                     </Link>
 
                     <button
@@ -452,7 +504,7 @@ export function TopBar() {
                         className='cursor-pointer rounded-lg bg-transparent p-2 text-foreground transition-colors hover:bg-secondary'
                     >
                         <Search
-                            className='h-6 w-6'
+                            className={NAV_ICON_CLASS}
                             style={{
                                 color: SEARCH_WHITE,
                                 filter: SEARCH_AURA,
@@ -466,7 +518,7 @@ export function TopBar() {
                             onClick={handleLogout}
                             className='hidden cursor-pointer items-center gap-1.5 rounded-lg bg-transparent p-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground md:flex'
                         >
-                            <LogOut className='h-5 w-5' />
+                            <LogOut className={NAV_ICON_CLASS} />
                             <span>Déconnexion</span>
                         </button>
                     )}
@@ -477,7 +529,7 @@ export function TopBar() {
                             className='cursor-pointer rounded-lg bg-transparent p-2 text-foreground transition-colors hover:bg-secondary md:hidden'
                         >
                             <Menu
-                                className={`h-5 w-5 ${!isAuraOff(menuIconAura) ? `${auraPulseClass('filter')} aura-mobile-keep` : ''} ${!isAuraOff(menuIconAura) ? 'text-[#F2F5FA]' : ''}`}
+                                className={`${NAV_ICON_CLASS} ${!isAuraOff(menuIconAura) ? `${auraPulseClass('filter')} aura-mobile-keep` : ''} ${!isAuraOff(menuIconAura) ? 'text-[#F2F5FA]' : ''}`}
                                 style={
                                     !isAuraOff(menuIconAura)
                                         ? auraPulseStyle(menuRest, menuPeak)
@@ -596,11 +648,6 @@ export function TopBar() {
                 </div>
             </nav>
 
-            {/* Search modal — portaled to document.body so it lives
-                outside the header's stacking context.
-                Visual style matches the Classement column header:
-                cyan border + outer glow, gradient header bar, cyan
-                uppercase tracking-wider text. */}
             {searchModalOpen &&
                 createPortal(
                     <div
@@ -620,8 +667,6 @@ export function TopBar() {
                                     '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)',
                             }}
                         >
-                            {/* ---- Header bar (same style as the
-                                Classement column header row) ---- */}
                             <div
                                 className='flex items-center gap-2 border-b px-3 py-2.5'
                                 style={{
@@ -665,7 +710,6 @@ export function TopBar() {
                                 </button>
                             </div>
 
-                            {/* ---- Results list ---- */}
                             <div className='max-h-80 overflow-y-auto'>
                                 {searchQuery.trim().length >= 2 &&
                                     searching &&

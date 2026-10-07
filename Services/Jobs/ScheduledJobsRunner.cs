@@ -69,6 +69,12 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private static readonly TimeSpan CareerStatsHourEt = new(8, 30, 0);
         private static readonly TimeSpan WeeklyRefreshHourEt = new(3, 0, 0);
 
+        // Daily landing refresh for non-NHL players. Sits halfway
+        // between the 05:00 reconciliation and the 08:00 daily cleanup
+        // (1h 30m buffer on each side). The frequent refresh (every
+        // 30 min) can be blocked by this job without harm.
+        private static readonly TimeSpan NonNhlRefreshHourEt = new(6, 30, 0);
+
         // Season reconciliation: three times a day, re-fetch every
         // player's current-season game logs and landing page, then
         // rebuild the team totals. Used as a safety net for late
@@ -116,6 +122,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private const string JobReconciliation5Am = "Season reconciliation (05:00 ET)";
         private const string JobReconciliation10Am = "Season reconciliation (10:00 ET)";
         private const string JobReconciliation3Pm = "Season reconciliation (15:00 ET)";
+        private const string JobNonNhlRefresh = "Non-NHL landing refresh";
 
         // ---- Shared state (in-memory, lost on restart) ----------------
         private readonly object _stateLock = new();
@@ -502,7 +509,22 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         "15:00", JobReconciliation3Pm, todayEt, jobCt));
             }
 
-            // ---- Priority 6: career stats refresh ---------------------
+            // ---- Priority 6: non-NHL landing refresh (06:00 ET) -------
+            // Keeps the landing data (bio, career table, season-only
+            // stat columns) fresh for players who are not currently
+            // on an NHL roster. NHL-rostered players are already
+            // covered by the boxscore path and the 08:30 career
+            // refresh; this job exists only for the ones that path
+            // does not reach.
+            if (timeOfDayEt >= NonNhlRefreshHourEt &&
+                ShouldFireOncePerDayJob(JobNonNhlRefresh, todayEt))
+            {
+                FireOncePerDayJob(
+                    JobNonNhlRefresh,
+                    RunNonNhlRefreshAsync);
+            }
+
+            // ---- Priority 7: career stats refresh ---------------------
             if (timeOfDayEt >= CareerStatsHourEt &&
                 ShouldFireOncePerDayJob(JobCareerStatsRefresh, todayEt))
             {
@@ -1153,26 +1175,60 @@ namespace NhlFantasyLeague.api.Services.Jobs
         // =================================================================
 
         /// <summary>
-        /// Re-fetches every player's current-season game logs and landing
-        /// page, then rebuilds the FantasyTeamSeason totals. Runs three
-        /// times a day (05:00, 10:00, 15:00 ET) so any late stat
-        /// corrections the NHL makes after a game propagate to every
-        /// table on the site.
+        /// Re-verifies the last few days of FINAL NHL games against the
+        /// authoritative per-game boxscore endpoint, so any stat
+        /// correction the NHL made after the post-game write propagates
+        /// to every table.
         ///
-        /// The 15:00 ET slot is skipped when any NHL game starts before
-        /// 16:00 ET today. Afternoon matinees overlap with the run and
-        /// are already handled by the live refresh.
+        /// DESIGN NOTE — why this no longer re-fetches game-logs:
         ///
-        /// Uses WaitAsync(0) on the heavy lock: if any other heavy job
-        /// is running, this run is skipped and the next tick retries.
-        /// The "done" flag is only set AFTER the lock is acquired, so
-        /// a skipped run does not mark itself as complete.
+        /// The previous implementation called
+        /// RefreshCurrentSeasonForAllPlayersAsync, which for every
+        /// player re-read the derived
+        /// /v1/player/{id}/game-log/{season}/2 endpoint and blindly
+        /// overwrote existing PlayerGameLog rows with whatever that
+        /// endpoint returned. That endpoint is built asynchronously by
+        /// the NHL and can serve a partially-ingested version of the
+        /// previous night's games for hours. Running the job at 05:00,
+        /// 10:00 and 15:00 ET therefore regularly read a stale snapshot
+        /// and wrote it into the DB, then recomputed PlayerSeasonStat
+        /// and FantasyTeamSeason from the corrupted rows.
+        ///
+        /// The corrected version uses the SAME code path as the
+        /// post-game write (boxscore -> delta-based persist). The
+        /// boxscore endpoint is the source of truth the NHL's own game
+        /// pages read from, it is finished updating within seconds of
+        /// the final horn, and the delta-based persist is idempotent
+        /// and safe to re-run.
+        ///
+        /// WINDOW — why 4 days:
+        ///
+        /// GetScheduleForDateAsync filters by the arena-local gameDate,
+        /// while PlayerGameLog.GameDate is the ET calendar date of the
+        /// start instant. A West Coast game that starts after 21:00 PT
+        /// has an arena-date one day behind its ET-date. The post-game
+        /// write at 2:30 ET covers arena-date = yesterday only, which
+        /// misses those West Coast games. Looping today-1..today-4
+        /// closes that gap.
+        ///
+        /// Failure behaviour:
+        ///
+        /// The job is marked complete when every day's reconciliation
+        /// ran without throwing. Per-game boxscore errors are logged
+        /// but do not fail the job: they are almost always transient,
+        /// and re-running the same date later is already guaranteed by
+        /// the 10:00 and 15:00 slots. A thrown exception (schedule
+        /// fetch failed, DB save failed) leaves the job un-marked so
+        /// the next tick retries with the 10-minute failure backoff.
+        ///
+        /// Runs at 05:00, 10:00, 15:00 ET. The 15:00 ET slot is skipped
+        /// when an afternoon NHL game is scheduled.
         /// </summary>
         private async Task RunSeasonReconciliationAsync(
-      string slotLabel,
-      string jobName,
-      DateOnly todayEt,
-      CancellationToken ct)
+            string slotLabel,
+            string jobName,
+            DateOnly todayEt,
+            CancellationToken ct)
         {
             if (!await TryAcquireHeavyLockAsync(jobName, ct))
             {
@@ -1197,14 +1253,15 @@ namespace NhlFantasyLeague.api.Services.Jobs
                             "Season reconciliation (15:00 ET) skipped: " +
                             "afternoon NHL games are scheduled today.");
 
-                        // A skip is a "successful run": mark it done so
-                        // we don't retry every tick until tomorrow.
                         MarkJobCompleted(jobName, todayEt);
                         return;
                     }
                 }
 
                 using var scope = _scopeFactory.CreateScope();
+
+                var gameService = scope.ServiceProvider
+                    .GetRequiredService<NhlGameService>();
 
                 var gameLogService = scope.ServiceProvider
                     .GetRequiredService<NhlGameLogService>();
@@ -1218,28 +1275,102 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         "current season.",
                         slotLabel);
 
-                    // No current season is a terminal state for today;
-                    // marking it done avoids a retry storm.
                     MarkJobCompleted(jobName, todayEt);
                     return;
                 }
 
+                // 4 days back closes the arena-date vs ET-date gap on
+                // late West Coast games. Cost: ~60 boxscore calls.
+                const int DaysBack = 4;
+
+                var totalGames = 0;
+                var totalInserted = 0;
+                var totalUpdated = 0;
+                var totalFpDelta = 0;
+                var totalBoxscoreErrors = 0;
+                var anyDayThrew = false;
+
                 _logger.LogInformation(
-                    "Season reconciliation ({Slot}) starting. " +
-                    "This can take 30-45 minutes.",
-                    slotLabel);
+                    "Season reconciliation ({Slot}) starting: " +
+                    "re-verifying the last {Days} ET day(s).",
+                    slotLabel,
+                    DaysBack);
 
-                var result = await gameLogService
-                    .RefreshCurrentSeasonForAllPlayersAsync(
-                        seasonCode.Value,
-                        delayMsBetweenPlayers: 500,
-                        skip: 0,
-                        take: 0,
-                        progress: null,
-                        ct);
+                for (var i = 1; i <= DaysBack; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
 
-                // Everything the reconciliation touched is now stale in
-                // the read caches. Drop them all.
+                    var date = todayEt.AddDays(-i);
+
+                    try
+                    {
+                        var result = await gameService
+                            .PersistFinalGamesForDateAsync(date, ct);
+
+                        totalGames += result.FinalGamesOnSchedule;
+                        totalInserted += result.GameLogsInserted;
+                        totalUpdated += result.GameLogsUpdated;
+                        totalFpDelta += result.TotalFantasyPointsDelta;
+                        totalBoxscoreErrors += result.Errors.Count;
+
+                        _logger.LogInformation(
+                            "Season reconciliation ({Slot}) re-verified " +
+                            "{Date}: {Games} game(s), {Inserted} inserted, " +
+                            "{Updated} updated, {Delta} FP delta, " +
+                            "{Errors} boxscore error(s).",
+                            slotLabel,
+                            date,
+                            result.FinalGamesOnSchedule,
+                            result.GameLogsInserted,
+                            result.GameLogsUpdated,
+                            result.TotalFantasyPointsDelta,
+                            result.Errors.Count);
+                    }
+                    catch (Exception ex)
+                    {
+                        anyDayThrew = true;
+
+                        _logger.LogWarning(
+                            ex,
+                            "Season reconciliation ({Slot}) threw on " +
+                            "{Date}. Job will retry.",
+                            slotLabel,
+                            date);
+                    }
+
+                    await Task.Delay(500, ct);
+                }
+
+                // Final safety net: rebuild every FantasyTeamSeason row
+                // from scratch from PlayerGameLog + RosterStatusHistory.
+                // Idempotent, and self-correcting against any drift the
+                // previous run of the old reconciliation left behind.
+                try
+                {
+                    var totals = await gameLogService
+                        .RecomputeTeamSeasonTotalsAsync(
+                            seasonCode.Value, ct);
+
+                    _logger.LogInformation(
+                        "Season reconciliation ({Slot}) recompute: " +
+                        "{Teams} teams, {Games} games credited.",
+                        slotLabel,
+                        totals.TeamsProcessed,
+                        totals.GamesCredited);
+                }
+                catch (Exception ex)
+                {
+                    anyDayThrew = true;
+
+                    _logger.LogWarning(
+                        ex,
+                        "Season reconciliation ({Slot}) recompute threw. " +
+                        "Job will retry.",
+                        slotLabel);
+                }
+
+                // Everything the reconciliation touched is now stale
+                // in the read caches. Drop them all.
                 _responseCache.Invalidate("standings:");
                 _responseCache.Invalidate("roster:");
                 _responseCache.Invalidate("player-detail:");
@@ -1248,25 +1379,198 @@ namespace NhlFantasyLeague.api.Services.Jobs
 
                 _logger.LogInformation(
                     "Season reconciliation ({Slot}) done. " +
-                    "Players={Players}, GamesSaved={Games}, " +
-                    "TeamTotals={Teams} teams / {Credited} games credited, " +
-                    "Failed={Failed}.",
+                    "{Games} game(s) over {Days} day(s), " +
+                    "{Inserted} inserted, {Updated} updated, " +
+                    "{Delta} net FP delta, {Errors} boxscore error(s).",
                     slotLabel,
-                    result.PlayersProcessed,
-                    result.TotalGamesSaved,
-                    result.TeamTotals?.TeamsProcessed ?? 0,
-                    result.TeamTotals?.GamesCredited ?? 0,
-                    result.FailedPlayers);
+                    totalGames,
+                    DaysBack,
+                    totalInserted,
+                    totalUpdated,
+                    totalFpDelta,
+                    totalBoxscoreErrors);
 
-                // Mark done only on successful completion. A failure
-                // leaves the flag unset so the next tick retries.
-                MarkJobCompleted(jobName, todayEt);
+                // Mark done only when nothing threw. Per-game errors
+                // are tolerated; a full day throwing is not.
+                if (!anyDayThrew)
+                {
+                    MarkJobCompleted(jobName, todayEt);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(
                     ex, "Season reconciliation ({Slot}) failed.",
                     slotLabel);
+            }
+            finally
+            {
+                ReleaseHeavyLock();
+            }
+        }
+
+        /// <summary>
+        /// Daily landing refresh for players who are NOT currently on
+        /// an NHL roster. Runs once per day at 06:00 ET.
+        ///
+        /// Why this job exists:
+        ///
+        /// The season reconciliation now uses the boxscore-based persist
+        /// path and only touches players who appeared in an NHL game in
+        /// the last few days. The old reconciliation used to refresh
+        /// every player's landing page 3x/day as a side effect; that
+        /// coverage is gone. This job restores it for the one group the
+        /// other jobs do not cover: players whose RosterLocation is
+        /// anything other than NhlRoster (AHL call-ups, injured players,
+        /// unsigned prospects, free agents, retired players still in
+        /// the DB).
+        ///
+        /// NHL-rostered players are already covered by:
+        ///   - the boxscore path during games,
+        ///   - the 08:30 ET career stats refresh for players who played
+        ///     yesterday,
+        ///   - the Sunday + Wednesday weekly deep refresh.
+        ///
+        /// Only landing data is refreshed: bio, draft info, current NHL
+        /// team, PlayerCareerStat rows, and the season-only columns of
+        /// PlayerSeasonStat (PPG, PPP, GWG, SH%, SV%, GAA). The
+        /// per-game-derivable columns are NOT touched, so this job can
+        /// never corrupt scoring data even if run mid-season.
+        ///
+        /// Uses RosterLocation (maintained every 30 min by the frequent
+        /// refresh) to pick the target set. No transient flags, no
+        /// schema change, no per-run bookkeeping.
+        ///
+        /// Failure behaviour:
+        ///   - Individual player failures are logged but do not fail
+        ///     the job. A partial run is a successful run: the missed
+        ///     players get picked up on tomorrow's pass.
+        ///   - A total failure (nothing refreshed, e.g. NHL API down)
+        ///     leaves the completed-today flag unset, so the next tick
+        ///     retries with the standard 10-minute backoff.
+        /// </summary>
+        private async Task RunNonNhlRefreshAsync(
+            CancellationToken ct = default)
+        {
+            if (!await TryAcquireHeavyLockAsync(
+                    JobNonNhlRefresh, ct))
+            {
+                _logger.LogInformation(
+                    "Non-NHL landing refresh skipped: another heavy " +
+                    "job is running.");
+                return;
+            }
+
+            var completedEtDate = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
+
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+
+                var db = scope.ServiceProvider
+                    .GetRequiredService<
+                        NhlFantasyLeague.api.Data.AppDbContext>();
+
+                var playerService = scope.ServiceProvider
+                    .GetRequiredService<NhlPlayerService>();
+
+                // Non-NHL = anything that is not currently on an NHL
+                // active roster. A null RosterLocation means the
+                // feature has never been run for that player, so
+                // include him in the refresh to be safe.
+                var nhlPlayerIds = await db.Players
+                    .AsNoTracking()
+                    .Where(p =>
+                        p.NhlPlayerId > 0 &&
+                        (p.RosterLocation == null ||
+                         p.RosterLocation !=
+                             NhlFantasyLeague.api.Models.RosterLocation.NhlRoster))
+                    .Select(p => p.NhlPlayerId)
+                    .ToListAsync(ct);
+
+                var totalPlayers = nhlPlayerIds.Count;
+
+                _logger.LogInformation(
+                    "Non-NHL landing refresh starting: {Count} " +
+                    "player(s) to refresh.",
+                    totalPlayers);
+
+                if (totalPlayers == 0)
+                {
+                    MarkJobCompleted(JobNonNhlRefresh, completedEtDate);
+                    return;
+                }
+
+                var refreshed = 0;
+                var failed = 0;
+
+                foreach (var nhlId in nhlPlayerIds)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    try
+                    {
+                        var player = await playerService
+                            .SavePlayerAsync(nhlId);
+
+                        if (player != null)
+                        {
+                            refreshed++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+
+                        _logger.LogWarning(
+                            ex,
+                            "Non-NHL landing refresh failed for " +
+                            "NhlPlayerId {NhlPlayerId}.",
+                            nhlId);
+                    }
+
+                    // Release tracked entities between iterations so
+                    // memory stays flat over ~1500 players. Mirrors
+                    // the pattern used by RefreshPlayersWhoPlayedOnAsync.
+                    db.ChangeTracker.Clear();
+
+                    await Task.Delay(500, ct);
+                }
+
+                // Player detail pages for non-NHL players may now be
+                // stale. Drop the cached copies.
+                _responseCache.Invalidate("player-detail:");
+                _responseCache.Invalidate("player-career:");
+
+                _logger.LogInformation(
+                    "Non-NHL landing refresh done. Refreshed={Refreshed}, " +
+                    "Failed={Failed}.",
+                    refreshed,
+                    failed);
+
+                // Mark complete when at least one player was
+                // refreshed. A total wipeout (nothing succeeded) leaves
+                // the flag unset so the next tick retries. This is the
+                // same failure policy as the reconciliation's: tolerate
+                // per-item errors, retry on complete failure.
+                if (refreshed > 0)
+                {
+                    MarkJobCompleted(JobNonNhlRefresh, completedEtDate);
+                }
+                else if (failed > 0)
+                {
+                    _logger.LogWarning(
+                        "Non-NHL landing refresh produced zero successes " +
+                        "out of {Total} player(s). Not marking as " +
+                        "completed; will retry with backoff.",
+                        totalPlayers);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex, "Non-NHL landing refresh failed.");
             }
             finally
             {

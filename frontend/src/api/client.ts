@@ -411,6 +411,8 @@ export interface RosterEntry {
     firstName: string;
     lastName: string;
     position: string;
+    /** Player age in years, or null when unknown. */
+    age: number | null;
     nhlTeamAbbreviation: string;
     rosterStatus: string;
     rosterSlot: number;
@@ -1266,4 +1268,136 @@ export function getInjuries(
     const path = query ? `/Injuries?${query}` : '/Injuries';
 
     return apiGet<InjuryRow[]>(path, { cacheTtlMs: 30_000 });
+}
+
+// ---------------------------------------------------------------------
+// Marketplace
+// ---------------------------------------------------------------------
+
+/** One slot inside a marketplace trade offer. */
+export interface TradeOfferSlot {
+    slotIndex: number;
+
+    /** "F", "D" or "G". */
+    positionGroup: string;
+
+    /** Optional player the creator is offering. */
+    offeringPlayerId: number | null;
+    offeringPlayerFirstName: string | null;
+    offeringPlayerLastName: string | null;
+    offeringPlayerNhlTeam: string | null;
+    offeringPlayerPosition: string | null;
+
+    /**
+     * Contract covering the current season for the offered player, or
+     * null. Displayed first under the player's name on the browse tab.
+     */
+    offeringPlayerCurrentContract: PlayerContractLine | null;
+
+    /**
+     * Second contract to display, e.g. a future deal, or null. When
+     * present, the browse tab renders "current -> second" exactly like
+     * the Mon équipe player cards.
+     */
+    offeringPlayerSecondContract: PlayerContractLine | null;
+
+    /** Demand filters (all optional). */
+    demandMinContractYears: number | null;
+    demandMaxSalary: number | null;
+    demandMaxAge: number | null;
+    demandMinPointsLastYear: number | null;
+}
+
+/** A published marketplace trade offer. */
+export interface TradeOffer {
+    id: number;
+    createdByFantasyTeamId: number;
+    createdByFantasyTeamName: string;
+    createdAt: string;
+    note: string | null;
+
+    /** "Active", "Closed" or "Cancelled". */
+    status: string;
+
+    /** True when the offer was created by the current user's team. */
+    isMine: boolean;
+
+    /**
+     * True when the caller has never loaded this offer in the browse
+     * tab before. Drives the green "Nouvelle offre" badge on the
+     * frontend.
+     */
+    isNew: boolean;
+
+    slots: TradeOfferSlot[];
+}
+
+/** One slot of a create-trade-offer request. */
+export interface CreateTradeOfferSlotRequest {
+    /** "F", "D" or "G". */
+    positionGroup: string;
+    offeringPlayerId?: number | null;
+    demandMinContractYears?: number | null;
+    demandMaxSalary?: number | null;
+    demandMaxAge?: number | null;
+    demandMinPointsLastYear?: number | null;
+}
+
+/** Body of POST /api/Marketplace/offers. */
+export interface CreateTradeOfferRequest {
+    slots: CreateTradeOfferSlotRequest[];
+    note?: string | null;
+}
+
+/**
+ * Publishes a new trade offer for the current user's team. The backend
+ * resolves the team from the authenticated user; the client never sends it.
+ */
+export function createTradeOffer(
+    request: CreateTradeOfferRequest,
+): Promise<TradeOffer> {
+    return apiPost<TradeOffer>('/Marketplace/offers', request);
+}
+
+/**
+ * Lists active trade offers. By default, offers from the current user's
+ * own team are excluded, so the browse tab only shows what other
+ * managers are looking for.
+ *
+ * Read-only: this call never marks anything as seen. The frontend
+ * explicitly calls markOffersSeen() a couple of seconds after the list
+ * has been shown.
+ */
+export function listTradeOffers(
+    includeMine = false,
+): Promise<TradeOffer[]> {
+    const query = includeMine ? '?includeMine=true' : '';
+    return apiGet<TradeOffer[]>(
+        `/Marketplace/offers${query}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
+/**
+ * Records that the current user has seen the given offers. Fire-and-
+ * forget: the browse tab schedules this a couple of seconds after the
+ * list has been rendered, so a StrictMode double-mount never has time
+ * to consume the "new" state.
+ */
+export function markOffersSeen(
+    offerIds: number[],
+): Promise<{ inserted: number }> {
+    return apiPost<{ inserted: number }>(
+        '/Marketplace/offers/mark-seen',
+        { offerIds },
+    );
+}
+
+/** Cancels one of the current user's own active offers. */
+export function cancelTradeOffer(
+    id: number,
+): Promise<{ message: string }> {
+    return apiDelete<{ message: string }>(
+        `/Marketplace/offers/${id}`,
+    );
 }

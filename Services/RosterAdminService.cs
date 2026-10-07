@@ -1512,6 +1512,7 @@ namespace NhlFantasyLeague.api.Services
                 FirstName = entry.Player?.FirstName ?? string.Empty,
                 LastName = entry.Player?.LastName ?? string.Empty,
                 Position = entry.Player?.Position ?? string.Empty,
+                Age = CalculatePlayerAge(entry.Player?.BirthDate),
                 NhlTeamAbbreviation = entry.Player?.NhlTeam?.Abbreviation ?? string.Empty,
                 RosterStatus = entry.RosterStatus.ToString(),
                 RosterSlot = entry.RosterSlot,
@@ -1547,6 +1548,29 @@ namespace NhlFantasyLeague.api.Services
                 YesterdayFantasyPoints = yesterdayFantasyPoints,
                 TodayFantasyPoints = todayFantasyPoints
             };
+        }
+
+        /// <summary>
+        /// Age in years from a birth date. Mirrors the calculation used
+        /// by PlayerDetailService so the marketplace and the player
+        /// page always agree. Null when no birth date is known.
+        /// </summary>
+        private static int? CalculatePlayerAge(DateOnly? birthDate)
+        {
+            if (birthDate == null)
+            {
+                return null;
+            }
+
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var age = today.Year - birthDate.Value.Year;
+
+            if (birthDate.Value > today.AddYears(-age))
+            {
+                age--;
+            }
+
+            return age;
         }
 
         private static SeasonStatLineDto? ToSeasonStatLineDto(

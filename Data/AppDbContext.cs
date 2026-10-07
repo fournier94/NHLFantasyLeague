@@ -59,6 +59,24 @@ namespace NhlFantasyLeague.api.Data
         /// </summary>
         public DbSet<SystemEventLog> SystemEventLogs { get; set; }
 
+        /// <summary>
+        /// Marketplace offers, one row per published offer.
+        /// </summary>
+        public DbSet<TradeOffer> TradeOffers { get; set; }
+
+        /// <summary>
+        /// Slots of a marketplace offer. One row per pair
+        /// (offered player, demanded position + filters).
+        /// </summary>
+        public DbSet<TradeOfferSlot> TradeOfferSlots { get; set; }
+
+        /// <summary>
+        /// Per-user memory of which marketplace offers a user has
+        /// already seen. One row per (UserId, TradeOfferId); only its
+        /// existence matters (it drives the "Nouvelle offre" badge).
+        /// </summary>
+        public DbSet<TradeOfferView> TradeOfferViews { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Identity first, so all its table config is registered.
@@ -366,12 +384,6 @@ namespace NhlFantasyLeague.api.Data
 
             // -----------------------------------------------------------------
             // DataProtectionKey
-            //
-            // The key ring is persisted to the database so auth cookies
-            // survive API restarts and new deployments. Explicit table
-            // name is set so the migration is stable if the class is ever
-            // moved or renamed. The Xml column holds the serialized key
-            // ring and must NOT have a length limit.
             // -----------------------------------------------------------------
             modelBuilder.Entity<DataProtectionKey>(entity =>
             {
@@ -413,6 +425,83 @@ namespace NhlFantasyLeague.api.Data
             modelBuilder.Entity<SystemEventLog>()
                 .Property(e => e.DedupeKey)
                 .HasMaxLength(64);
+
+            // -----------------------------------------------------------------
+            // TradeOffer / TradeOfferSlot (Marketplace)
+            // -----------------------------------------------------------------
+
+            modelBuilder.Entity<TradeOffer>()
+                .HasOne(o => o.CreatedByFantasyTeam)
+                .WithMany()
+                .HasForeignKey(o => o.CreatedByFantasyTeamId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<TradeOffer>()
+                .HasOne(o => o.Season)
+                .WithMany()
+                .HasForeignKey(o => o.SeasonId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<TradeOffer>()
+                .Property(o => o.Note)
+                .HasMaxLength(1000);
+
+            modelBuilder.Entity<TradeOffer>()
+                .Property(o => o.Status)
+                .HasConversion<string>();
+
+            modelBuilder.Entity<TradeOffer>()
+                .HasIndex(o => new { o.Status, o.CreatedAt });
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .HasOne(s => s.TradeOffer)
+                .WithMany(o => o.Slots)
+                .HasForeignKey(s => s.TradeOfferId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .HasOne(s => s.OfferingPlayer)
+                .WithMany()
+                .HasForeignKey(s => s.OfferingPlayerId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .Property(s => s.PositionGroup)
+                .HasMaxLength(1);
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .Property(s => s.DemandMaxSalary)
+                .HasPrecision(18, 2);
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .HasIndex(s => new { s.TradeOfferId, s.SlotIndex })
+                .IsUnique();
+
+            // -----------------------------------------------------------------
+            // TradeOfferView (per-user "already seen" marker)
+            // -----------------------------------------------------------------
+
+            // Cascade on both sides:
+            //   - if the user is deleted, drop his view rows;
+            //   - if the offer is deleted (shouldn't happen, but just
+            //     in case), drop its view rows too.
+            modelBuilder.Entity<TradeOfferView>()
+                .HasOne(v => v.User)
+                .WithMany()
+                .HasForeignKey(v => v.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferView>()
+                .HasOne(v => v.TradeOffer)
+                .WithMany()
+                .HasForeignKey(v => v.TradeOfferId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // One row per (user, offer). Guarantees the "seen" marker
+            // is idempotent even if a user double-taps the browse tab.
+            modelBuilder.Entity<TradeOfferView>()
+                .HasIndex(v => new { v.UserId, v.TradeOfferId })
+                .IsUnique();
         }
     }
 }

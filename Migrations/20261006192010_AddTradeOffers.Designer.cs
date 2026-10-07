@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NhlFantasyLeague.api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NhlFantasyLeague.api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261006192010_AddTradeOffers")]
+    partial class AddTradeOffers
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1556,33 +1559,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.ToTable("TradeOfferSlots");
                 });
 
-            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferView", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("SeenAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("TradeOfferId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("UserId")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TradeOfferId");
-
-                    b.HasIndex("UserId", "TradeOfferId")
-                        .IsUnique();
-
-                    b.ToTable("TradeOfferViews");
-                });
-
             modelBuilder.Entity("NhlFantasyLeague.api.Models.WeeklyFantasyScore", b =>
                 {
                     b.Property<int>("Id")
@@ -2139,25 +2115,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Navigation("OfferingPlayer");
 
                     b.Navigation("TradeOffer");
-                });
-
-            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferView", b =>
-                {
-                    b.HasOne("NhlFantasyLeague.api.Models.TradeOffer", "TradeOffer")
-                        .WithMany()
-                        .HasForeignKey("TradeOfferId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("NhlFantasyLeague.api.Models.ApplicationUser", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("TradeOffer");
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.WeeklyFantasyScore", b =>

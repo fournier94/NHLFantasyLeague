@@ -169,13 +169,14 @@ builder.Services.AddScoped<CapFreezeContractService>();
 builder.Services.AddScoped<CapFreezeSyncService>();
 
 // ---------------------------------------------------------------------
-// League, roster and auth services
+// League, roster, marketplace and auth services
 // ---------------------------------------------------------------------
 
 builder.Services.AddScoped<NhlPopulationService>();
 builder.Services.AddScoped<LeagueSetupService>();
 builder.Services.AddScoped<RosterAdminService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<MarketplaceService>();
 
 // ---------------------------------------------------------------------
 // Health / external-source tracking
