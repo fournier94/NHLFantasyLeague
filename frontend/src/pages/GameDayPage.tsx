@@ -813,6 +813,19 @@ export default function GameDayPage() {
                     !result?.isFresh ||
                     (result?.games.length ?? 0) === 0;
 
+                // If the cached snapshot we just received is stale
+                // AND we did not already force, fire a background
+                // refresh right now. The page has already rendered
+                // with the cached data; the fresh payload updates
+                // state silently when it arrives. This avoids
+                // waiting the full 2-10 min poll interval before
+                // the user sees up-to-date scores.
+                if (needsForce && !force) {
+                    void fetchTodayGames(true).catch(() => {
+                        // Non-fatal: the next scheduled tick retries.
+                    });
+                }
+
                 const delay = hasLive ? POLL_LIVE_MS : POLL_IDLE_MS;
 
                 timeoutId = window.setTimeout(
@@ -826,7 +839,14 @@ export default function GameDayPage() {
             }
         };
 
-        void tick(true);
+        // First pass on mount: DO NOT force a synchronous NHL
+        // refresh. Serve whatever the backend already has in its
+        // in-memory cache. During a live slate the backend keeps
+        // that cache warm on its own 60 s loop, so this returns in
+        // ~50 ms instead of ~2 s. If the snapshot turns out to be
+        // stale, the block above fires a background refresh that
+        // lands a moment later without blocking the initial paint.
+        void tick(false);
 
         return () => {
             cancelled = true;

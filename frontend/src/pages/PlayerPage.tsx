@@ -92,8 +92,38 @@ function shortDate(value: string | null): string {
     return dateFormatter.format(new Date(value));
 }
 
+/**
+ * Formats a "yyyy-MM-dd" string (a DateOnly from the backend) as a
+ * short local date.
+ *
+ * IMPORTANT: do NOT pass the raw string to `new Date(...)`. The JS
+ * engine parses a bare "yyyy-MM-dd" as UTC midnight, which shifts
+ * the displayed day back by one for any user west of UTC — a game
+ * played on the 7th in North America would render as the 6th.
+ * Building the Date from its numeric parts forces local-midnight
+ * interpretation so the calendar day matches what the NHL and the
+ * user both consider "the day of the game".
+ */
 function shortGameDate(value: string): string {
-    return shortDateFormatter.format(new Date(value));
+    const parts = value.split('-');
+
+    if (parts.length !== 3) {
+        return value;
+    }
+
+    const year = Number(parts[0]);
+    const month = Number(parts[1]);
+    const day = Number(parts[2]);
+
+    if (
+        !Number.isFinite(year) ||
+        !Number.isFinite(month) ||
+        !Number.isFinite(day)
+    ) {
+        return value;
+    }
+
+    return shortDateFormatter.format(new Date(year, month - 1, day));
 }
 
 function teamDisplay(row: CareerRow): string {
