@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
     CalendarDays,
+    Download,
     LogIn,
     LogOut,
     Menu,
@@ -27,6 +28,8 @@ import {
     SheetTrigger,
 } from '@/components/ui/sheet';
 import { useAura } from '@/lib/auraContext';
+import { usePwaInstall } from '@/lib/pwaInstall';
+import { IosShareHint } from '@/components/layout/IosShareHint';
 import {
     auraPulseClass,
     auraPulseStyle,
@@ -185,6 +188,14 @@ export function TopBar() {
         updatePlayerPageStyle,
         logout,
     } = useAuth();
+
+    const {
+        canInstall,
+        isInstalled,
+        isIosSafari,
+        isFirefox,
+        promptInstall,
+    } = usePwaInstall();
 
     async function handleLogout() {
         await logout();
@@ -574,6 +585,61 @@ export function TopBar() {
                                             <span>Admin</span>
                                         </Link>
                                     )}
+
+                                    {/*
+                                     * Install block. Exactly one of three
+                                     * variants renders, or nothing:
+                                     *
+                                     *   - Chromium (desktop + Android):
+                                     *     a real button that triggers the
+                                     *     browser's native install prompt.
+                                     *   - iOS Safari: a static hint with a
+                                     *     small illustration showing where
+                                     *     the Share button lives.
+                                     *   - Firefox (desktop + Android): a
+                                     *     static hint pointing at the
+                                     *     browser menu.
+                                     *
+                                     * Nothing shows once the app is
+                                     * already installed, so the menu
+                                     * never carries a dead entry.
+                                     */}
+                                    {!isInstalled && canInstall && (
+                                        <button
+                                            type='button'
+                                            onClick={() => {
+                                                void promptInstall();
+                                            }}
+                                            className='flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-secondary'
+                                        >
+                                            <Download className='h-4 w-4' />
+                                            <span>Installer l'application</span>
+                                        </button>
+                                    )}
+
+                                    {!isInstalled &&
+                                        !canInstall &&
+                                        isIosSafari && <IosShareHint />}
+
+                                    {!isInstalled &&
+                                        !canInstall &&
+                                        isFirefox && (
+                                            <div className='rounded-lg px-3 py-2 text-xs'>
+                                                <div className='flex items-center gap-2 text-sm font-medium text-foreground'>
+                                                    <Download className='h-4 w-4' />
+                                                    <span>Installer l'application</span>
+                                                </div>
+
+                                                <p className='mt-1 leading-relaxed text-muted-foreground'>
+                                                    Ouvrez le menu du navigateur puis
+                                                    choisissez{' '}
+                                                    <span className='font-semibold text-foreground'>
+                                                        « Installer »
+                                                    </span>
+                                                    .
+                                                </p>
+                                            </div>
+                                        )}
 
                                     {isAuthenticated && (
                                         <div className='mt-2 border-t border-border pt-2'>

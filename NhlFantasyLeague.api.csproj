@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <None Remove="frontend\src\components\layout\HealthBanner.tsx" />
+    <None Remove="frontend\src\components\layout\IosShareHint.tsx" />
     <None Remove="frontend\src\components\ui\AuraButton.tsx" />
     <None Remove="frontend\src\components\ui\NeonTitle.tsx" />
     <None Remove="frontend\src\lib\auraConfig.ts" />
@@ -24,6 +25,7 @@
     <None Remove="frontend\src\lib\AuthContext.tsx" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
     <None Remove="frontend\src\lib\playerNavigation.ts" />
+    <None Remove="frontend\src\lib\pwaInstall.ts" />
     <None Remove="frontend\src\lib\scrollRestoration.ts" />
     <None Remove="frontend\src\pages\ClassementPage.tsx" />
     <None Remove="frontend\src\pages\ClassementPageClassic.tsx" />
@@ -49,6 +51,7 @@
 
   <ItemGroup>
     <TypeScriptCompile Include="frontend\src\components\layout\HealthBanner.tsx" />
+    <TypeScriptCompile Include="frontend\src\components\layout\IosShareHint.tsx" />
     <TypeScriptCompile Include="frontend\src\components\ui\AuraButton.tsx" />
     <TypeScriptCompile Include="frontend\src\components\ui\NeonTitle.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
@@ -56,6 +59,7 @@
     <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />
     <TypeScriptCompile Include="frontend\src\lib\playerNavigation.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\pwaInstall.ts" />
     <TypeScriptCompile Include="frontend\src\lib\scrollRestoration.ts" />
     <TypeScriptCompile Include="frontend\src\pages\ClassementPage.tsx" />
     <TypeScriptCompile Include="frontend\src\pages\ClassementPageClassic.tsx" />
