@@ -5,8 +5,8 @@ import {
     getStandings,
     getTeamRoster,
     getTodayGames,
-    getGamesByDate,
     getGameBoxscore,
+    getRosterGameStatsForDate,
     type StandingsRow,
     type RosterEntry,
     type GameDayGameSummary,
@@ -599,166 +599,208 @@ function MyPlayersSection({
 
             if (cancelledRef.cancelled) return;
 
-            // Pick the games that belong to the target day.
-            let games: GameDayGameSummary[];
+            const result: PlayerGameStats[] = [];
 
-            if (variant === 'today') {
-                const schedule = await getTodayGames();
-                games = schedule.games.filter(
-                    (g) => isTodayLocal(g.startTimeUtc) || isLive(g),
-                );
-            } else {
+            if (variant === 'yesterday') {
+                // ---------------------------------------------------
+                // HIER — read from PlayerGameLog, never from the
+                // NHL API. Yesterday's games are final and frozen,
+                // so the DB already has everything we need. This
+                // path is instant and cannot trigger a 429.
+                //
+                // Only players who dressed are returned by the
+                // endpoint: a PlayerGameLog row exists only when
+                // the player actually appeared in a game.
+                // ---------------------------------------------------
+
                 const yesterdayIso = toIsoDate(
                     new Date(Date.now() - 86_400_000),
                 );
-                const schedule = await getGamesByDate(yesterdayIso);
-                games = schedule.games;
-            }
 
-            if (cancelledRef.cancelled) return;
+                const stats = await getRosterGameStatsForDate(
+                    teamId,
+                    yesterdayIso,
+                );
 
-            const gameByTeam = new Map<string, GameDayGameSummary>();
+                if (cancelledRef.cancelled) return;
 
-            for (const g of games) {
-                gameByTeam.set(g.awayAbbreviation, g);
-                gameByTeam.set(g.homeAbbreviation, g);
-            }
+                // Cross-reference with the current roster so we can
+                // render the same card shape as the today variant
+                // (name, position, team abbreviation, isGoalie).
+                const entryByPlayerId = new Map<number, RosterEntry>();
 
-            // Only fetch boxscores for games that involve at least
-            // one team the user has a player on AND whose boxscore
-            // actually exists. Skipping FUT/PRE games avoids a 404
-            // per scheduled-but-not-yet-started game, which is what
-            // floods the browser console during the day.
-            const relevantGameIds = new Set<number>();
-
-            for (const entry of roster.entries) {
-                const g = gameByTeam.get(entry.nhlTeamAbbreviation);
-                if (g && g.hasBoxscore) relevantGameIds.add(g.gameId);
-            }
-
-            const boxes = await Promise.all(
-                Array.from(relevantGameIds).map((id) =>
-                    getGameBoxscore(id).catch(() => null),
-                ),
-            );
-
-            if (cancelledRef.cancelled) return;
-
-            const boxById = new Map<number, NhlBoxscoreResponse>();
-
-            for (const box of boxes) {
-                if (box) boxById.set(box.id, box);
-            }
-
-            const result: PlayerGameStats[] = [];
-
-            for (const entry of roster.entries) {
-                const game = gameByTeam.get(entry.nhlTeamAbbreviation);
-                if (!game) continue;
-
-                const box = boxById.get(game.gameId) ?? null;
-                const isGoalie =
-                    entry.position?.toUpperCase() === 'G';
-
-                let goals: number | null = null;
-                let assists: number | null = null;
-                let points: number | null = null;
-                let plusMinus: number | null = null;
-                let timeOnIce: string | null = null;
-                let shots: number | null = null;
-                let fantasyPoints: number | null = null;
-
-                if (box) {
-                    const skater = isGoalie
-                        ? null
-                        : findSkater(box, entry.nhlPlayerId);
-
-                    const goalie = isGoalie
-                        ? findGoalie(box, entry.nhlPlayerId)
-                        : null;
-
-                    if (skater) {
-                        goals = skater.goals;
-                        assists = skater.assists;
-                        points = skater.points;
-                        plusMinus = skater.plusMinus;
-                        timeOnIce = skater.timeOnIce;
-                        shots = skater.shots;
-
-                        // Skater FP: 1 point per G/A, +3 for a hat
-                        // trick (3+ goals in the game). Same formula
-                        // as NhlGameService.ProcessSkater.
-                        fantasyPoints =
-                            skater.points +
-                            (skater.goals >= 3 ? 3 : 0);
-                    } else if (goalie) {
-                        goals = goalie.goals;
-                        assists = goalie.assists;
-                        points = goalie.points;
-                        plusMinus = null;
-                        timeOnIce = goalie.timeOnIce;
-                        shots = null;
-
-                        // Goalie FP: G + A, +2 for a win, +1 for
-                        // an overtime loss, +3 for a shutout.
-                        // Same formula as NhlGameService.ProcessGoalie.
-                        //
-                        // The backend only awards the shutout bonus
-                        // when the game is final. The NHL only sets
-                        // `decision` at the final horn, so checking
-                        // that `decision` is present is enough to
-                        // know the game is over and the shutout can
-                        // be scored.
-                        let goalieFp =
-                            goalie.goals + goalie.assists;
-
-                        if (goalie.decision === 'W') {
-                            goalieFp += 2;
-                        }
-                        if (goalie.decision === 'O') {
-                            goalieFp += 1;
-                        }
-                        if (
-                            goalie.decision != null &&
-                            goalie.goalsAgainst === 0 &&
-                            goalie.shotsAgainst > 0
-                        ) {
-                            goalieFp += 3;
-                        }
-
-                        fantasyPoints = goalieFp;
-                    }
+                for (const entry of roster.entries) {
+                    entryByPlayerId.set(entry.playerId, entry);
                 }
 
-                result.push({
-                    entry,
-                    gameId: game.gameId,
-                    goals,
-                    assists,
-                    points,
-                    plusMinus,
-                    timeOnIce,
-                    shots,
-                    fantasyPoints,
-                    gameClockLabel: gameClockLabel(box, game),
-                    gameStartTimeUtc: game.startTimeUtc,
-                });
+                for (const stat of stats) {
+                    const entry = entryByPlayerId.get(stat.playerId);
+
+                    // Player not on the current roster (traded away
+                    // since yesterday) — skip.
+                    if (!entry) continue;
+
+                    result.push({
+                        entry,
+                        gameId: stat.gameId,
+                        goals: stat.goals,
+                        assists: stat.assists,
+                        points: stat.points,
+                        plusMinus: stat.plusMinus,
+                        timeOnIce: stat.timeOnIce,
+                        shots: stat.shots,
+                        fantasyPoints: stat.fantasyPoints,
+                        // Yesterday's games are always final; the
+                        // "Temps" column shows the same label for
+                        // every row.
+                        gameClockLabel: 'Terminé',
+                        // Not used by the sort for yesterday, but
+                        // the field is required on the interface.
+                        gameStartTimeUtc: '',
+                    });
+                }
+            } else {
+                // ---------------------------------------------------
+                // AUJOURD'HUI — keep the boxscore path. Live games
+                // need the clock, which only the boxscore carries.
+                // ---------------------------------------------------
+
+                const schedule = await getTodayGames();
+
+                const games = schedule.games.filter(
+                    (g) => isTodayLocal(g.startTimeUtc) || isLive(g),
+                );
+
+                if (cancelledRef.cancelled) return;
+
+                const gameByTeam = new Map<string, GameDayGameSummary>();
+
+                for (const g of games) {
+                    gameByTeam.set(g.awayAbbreviation, g);
+                    gameByTeam.set(g.homeAbbreviation, g);
+                }
+
+                // Only fetch boxscores for games that involve at
+                // least one team the user has a player on AND whose
+                // boxscore actually exists. Skipping FUT/PRE games
+                // avoids a 404 per scheduled-but-not-yet-started
+                // game, which is what floods the browser console
+                // during the day.
+                const relevantGameIds = new Set<number>();
+
+                for (const entry of roster.entries) {
+                    const g = gameByTeam.get(entry.nhlTeamAbbreviation);
+                    if (g && g.hasBoxscore) relevantGameIds.add(g.gameId);
+                }
+
+                const boxes = await Promise.all(
+                    Array.from(relevantGameIds).map((id) =>
+                        getGameBoxscore(id).catch(() => null),
+                    ),
+                );
+
+                if (cancelledRef.cancelled) return;
+
+                const boxById = new Map<number, NhlBoxscoreResponse>();
+
+                for (const box of boxes) {
+                    if (box) boxById.set(box.id, box);
+                }
+
+                for (const entry of roster.entries) {
+                    const game = gameByTeam.get(entry.nhlTeamAbbreviation);
+                    if (!game) continue;
+
+                    const box = boxById.get(game.gameId) ?? null;
+                    const isGoalie =
+                        entry.position?.toUpperCase() === 'G';
+
+                    let goals: number | null = null;
+                    let assists: number | null = null;
+                    let points: number | null = null;
+                    let plusMinus: number | null = null;
+                    let timeOnIce: string | null = null;
+                    let shots: number | null = null;
+                    let fantasyPoints: number | null = null;
+
+                    if (box) {
+                        const skater = isGoalie
+                            ? null
+                            : findSkater(box, entry.nhlPlayerId);
+
+                        const goalie = isGoalie
+                            ? findGoalie(box, entry.nhlPlayerId)
+                            : null;
+
+                        if (skater) {
+                            goals = skater.goals;
+                            assists = skater.assists;
+                            points = skater.points;
+                            plusMinus = skater.plusMinus;
+                            timeOnIce = skater.timeOnIce;
+                            shots = skater.shots;
+
+                            // Skater FP: 1 point per G/A, +3 for a hat
+                            // trick (3+ goals in the game).
+                            fantasyPoints =
+                                skater.points +
+                                (skater.goals >= 3 ? 3 : 0);
+                        } else if (goalie) {
+                            goals = goalie.goals;
+                            assists = goalie.assists;
+                            points = goalie.points;
+                            plusMinus = null;
+                            timeOnIce = goalie.timeOnIce;
+                            shots = null;
+
+                            // Goalie FP: G + A, +2 for a win, +1 for
+                            // an overtime loss, +3 for a shutout.
+                            let goalieFp =
+                                goalie.goals + goalie.assists;
+
+                            if (goalie.decision === 'W') {
+                                goalieFp += 2;
+                            }
+                            if (goalie.decision === 'O') {
+                                goalieFp += 1;
+                            }
+                            if (
+                                goalie.decision != null &&
+                                goalie.goalsAgainst === 0 &&
+                                goalie.shotsAgainst > 0
+                            ) {
+                                goalieFp += 3;
+                            }
+
+                            fantasyPoints = goalieFp;
+                        }
+                    }
+
+                    result.push({
+                        entry,
+                        gameId: game.gameId,
+                        goals,
+                        assists,
+                        points,
+                        plusMinus,
+                        timeOnIce,
+                        shots,
+                        fantasyPoints,
+                        gameClockLabel: gameClockLabel(box, game),
+                        gameStartTimeUtc: game.startTimeUtc,
+                    });
+                }
             }
 
             // Sort rules, applied in this order:
             //   1. Fantasy points descending — biggest contributors
             //      on top. Players who did not dress (null FP) sink
             //      to the bottom.
-            //   2. Scheduled game start time (UTC, ascending) as the
-            //      tiebreak. All players who dressed in the same
-            //      game share the same start time, so they form a
-            //      contiguous block ordered alphabetically by the
-            //      next key. Using startTimeUtc (a fixed attribute
-            //      of the game) instead of the live clock means a
-            //      tie never re-shuffles mid-game.
-            //   3. Last name A→Z as the final tiebreak, so a group
-            //      of players on the same FP and same game stays
-            //      stable and readable.
+            //   2. Scheduled game start time (UTC, ascending). For
+            //      today this keeps live rows stable while a game
+            //      progresses. For yesterday all values are '' so
+            //      this is a no-op.
+            //   3. Last name A→Z as the final tiebreak.
             result.sort((a, b) => {
                 const aHasFp = a.fantasyPoints != null;
                 const bHasFp = b.fantasyPoints != null;

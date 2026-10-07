@@ -1943,12 +1943,12 @@ namespace NhlFantasyLeague.api.Services
         }
 
         private void AddHistoryRow(
-            int playerId,
-            int fantasyTeamId,
-            int seasonId,
-            RosterStatus status,
-            DateTime effectiveAt,
-            string? note)
+        int playerId,
+        int fantasyTeamId,
+        int seasonId,
+        RosterStatus status,
+        DateTime effectiveAt,
+        string? note)
         {
             _dbContext.RosterStatusHistories.Add(new RosterStatusHistory
             {
@@ -1960,6 +1960,85 @@ namespace NhlFantasyLeague.api.Services
                 CreatedAt = DateTime.UtcNow,
                 Note = note
             });
+        }
+
+        /// <summary>
+        /// Returns per-game stats for every player on the given
+        /// fantasy team who dressed for an NHL game on the given
+        /// calendar date (ET).
+        ///
+        /// This reads PlayerGameLog instead of the NHL boxscore
+        /// endpoint, which means:
+        ///   - Zero calls to the NHL API.
+        ///   - Instant response (one indexed DB query).
+        ///   - Correct TOI, because PlayerGameLog.TimeOnIce is
+        ///     populated by the live refresh and post-game write.
+        ///
+        /// Only players who actually appeared in a game are
+        /// returned. A player who was on the roster but did not
+        /// dress (healthy scratch, AHL assignment, etc.) has no
+        /// PlayerGameLog row for that date and is therefore omitted,
+        /// which matches the desired UX for the "Hier" table.
+        ///
+        /// Used by ClassementPage's "Hier" section.
+        /// </summary>
+        public async Task<List<RosterPlayerGameStatDto>>
+            GetRosterGameStatsForDateAsync(
+                int fantasyTeamId,
+                DateOnly date,
+                CancellationToken ct = default)
+        {
+            // Resolve the current season. PlayerGameLog rows are
+            // scoped to a season, so we need its id to filter.
+            var season = await _dbContext.Seasons
+                .AsNoTracking()
+                .OrderByDescending(s => s.StartDate)
+                .FirstOrDefaultAsync(ct);
+
+            if (season == null)
+            {
+                return new List<RosterPlayerGameStatDto>();
+            }
+
+            // Roster player ids for the requested team in that season.
+            var rosterPlayerIds = await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Where(e =>
+                    e.FantasyTeamId == fantasyTeamId &&
+                    e.SeasonId == season.Id)
+                .Select(e => e.PlayerId)
+                .ToListAsync(ct);
+
+            if (rosterPlayerIds.Count == 0)
+            {
+                return new List<RosterPlayerGameStatDto>();
+            }
+
+            // One query, all matching game log rows for the date.
+            // NhlPlayerId is read off the Player navigation; EF
+            // auto-joins the parent table inside a projection.
+            var rows = await _dbContext.PlayerGameLogs
+                .AsNoTracking()
+                .Where(g =>
+                    g.SeasonId == season.Id &&
+                    g.GameDate == date &&
+                    rosterPlayerIds.Contains(g.PlayerId))
+                .Select(g => new RosterPlayerGameStatDto
+                {
+                    PlayerId = g.PlayerId,
+                    NhlPlayerId = g.Player.NhlPlayerId,
+                    GameId = g.NhlGameId,
+                    Goals = g.Goals,
+                    Assists = g.Assists,
+                    Points = g.Points,
+                    PlusMinus = g.PlusMinus,
+                    TimeOnIce = g.TimeOnIce,
+                    Shots = g.Shots,
+                    FantasyPoints = g.FantasyPoints
+                })
+                .ToListAsync(ct);
+
+            return rows;
         }
 
         private sealed class CardStatLine

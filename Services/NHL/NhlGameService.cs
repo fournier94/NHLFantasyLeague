@@ -828,21 +828,21 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         private static void ProcessSkater(
-      NhlBoxscoreResponse box,
-      NhlSkaterStats stats,
-      int nhlTeamId,
-      int opponentNhlTeamId,
-      bool isHomeGame,
-      DateOnly gameDate,
-      int seasonId,
-      bool gameIsFinal,
-      Dictionary<int, PlayerLookup> playersByNhlId,
-      Dictionary<(long, int), PlayerGameLog> logsByKey,
-      List<PlayerGameLog> newLogsToInsert,
-      Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
-      Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
-      Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
-      PersistFinalGamesResult result)
+ NhlBoxscoreResponse box,
+ NhlSkaterStats stats,
+ int nhlTeamId,
+ int opponentNhlTeamId,
+ bool isHomeGame,
+ DateOnly gameDate,
+ int seasonId,
+ bool gameIsFinal,
+ Dictionary<int, PlayerLookup> playersByNhlId,
+ Dictionary<(long, int), PlayerGameLog> logsByKey,
+ List<PlayerGameLog> newLogsToInsert,
+ Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
+ Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
+ Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
+ PersistFinalGamesResult result)
         {
             // Skater stats are "final once accrued", so gameIsFinal
             // is not used here. The hat-trick bonus applies the moment
@@ -873,10 +873,19 @@ namespace NhlFantasyLeague.api.Services.NHL
                 var deltaHT =
                     (hatTrick ? 1 : 0) - (existing.HatTrick ? 1 : 0);
 
+                // Time on ice only grows during a game; use MaxToi to
+                // guard against a stale re-fetch ever reducing it.
+                var newToi = MaxToi(existing.TimeOnIce, stats.TimeOnIce);
+                var toiChanged = !string.Equals(
+                    newToi,
+                    existing.TimeOnIce,
+                    StringComparison.Ordinal);
+
                 if (deltaFP == 0 &&
                     deltaG == 0 && deltaA == 0 && deltaP == 0 &&
                     deltaPM == 0 && deltaPIM == 0 &&
-                    deltaSOG == 0 && deltaHT == 0)
+                    deltaSOG == 0 && deltaHT == 0 &&
+                    !toiChanged)
                 {
                     return;
                 }
@@ -888,6 +897,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 existing.PenaltyMinutes = stats.PenaltyMinutes;
                 existing.PlusMinus = stats.PlusMinus;
                 existing.Shots = stats.Shots;
+                existing.TimeOnIce = newToi;
                 existing.HatTrick = hatTrick;
                 existing.FantasyPoints = newFP;
 
@@ -933,6 +943,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     PenaltyMinutes = stats.PenaltyMinutes,
                     PlusMinus = stats.PlusMinus,
                     Shots = stats.Shots,
+                    TimeOnIce = stats.TimeOnIce,
                     HatTrick = hatTrick,
                     FantasyPoints = newFP,
                 };
@@ -968,21 +979,21 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         private static void ProcessGoalie(
-      NhlBoxscoreResponse box,
-      NhlGoalieStats stats,
-      int nhlTeamId,
-      int opponentNhlTeamId,
-      bool isHomeGame,
-      DateOnly gameDate,
-      int seasonId,
-      bool gameIsFinal,
-      Dictionary<int, PlayerLookup> playersByNhlId,
-      Dictionary<(long, int), PlayerGameLog> logsByKey,
-      List<PlayerGameLog> newLogsToInsert,
-      Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
-      Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
-      Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
-      PersistFinalGamesResult result)
+NhlBoxscoreResponse box,
+NhlGoalieStats stats,
+int nhlTeamId,
+int opponentNhlTeamId,
+bool isHomeGame,
+DateOnly gameDate,
+int seasonId,
+bool gameIsFinal,
+Dictionary<int, PlayerLookup> playersByNhlId,
+Dictionary<(long, int), PlayerGameLog> logsByKey,
+List<PlayerGameLog> newLogsToInsert,
+Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
+Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
+Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
+PersistFinalGamesResult result)
         {
             if (!playersByNhlId.TryGetValue(stats.PlayerId, out var player))
             {
@@ -1049,9 +1060,16 @@ namespace NhlFantasyLeague.api.Services.NHL
                 var deltaSA = stats.ShotsAgainst - existing.ShotsAgainst;
                 var deltaSV = stats.Saves - existing.Saves;
 
+                var newToi = MaxToi(existing.TimeOnIce, stats.TimeOnIce);
+                var toiChanged = !string.Equals(
+                    newToi,
+                    existing.TimeOnIce,
+                    StringComparison.Ordinal);
+
                 if (deltaFP == 0 && deltaW == 0 && deltaL == 0 &&
                     deltaOTL == 0 && deltaSO == 0 && deltaGA == 0 &&
-                    deltaSA == 0 && deltaSV == 0)
+                    deltaSA == 0 && deltaSV == 0 &&
+                    !toiChanged)
                 {
                     return;
                 }
@@ -1077,6 +1095,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 existing.GoalsAgainst = stats.GoalsAgainst;
                 existing.ShotsAgainst = stats.ShotsAgainst;
                 existing.Saves = stats.Saves;
+                existing.TimeOnIce = newToi;
                 existing.Shutout = isShutout;
                 existing.GoalieWin = isWin;
                 existing.GoalieLoss = isLoss;
@@ -1130,6 +1149,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                     GoalsAgainst = stats.GoalsAgainst,
                     ShotsAgainst = stats.ShotsAgainst,
                     Saves = stats.Saves,
+                    TimeOnIce = stats.TimeOnIce,
                     Shutout = isShutout,
                     GoalieWin = isWin,
                     GoalieLoss = isLoss,
@@ -1336,6 +1356,64 @@ namespace NhlFantasyLeague.api.Services.NHL
             foreach (var f in team.Forwards) target.Add(f.PlayerId);
             foreach (var d in team.Defense) target.Add(d.PlayerId);
             foreach (var g in team.Goalies) target.Add(g.PlayerId);
+        }
+
+        /// <summary>
+        /// Parses an "MM:SS" time-on-ice string into total seconds.
+        /// Returns -1 when the value is null, empty, or unparsable,
+        /// so callers can tell "no value" from "00:00".
+        /// </summary>
+        private static int ParseToiToSeconds(string? toi)
+        {
+            if (string.IsNullOrWhiteSpace(toi))
+            {
+                return -1;
+            }
+
+            var parts = toi.Split(':');
+
+            if (parts.Length != 2)
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[0], out var minutes))
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[1], out var seconds))
+            {
+                return -1;
+            }
+
+            return minutes * 60 + seconds;
+        }
+
+        /// <summary>
+        /// Returns whichever of the two "MM:SS" strings represents
+        /// the larger amount of ice time. Used by the update guards
+        /// so a stale re-fetch can never decrease a game's recorded
+        /// TOI. Nulls and unparsable values are treated as "no value".
+        /// </summary>
+        private static string? MaxToi(string? current, string? incoming)
+        {
+            var currentSeconds = ParseToiToSeconds(current);
+            var incomingSeconds = ParseToiToSeconds(incoming);
+
+            if (currentSeconds < 0)
+            {
+                return incoming;
+            }
+
+            if (incomingSeconds < 0)
+            {
+                return current;
+            }
+
+            return incomingSeconds > currentSeconds
+                ? incoming
+                : current;
         }
 
         private sealed class PlayerLookup

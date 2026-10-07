@@ -501,6 +501,41 @@ export function getPlayerOwnership(
     );
 }
 
+/** One row from GET /api/Roster/game-stats-for-date. */
+export interface RosterPlayerGameStat {
+    playerId: number;
+    nhlPlayerId: number;
+    gameId: number;
+    goals: number;
+    assists: number;
+    points: number;
+    plusMinus: number;
+    /** "MM:SS" time on ice, or null when unknown. */
+    timeOnIce: string | null;
+    shots: number;
+    fantasyPoints: number;
+}
+
+/**
+ * Returns per-game stats for the fantasy team's players who dressed
+ * on the given date (yyyy-MM-dd, ET). Reads from PlayerGameLog
+ * server-side, so it never hits the NHL API.
+ *
+ * Used by ClassementPage's "Hier" table.
+ */
+export function getRosterGameStatsForDate(
+    fantasyTeamId: number,
+    date: string,
+): Promise<RosterPlayerGameStat[]> {
+    const params = new URLSearchParams();
+    params.set('fantasyTeamId', String(fantasyTeamId));
+    params.set('date', date);
+    return apiGet<RosterPlayerGameStat[]>(
+        `/Roster/game-stats-for-date?${params.toString()}`,
+        { cacheTtlMs: 5 * 60_000 },
+    );
+}
+
 /** One player row returned by the roster search (GET /api/Roster/search). */
 export interface PlayerSearchResult {
     playerId: number;

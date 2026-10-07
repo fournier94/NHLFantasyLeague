@@ -184,6 +184,43 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
+        /// Returns per-game stats for every player on the given
+        /// fantasy team who dressed for an NHL game on the given
+        /// calendar date (yyyy-MM-dd, ET).
+        ///
+        /// Reads from PlayerGameLog, never from the NHL API. Used by
+        /// ClassementPage's "Hier" table, which shows yesterday's
+        /// finished games and has no use for live data.
+        ///
+        /// Only players who actually appeared in a game are returned.
+        /// </summary>
+        [HttpGet("game-stats-for-date")]
+        public async Task<IActionResult> GetGameStatsForDate(
+            [FromQuery] int fantasyTeamId,
+            [FromQuery] string date,
+            CancellationToken ct = default)
+        {
+            if (!DateOnly.TryParseExact(
+                    date,
+                    "yyyy-MM-dd",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var parsed))
+            {
+                return BadRequest(new
+                {
+                    message = "Date must be in yyyy-MM-dd format."
+                });
+            }
+
+            var rows = await _rosterAdminService
+                .GetRosterGameStatsForDateAsync(
+                    fantasyTeamId, parsed, ct);
+
+            return Ok(rows);
+        }
+
+        /// <summary>
         /// Atomically swaps the RosterStatus of two players on the same
         /// fantasy team at the same effective instant. Enforces same
         /// position group and the exact league shape
