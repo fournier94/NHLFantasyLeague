@@ -680,15 +680,33 @@ function MyPlayersSection({
                     gameByTeam.set(g.homeAbbreviation, g);
                 }
 
+                // Hide players who should not appear in today's
+                // table even if their NHL team has a game scheduled:
+                //   - injured or suspended (ESPN flag on the entry)
+                //   - sent down to the AHL affiliate
+                //   - no longer on any active NHL or AHL roster
+                //
+                // The "Hier" table is a historical game log and is
+                // intentionally NOT filtered here: it still shows
+                // every player who dressed yesterday, including one
+                // who got hurt mid-game. Only the "Aujourd'hui"
+                // table cares about the current availability.
+                const visibleEntries = roster.entries.filter(
+                    (entry) =>
+                        !entry.isInjured &&
+                        entry.rosterLocation !== 'AhlRoster' &&
+                        entry.rosterLocation !== 'NotOnActiveRoster',
+                );
+
                 // Only fetch boxscores for games that involve at
-                // least one team the user has a player on AND whose
-                // boxscore actually exists. Skipping FUT/PRE games
-                // avoids a 404 per scheduled-but-not-yet-started
-                // game, which is what floods the browser console
-                // during the day.
+                // least one team the user has a visible player on
+                // AND whose boxscore actually exists. Skipping
+                // FUT/PRE games avoids a 404 per scheduled-but-not-
+                // yet-started game, which is what floods the browser
+                // console during the day.
                 const relevantGameIds = new Set<number>();
 
-                for (const entry of roster.entries) {
+                for (const entry of visibleEntries) {
                     const g = gameByTeam.get(entry.nhlTeamAbbreviation);
                     if (g && g.hasBoxscore) relevantGameIds.add(g.gameId);
                 }
@@ -707,7 +725,7 @@ function MyPlayersSection({
                     if (box) boxById.set(box.id, box);
                 }
 
-                for (const entry of roster.entries) {
+                for (const entry of visibleEntries) {
                     const game = gameByTeam.get(entry.nhlTeamAbbreviation);
                     if (!game) continue;
 
@@ -737,7 +755,7 @@ function MyPlayersSection({
                             assists = skater.assists;
                             points = skater.points;
                             plusMinus = skater.plusMinus;
-                            timeOnIce = skater.timeOnIce;
+                            timeOnIce = skater.toi;
                             shots = skater.shots;
 
                             // Skater FP: 1 point per G/A, +3 for a hat
@@ -750,7 +768,7 @@ function MyPlayersSection({
                             assists = goalie.assists;
                             points = goalie.points;
                             plusMinus = null;
-                            timeOnIce = goalie.timeOnIce;
+                            timeOnIce = goalie.toi;
                             shots = null;
 
                             // Goalie FP: G + A, +2 for a win, +1 for

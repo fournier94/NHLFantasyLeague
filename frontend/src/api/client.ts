@@ -1156,8 +1156,18 @@ export interface NhlSkaterStats {
     powerPlayGoals: number;
     shots: number;
     headshot: string | null;
-    /** Time on ice in this game, formatted "MM:SS". */
-    timeOnIce: string | null;
+    /**
+     * Time on ice in this game, formatted "MM:SS".
+     *
+     * IMPORTANT: the JSON key is "toi", not "timeOnIce". The backend
+     * DTO carries [JsonPropertyName("toi")] because that is the key
+     * the NHL boxscore endpoint itself uses, and the same DTO is
+     * reused for both deserialization (from the NHL) and
+     * serialization (to us). Renaming this field on the C# side
+     * would break the incoming NHL payload, so we match the actual
+     * wire name here instead.
+     */
+    toi: string | null;
 }
 
 export interface NhlGoalieStats {
@@ -1174,8 +1184,13 @@ export interface NhlGoalieStats {
     shutouts: number;
     savePctg: number;
     starter: boolean;
-    /** Time on ice in this game, formatted "MM:SS". */
-    timeOnIce: string | null;
+    /**
+     * Time on ice in this game, formatted "MM:SS".
+     *
+     * IMPORTANT: the JSON key is "toi", not "timeOnIce". See
+     * NhlSkaterStats.toi for the full explanation.
+     */
+    toi: string | null;
 }
 
 export interface NhlTeamPlayerStats {
