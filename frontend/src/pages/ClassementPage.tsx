@@ -735,27 +735,33 @@ function MyPlayersSection({
                 });
             }
 
-            // Sort rules, applied in this order:
-            //   1. Team abbreviation, alphabetical. Groups players
-            //      who share an NHL team into contiguous blocks.
-            //   2. Position group: forwards first, then defense,
-            //      then goalie (positionOrder = 0 / 1 / 2).
-            //   3. Last name, so teammates of the same position
-            //      group are ordered alphabetically.
+            // Sort: highest fantasy points on top. Players who did
+            // not dress have a null FP value; they fall to the
+            // bottom and are then ordered alphabetically by last
+            // name so the tail end of the list stays stable.
             result.sort((a, b) => {
-                const teamCmp = a.entry.nhlTeamAbbreviation.localeCompare(
-                    b.entry.nhlTeamAbbreviation,
-                );
+                const aHasFp = a.fantasyPoints != null;
+                const bHasFp = b.fantasyPoints != null;
 
-                if (teamCmp !== 0) return teamCmp;
+                // Players with a FP value come before players
+                // without one, regardless of the values.
+                if (aHasFp !== bHasFp) {
+                    return aHasFp ? -1 : 1;
+                }
 
-                const posCmp =
-                    positionOrder(a.entry.position) -
-                    positionOrder(b.entry.position);
+                // Both have a FP value: sort descending.
+                if (aHasFp && bHasFp) {
+                    const fpCmp =
+                        (b.fantasyPoints ?? 0) -
+                        (a.fantasyPoints ?? 0);
+                    if (fpCmp !== 0) return fpCmp;
+                }
 
-                if (posCmp !== 0) return posCmp;
+                // Tiebreak (or both without FP): last name A→Z.
+                const aLast = a.entry.lastName ?? '';
+                const bLast = b.entry.lastName ?? '';
 
-                return a.entry.lastName.localeCompare(b.entry.lastName);
+                return aLast.localeCompare(bLast);
             });
 
             if (cancelledRef.cancelled) return;
