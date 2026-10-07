@@ -11,13 +11,37 @@
  *
  * The illustration is a self-contained inline SVG: no external image
  * to host, no CDN dependency, and it scales cleanly.
+ *
+ * The container uses the same contained-filament "tube" style as the
+ * Chromium install button (thick cyan border + thin near-white inset
+ * ring + inward bloom). Nothing extends outside the box.
+ *
+ * Layout note: the title's icon is shrink-0 and the text is allowed to
+ * wrap. On the ~176px of horizontal room the sheet gives us, keeping
+ * "INSTALLER L'APPLICATION" on one line would overflow.
  */
 export function IosShareHint() {
     return (
-        <div className='rounded-lg px-3 py-2 text-xs'>
-            <div className='flex items-center gap-2 text-sm font-medium text-foreground'>
-                <Download className='h-4 w-4' />
-                <span>Installer l'application</span>
+        <div
+            className='rounded-lg px-3 py-3 text-xs'
+            style={{
+                backgroundColor: '#080D1A',
+                border: '2px solid #00C8FF',
+                boxShadow: [
+                    'inset 0 0 0 1px #FFFDF0',
+                    'inset 0 0 12px rgba(0, 200, 255, 0.55)',
+                    'inset 0 0 28px rgba(0, 200, 255, 0.15)',
+                ].join(', '),
+            }}
+        >
+            <div className='flex items-center justify-center gap-2 text-sm font-bold uppercase tracking-wider text-[#F2F5FA]'>
+                <Download
+                    className='h-4 w-4 shrink-0'
+                    aria-hidden='true'
+                />
+                <span className='leading-tight'>
+                    Installer l'application
+                </span>
             </div>
 
             <IosShareIllustration />

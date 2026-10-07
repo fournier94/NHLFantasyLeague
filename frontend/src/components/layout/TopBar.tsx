@@ -105,6 +105,23 @@ const MARKETPLACE_AURA = [
 ].join(' ');
 
 /**
+ * Contained-filament "tube" style applied to the install button so it
+ * visually stands out at the bottom of the hamburger. Everything lives
+ * inside the button's own bounding box: no outer glow, no drop-shadow,
+ * no filter. The neon read comes from the thick cyan border (the tube)
+ * sitting under a thin near-white inset ring (the filament).
+ */
+const INSTALL_BUTTON_STYLE: React.CSSProperties = {
+    backgroundColor: '#080D1A',
+    border: '2px solid #00C8FF',
+    boxShadow: [
+        'inset 0 0 0 1px #FFFDF0',
+        'inset 0 0 12px rgba(0, 200, 255, 0.55)',
+        'inset 0 0 28px rgba(0, 200, 255, 0.15)',
+    ].join(', '),
+};
+
+/**
  * Crossed hockey sticks with a puck, drawn as a small inline SVG.
  * Cyan neon look to match the reference image.
  */
@@ -586,61 +603,6 @@ export function TopBar() {
                                         </Link>
                                     )}
 
-                                    {/*
-                                     * Install block. Exactly one of three
-                                     * variants renders, or nothing:
-                                     *
-                                     *   - Chromium (desktop + Android):
-                                     *     a real button that triggers the
-                                     *     browser's native install prompt.
-                                     *   - iOS Safari: a static hint with a
-                                     *     small illustration showing where
-                                     *     the Share button lives.
-                                     *   - Firefox (desktop + Android): a
-                                     *     static hint pointing at the
-                                     *     browser menu.
-                                     *
-                                     * Nothing shows once the app is
-                                     * already installed, so the menu
-                                     * never carries a dead entry.
-                                     */}
-                                    {!isInstalled && canInstall && (
-                                        <button
-                                            type='button'
-                                            onClick={() => {
-                                                void promptInstall();
-                                            }}
-                                            className='flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-secondary'
-                                        >
-                                            <Download className='h-4 w-4' />
-                                            <span>Installer l'application</span>
-                                        </button>
-                                    )}
-
-                                    {!isInstalled &&
-                                        !canInstall &&
-                                        isIosSafari && <IosShareHint />}
-
-                                    {!isInstalled &&
-                                        !canInstall &&
-                                        isFirefox && (
-                                            <div className='rounded-lg px-3 py-2 text-xs'>
-                                                <div className='flex items-center gap-2 text-sm font-medium text-foreground'>
-                                                    <Download className='h-4 w-4' />
-                                                    <span>Installer l'application</span>
-                                                </div>
-
-                                                <p className='mt-1 leading-relaxed text-muted-foreground'>
-                                                    Ouvrez le menu du navigateur puis
-                                                    choisissez{' '}
-                                                    <span className='font-semibold text-foreground'>
-                                                        « Installer »
-                                                    </span>
-                                                    .
-                                                </p>
-                                            </div>
-                                        )}
-
                                     {isAuthenticated && (
                                         <div className='mt-2 border-t border-border pt-2'>
                                             <p className='px-3 py-1 text-xs uppercase tracking-wide text-white'>
@@ -707,6 +669,88 @@ export function TopBar() {
                                             </Link>
                                         </>
                                     )}
+
+                                    {/*
+                                     * Install section. Sits at the very
+                                     * bottom of the hamburger, below
+                                     * Déconnexion (or below the Connexion
+                                     * / Inscription pair when logged out).
+                                     *
+                                     * Layout note: the icon is stacked
+                                     * ABOVE the text and the text is allowed
+                                     * to wrap. A single-row layout would
+                                     * overflow the ~120px of horizontal
+                                     * space the button actually has once
+                                     * the sheet padding and the icon are
+                                     * taken out.
+                                     *
+                                     * Exactly one of three variants renders,
+                                     * or nothing:
+                                     *
+                                     *   - Chromium (desktop + Android):
+                                     *     a real button that triggers the
+                                     *     browser's native install prompt.
+                                     *   - iOS Safari: a hint with a small
+                                     *     illustration showing where the
+                                     *     Share button lives.
+                                     *   - Firefox (desktop + Android): a
+                                     *     hint pointing at the browser menu.
+                                     *
+                                     * Nothing shows once the app is
+                                     * already installed.
+                                     */}
+                                    {!isInstalled &&
+                                        (canInstall ||
+                                            isIosSafari ||
+                                            isFirefox) && (
+                                            <div className='mt-3 border-t border-border pt-3'>
+                                                {canInstall && (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            void promptInstall();
+                                                        }}
+                                                        className='flex w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg px-3 py-3 text-center text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-all hover:brightness-110'
+                                                        style={INSTALL_BUTTON_STYLE}
+                                                    >
+                                                        <Download
+                                                            className='h-5 w-5 shrink-0'
+                                                            aria-hidden='true'
+                                                        />
+                                                        <span className='leading-tight'>
+                                                            Installer l'application
+                                                        </span>
+                                                    </button>
+                                                )}
+
+                                                {!canInstall && isIosSafari && (
+                                                    <IosShareHint />
+                                                )}
+
+                                                {!canInstall && isFirefox && (
+                                                    <div className='rounded-lg px-3 py-2 text-xs'>
+                                                        <div className='flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-foreground'>
+                                                            <Download
+                                                                className='h-4 w-4 shrink-0'
+                                                                aria-hidden='true'
+                                                            />
+                                                            <span className='leading-tight'>
+                                                                Installer l'application
+                                                            </span>
+                                                        </div>
+
+                                                        <p className='mt-1 leading-relaxed text-muted-foreground'>
+                                                            Ouvrez le menu du navigateur puis
+                                                            choisissez{' '}
+                                                            <span className='font-semibold text-foreground'>
+                                                                « Installer »
+                                                            </span>
+                                                            .
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                 </div>
                             </div>
                         </SheetContent>
