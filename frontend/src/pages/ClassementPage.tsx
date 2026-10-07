@@ -489,6 +489,15 @@ interface PlayerGameStats {
      *   - "—"                     : unknown / boxscore missing
      */
     gameClockLabel: string;
+    /**
+     * Scheduled puck-drop instant (UTC ISO string) for the game the
+     * player is in. Never changes once the game is scheduled, so it
+     * is the stable sort key the table uses to keep rows pinned in
+     * their pre-game order even after a game goes LIVE and the
+     * "Temps" column shows a running clock instead of the start
+     * time.
+     */
+    gameStartTimeUtc: string;
 }
 
 type MyPlayersVariant = 'today' | 'yesterday';
@@ -732,24 +741,32 @@ function MyPlayersSection({
                     shots,
                     fantasyPoints,
                     gameClockLabel: gameClockLabel(box, game),
+                    gameStartTimeUtc: game.startTimeUtc,
                 });
             }
 
-            // Sort: highest fantasy points on top. Players who did
-            // not dress have a null FP value; they fall to the
-            // bottom and are then ordered alphabetically by last
-            // name so the tail end of the list stays stable.
+            // Sort rules, applied in this order:
+            //   1. Fantasy points descending — biggest contributors
+            //      on top. Players who did not dress (null FP) sink
+            //      to the bottom.
+            //   2. Scheduled game start time (UTC, ascending) as the
+            //      tiebreak. All players who dressed in the same
+            //      game share the same start time, so they form a
+            //      contiguous block ordered alphabetically by the
+            //      next key. Using startTimeUtc (a fixed attribute
+            //      of the game) instead of the live clock means a
+            //      tie never re-shuffles mid-game.
+            //   3. Last name A→Z as the final tiebreak, so a group
+            //      of players on the same FP and same game stays
+            //      stable and readable.
             result.sort((a, b) => {
                 const aHasFp = a.fantasyPoints != null;
                 const bHasFp = b.fantasyPoints != null;
 
-                // Players with a FP value come before players
-                // without one, regardless of the values.
                 if (aHasFp !== bHasFp) {
                     return aHasFp ? -1 : 1;
                 }
 
-                // Both have a FP value: sort descending.
                 if (aHasFp && bHasFp) {
                     const fpCmp =
                         (b.fantasyPoints ?? 0) -
@@ -757,7 +774,11 @@ function MyPlayersSection({
                     if (fpCmp !== 0) return fpCmp;
                 }
 
-                // Tiebreak (or both without FP): last name A→Z.
+                const startCmp = a.gameStartTimeUtc.localeCompare(
+                    b.gameStartTimeUtc,
+                );
+                if (startCmp !== 0) return startCmp;
+
                 const aLast = a.entry.lastName ?? '';
                 const bLast = b.entry.lastName ?? '';
 
