@@ -1453,27 +1453,26 @@ export interface StartJobResponse {
  *
  * RATE LIMIT — do not lower this default.
  *
- * The backend job makes THREE HTTP calls to the NHL API per player:
+ * The backend job makes TWO HTTP calls to the NHL API per player:
  *   1. landing page (Player + PlayerCareerStat + PlayerSeasonStat
  *      landing-owned columns),
- *   2. landing page AGAIN (SavePlayerGameLogsAsync re-fetches it),
- *   3. game-log endpoint.
+ *   2. game-log endpoint.
  *
- * The `delayMsBetweenPlayers` pause runs AFTER those three calls,
- * so the effective NHL-side rate is 3 requests per
+ * The `delayMsBetweenPlayers` pause runs AFTER those two calls,
+ * so the effective NHL-side rate is 2 requests per
  * delayMsBetweenPlayers milliseconds. The NHL tolerates about one
  * request every 500 ms (2 req/sec); anything faster returns 429
  * Too Many Requests and those players silently fail to refresh.
  *
- *   500 ms  -> 6 req/sec  -> trips 429s
- *   1500 ms -> 2 req/sec  -> safe (500 ms per request, average)
+ *   500 ms  -> 4 req/sec  -> trips 429s
+ *   1000 ms -> 2 req/sec  -> safe (500 ms per request, average)
  *
- * If the duplicate landing call is ever removed from the backend,
- * this default can drop to 1000 (2 requests per 1000 ms).
+ * If the NHL tightens its rate limit, raise this to 1500 or 2000.
+ * Do not lower it without checking the math above.
  */
 export function startRefreshAllGameLogs(
     seasonCode = 20262027,
-    delayMsBetweenPlayers = 1500,
+    delayMsBetweenPlayers = 1000,
 ): Promise<StartJobResponse> {
     const params = new URLSearchParams();
     params.set('seasonCode', String(seasonCode));

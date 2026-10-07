@@ -54,28 +54,42 @@ namespace NhlFantasyLeague.api.Services.NHL
         ///   Skater: 1 point per G/A, +3 bonus for a hat trick (3+ goals).
         ///   Goalie: 2 per win, 1 per overtime loss, 3 per shutout, plus
         ///   any G/A the goalie recorded.
-        /// </summary>
         ///
-        /// The optional <paramref name="preloadedTeams"/> dictionary lets a
-        /// batch caller (refresh-all, backfill-all) avoid re-querying the
-        /// same NhlTeams table for every player. When null, the teams are
-        /// loaded once from the database with AsNoTracking.
+        /// RATE LIMITING
+        ///
+        /// This method makes exactly ONE HTTP call to the NHL API
+        /// (the game-log endpoint). It used to also re-fetch the
+        /// landing page for a null check that could be answered by a
+        /// plain DB lookup — that wasted call was the difference
+        /// between tripping the NHL rate limit and staying under it
+        /// during bulk operations.
+        ///
+        /// Callers that already fetched the landing page should pass
+        /// their Player entity via <paramref name="preloadedPlayer"/>
+        /// so this method does not even do the DB lookup.
+        ///
+        /// The optional <paramref name="preloadedTeams"/> dictionary
+        /// lets a batch caller avoid re-querying the same NhlTeams
+        /// table for every player.
         /// </summary>
         public async Task<int> SavePlayerGameLogsAsync(
-      int nhlPlayerId,
-      int seasonCode,
-      int gameType = 2,
-      Dictionary<string, NhlTeam>? preloadedTeams = null)
+            int nhlPlayerId,
+            int seasonCode,
+            int gameType = 2,
+            Dictionary<string, NhlTeam>? preloadedTeams = null,
+            Player? preloadedPlayer = null)
         {
-            var playerResponse = await _playerService.GetPlayerAsync(nhlPlayerId);
+            // Resolve the Player entity in this priority order:
+            //   1. Use the caller-supplied entity (no DB hit, no HTTP).
+            //   2. Load from the DB (no HTTP).
+            //   3. Fetch from the NHL landing page (HTTP).
+            Player? player = preloadedPlayer;
 
-            if (playerResponse == null)
+            if (player == null)
             {
-                return 0;
+                player = await _dbContext.Players
+                    .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
             }
-
-            var player = await _dbContext.Players
-                .FirstOrDefaultAsync(p => p.NhlPlayerId == nhlPlayerId);
 
             if (player == null)
             {
@@ -96,6 +110,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return 0;
             }
 
+            // The single HTTP call this method makes.
             var gameLogResponse =
                 await GetPlayerGameLogAsync(nhlPlayerId, seasonCode, gameType);
 
@@ -685,16 +700,26 @@ namespace NhlFantasyLeague.api.Services.NHL
                 {
                     // 1. Landing page → Player + PlayerCareerStat +
                     //    landing-owned columns on PlayerSeasonStat.
-                    await _playerService.SavePlayerAsync(player.NhlPlayerId);
+                    //    Capture the returned Player so the game-log
+                    //    step does not need to re-fetch it.
+                    var playerEntity =
+                        await _playerService.SavePlayerAsync(
+                            player.NhlPlayerId);
 
                     // 2. Regular-season game logs → PlayerGameLog rows
                     //    + FantasyPoints / HatTricks on PlayerSeasonStat.
+                    //    Passing playerEntity down saves one NHL API
+                    //    landing-page fetch per player. That is the
+                    //    difference between 3 requests per player
+                    //    (trips the API rate limit) and 2 requests per
+                    //    player (comfortably under it).
                     var saved =
                         await SavePlayerGameLogsAsync(
                             player.NhlPlayerId,
                             seasonCode,
                             2,
-                            teamsByAbbreviation);
+                            teamsByAbbreviation,
+                            playerEntity);
 
                     result.PlayersProcessed++;
                     result.TotalGamesSaved += saved;

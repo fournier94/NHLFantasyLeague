@@ -255,7 +255,14 @@ namespace NhlFantasyLeague.api.Services.NHL
                             $"{ex.GetType().Name}: {ex.Message}");
                     }
 
-                    await Task.Delay(200, ct);
+                    // 500 ms between NHL API calls keeps us at the
+                    // safe rate of one request every half-second.
+                    // The old 200 ms delay produced a 5 req/sec
+                    // burst when several games were polled in the
+                    // same tick, which occasionally tripped the NHL
+                    // rate limit. The tick cadence is 60 s, so the
+                    // added wait has no effect on perceived latency.
+                    await Task.Delay(500, ct);
                 }
 
                 snapshots.Add(snapshot);
@@ -480,7 +487,12 @@ namespace NhlFantasyLeague.api.Services.NHL
                         $"{ex.GetType().Name}: {ex.Message}");
                 }
 
-                await Task.Delay(300, ct);
+                // 500 ms between NHL API calls keeps us at the safe
+                // rate of one request every half-second. The old
+                // 300 ms delay ran at ~3.3 req/sec, which tripped
+                // the NHL rate limit (429) during post-game and
+                // reconciliation runs.
+                await Task.Delay(500, ct);
             }
 
             if (snapshots.Count == 0)
