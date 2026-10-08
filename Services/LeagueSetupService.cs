@@ -60,7 +60,7 @@ namespace NhlFantasyLeague.api.Services
         // ----- Season 2026-2027 -----
         private const string CurrentSeasonName = "2026-2027";
         private const int CurrentSeasonNhlSeasonCode = 20262027;
-        private static readonly DateOnly CurrentSeasonStartDate = new DateOnly(2026, 10, 1);
+        private static readonly DateOnly CurrentSeasonStartDate = new DateOnly(2026, 09, 28);
         private static readonly DateOnly CurrentSeasonEndDate = new DateOnly(2027, 6, 30);
 
         // 119 000 000$ = 104 000 000$ NHL cap + 15 000 000$ cushion.

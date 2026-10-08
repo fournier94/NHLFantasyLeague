@@ -744,10 +744,32 @@ export interface StandingsRow {
     goalieShutouts: number;
     goaliePoints: number;
 
-    /** FP from games that started yesterday (UTC). */
+    /**
+     * FP credited to this team from games where the Active player
+     * was a forward (or had an unclassifiable position). Sliced from
+     * RosterStatusHistory at the moment of each game, so a player
+     * who was Active on this team for part of the season and then
+     * traded away keeps contributing to THIS team's forward total
+     * for the games he played here.
+     */
+    forwardFantasyPoints: number;
+
+    /**
+     * FP credited to this team from games where the Active player
+     * was a defenseman. Same history rule as forwardFantasyPoints.
+     */
+    defenseFantasyPoints: number;
+
+    /**
+     * FP credited to this team from games where the Active player
+     * was a goalie. Same history rule as forwardFantasyPoints.
+     */
+    goalieFantasyPoints: number;
+
+    /** FP from games that started yesterday (real ET calendar day). */
     yesterdayFantasyPoints: number;
 
-    /** FP from games that started today (UTC). */
+    /** FP from games that started today (real ET calendar day). */
     todayFantasyPoints: number;
 
     totalFantasyPoints: number;

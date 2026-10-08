@@ -692,9 +692,9 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// Details, which allows up to 2000 chars.
         /// </summary>
         private async Task LogUnsettledGamesAsync(
-            DateOnly date,
-            List<NhlScheduleGame> unsettled,
-            CancellationToken ct)
+      DateOnly date,
+      List<NhlScheduleGame> unsettled,
+      CancellationToken ct)
         {
             try
             {
@@ -715,6 +715,45 @@ namespace NhlFantasyLeague.api.Services.NHL
                     message:
                         $"Post-game write for {date:yyyy-MM-dd} found " +
                         $"{unsettled.Count} unsettled game(s): {ids}.",
+                    details: details,
+                    ct: ct);
+            }
+            catch
+            {
+                // Never let logging failure cascade.
+            }
+        }
+
+        /// <summary>
+        /// Records a Warning in SystemEventLogs when the live persist
+        /// produces a team delta whose Forward+Defense+Goalie sum
+        /// does not equal the delta's total.
+        ///
+        /// This should never fire: BuildSkaterDelta and
+        /// BuildGoalieDelta route each game's FP into exactly one of
+        /// the three buckets. If it does fire, the routing has a bug
+        /// that would otherwise silently drift the standings until
+        /// the next recompute.
+        ///
+        /// Never throws: a logging failure must not break the persist
+        /// path.
+        /// </summary>
+        private async Task LogPersistInvariantViolationsAsync(
+            List<string> violations,
+            CancellationToken ct)
+        {
+            try
+            {
+                var details = string.Join("\n", violations);
+
+                await _log.RecordAsync(
+                    source: "NhlGameService",
+                    category: "TeamTotalInvariantViolation",
+                    severity: "Warning",
+                    message:
+                        $"Live persist produced {violations.Count} " +
+                        "team delta(s) whose Forward+Defense+Goalie " +
+                        "sum did not match the total.",
                     details: details,
                     ct: ct);
             }
@@ -781,6 +820,12 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             // ----- Bulk read 1: Players -------------------------------
+            //
+            // Position is loaded here so the routing step can bucket
+            // each game's fantasy points by the player's position
+            // group without any further DB query. Same source as the
+            // season recompute (Players.Position), so both writers
+            // route every game identically.
             var playersByNhlId = await _dbContext.Players
                 .AsNoTracking()
                 .Where(p => nhlPlayerIds.Contains(p.NhlPlayerId))
@@ -788,6 +833,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 {
                     Id = p.Id,
                     NhlPlayerId = p.NhlPlayerId,
+                    Position = p.Position,
                 })
                 .ToDictionaryAsync(p => p.NhlPlayerId, ct);
 
@@ -931,6 +977,16 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             // ----- Apply team deltas -----------------------------------
+            //
+            // Each team's accumulated delta carries the total FP and
+            // the three position-split FP values. The three splits
+            // must sum to the total for every delta; if they don't,
+            // a routing bug exists in BuildSkaterDelta or
+            // BuildGoalieDelta and the standings would silently
+            // disagree with themselves. The check below catches that
+            // on the same tick it happens.
+            var invariantViolations = new List<string>();
+
             foreach (var kvp in teamDeltaByTeamId)
             {
                 if (!teamSeasonByTeamId.TryGetValue(kvp.Key, out var ts))
@@ -941,6 +997,14 @@ namespace NhlFantasyLeague.api.Services.NHL
                 var d = kvp.Value;
 
                 ts.TotalFantasyPoints += d.FantasyPoints;
+
+                // Position-split fantasy points. Each game is routed
+                // to exactly one of the three buckets by the delta
+                // builders, so a game's FP is never counted twice and
+                // never dropped.
+                ts.ForwardFantasyPoints += d.ForwardFantasyPoints;
+                ts.DefenseFantasyPoints += d.DefenseFantasyPoints;
+                ts.GoalieFantasyPoints += d.GoalieFantasyPoints;
 
                 ts.SkaterGamesPlayed += d.SkaterGamesPlayed;
                 ts.SkaterGoals += d.SkaterGoals;
@@ -958,6 +1022,35 @@ namespace NhlFantasyLeague.api.Services.NHL
                 ts.TotalFantasyPointsComputedAt = DateTime.UtcNow;
                 result.TeamSeasonsUpdated++;
                 result.TotalFantasyPointsDelta += d.FantasyPoints;
+
+                // Delta-level invariant check. This is a code-correctness
+                // check, not a data-repair: it verifies that the routing
+                // in this tick produced a consistent delta. The
+                // authoritative check on the actual DB totals lives in
+                // NhlGameLogService.RecomputeTeamSeasonTotalsAsync and
+                // runs on every recompute.
+                var deltaSum =
+                    d.ForwardFantasyPoints +
+                    d.DefenseFantasyPoints +
+                    d.GoalieFantasyPoints;
+
+                if (deltaSum != d.FantasyPoints)
+                {
+                    invariantViolations.Add(
+                        $"FantasyTeamId={kvp.Key}: " +
+                        $"deltaTotal={d.FantasyPoints}, " +
+                        $"deltaF+D+G={deltaSum} " +
+                        $"(F={d.ForwardFantasyPoints}, " +
+                        $"D={d.DefenseFantasyPoints}, " +
+                        $"G={d.GoalieFantasyPoints})");
+                }
+            }
+
+            if (invariantViolations.Count > 0)
+            {
+                await LogPersistInvariantViolationsAsync(
+                    invariantViolations,
+                    ct);
             }
 
             // ----- Register brand-new PlayerSeasonStat rows ------------
@@ -1040,21 +1133,21 @@ namespace NhlFantasyLeague.api.Services.NHL
         }
 
         private static void ProcessSkater(
- NhlBoxscoreResponse box,
- NhlSkaterStats stats,
- int nhlTeamId,
- int opponentNhlTeamId,
- bool isHomeGame,
- DateOnly gameDate,
- int seasonId,
- bool gameIsFinal,
- Dictionary<int, PlayerLookup> playersByNhlId,
- Dictionary<(long, int), PlayerGameLog> logsByKey,
- List<PlayerGameLog> newLogsToInsert,
- Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
- Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
- Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
- PersistFinalGamesResult result)
+NhlBoxscoreResponse box,
+NhlSkaterStats stats,
+int nhlTeamId,
+int opponentNhlTeamId,
+bool isHomeGame,
+DateOnly gameDate,
+int seasonId,
+bool gameIsFinal,
+Dictionary<int, PlayerLookup> playersByNhlId,
+Dictionary<(long, int), PlayerGameLog> logsByKey,
+List<PlayerGameLog> newLogsToInsert,
+Dictionary<int, List<RosterStatusHistory>> historyByPlayerId,
+Dictionary<int, PlayerSeasonStat> seasonStatByPlayerId,
+Dictionary<int, TeamStatDelta> teamDeltaByTeamId,
+PersistFinalGamesResult result)
         {
             // Skater stats are "final once accrued", so gameIsFinal
             // is not used here. The hat-trick bonus applies the moment
@@ -1065,6 +1158,14 @@ namespace NhlFantasyLeague.api.Services.NHL
             {
                 return;
             }
+
+            // Classify the player's position once and reuse it for
+            // both the update and the insert branches. Same helper
+            // and same source (Players.Position) as the season
+            // recompute, so both writers bucket every game
+            // identically.
+            var positionGroup = PositionGroupHelper.Classify(
+                player.Position);
 
             var hatTrick = stats.Goals >= 3;
 
@@ -1132,7 +1233,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                         goals: deltaG,
                         assists: deltaA,
                         points: deltaP,
-                        hatTricks: deltaHT),
+                        hatTricks: deltaHT,
+                        positionGroup: positionGroup),
                     gameDate,
                     historyByPlayerId, teamDeltaByTeamId);
 
@@ -1184,7 +1286,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                         goals: stats.Goals,
                         assists: stats.Assists,
                         points: stats.Points,
-                        hatTricks: hatTrick ? 1 : 0),
+                        hatTricks: hatTrick ? 1 : 0,
+                        positionGroup: positionGroup),
                     gameDate,
                     historyByPlayerId, teamDeltaByTeamId);
             }
@@ -1517,14 +1620,15 @@ PersistFinalGamesResult result)
         }
 
         private static TeamStatDelta BuildSkaterDelta(
-            int fantasyPoints,
-            int gamesPlayed,
-            int goals,
-            int assists,
-            int points,
-            int hatTricks)
+      int fantasyPoints,
+      int gamesPlayed,
+      int goals,
+      int assists,
+      int points,
+      int hatTricks,
+      PositionGroup positionGroup)
         {
-            return new TeamStatDelta
+            var delta = new TeamStatDelta
             {
                 FantasyPoints = fantasyPoints,
                 SkaterGamesPlayed = gamesPlayed,
@@ -1533,6 +1637,22 @@ PersistFinalGamesResult result)
                 SkaterPoints = points,
                 SkaterHatTricks = hatTricks,
             };
+
+            // Route the fantasy points into the forward or defense
+            // bucket. Unknown positions go into forward, matching the
+            // season recompute and the frontend default
+            // (toLineupPositionGroup returns 'F' for unknown). This
+            // keeps F + D + G == Total exact.
+            if (positionGroup == PositionGroup.Defense)
+            {
+                delta.DefenseFantasyPoints = fantasyPoints;
+            }
+            else
+            {
+                delta.ForwardFantasyPoints = fantasyPoints;
+            }
+
+            return delta;
         }
 
         private static TeamStatDelta BuildGoalieDelta(
@@ -1547,6 +1667,10 @@ PersistFinalGamesResult result)
             return new TeamStatDelta
             {
                 FantasyPoints = fantasyPoints,
+
+                // A goalie's game always routes to the goalie bucket.
+                GoalieFantasyPoints = fantasyPoints,
+
                 GoalieGamesPlayed = gamesPlayed,
                 GoalieWins = wins,
                 GoalieLosses = losses,
@@ -1632,6 +1756,14 @@ PersistFinalGamesResult result)
         {
             public int Id { get; set; }
             public int NhlPlayerId { get; set; }
+
+            /// <summary>
+            /// The player's position from the Players table. Used to
+            /// route the game's fantasy points into the forward,
+            /// defense or goalie bucket. Same source as the season
+            /// recompute, so both writers always agree.
+            /// </summary>
+            public string Position { get; set; } = string.Empty;
         }
 
         /// <summary>
@@ -1644,14 +1776,22 @@ PersistFinalGamesResult result)
         {
             public int FantasyPoints { get; set; }
 
-            // Skater segment
+            // Position-split fantasy points. Every game is routed to
+            // exactly one of the three; the sum always equals
+            // FantasyPoints. Verified by the delta invariant check in
+            // PersistSnapshotsAsync.
+            public int ForwardFantasyPoints { get; set; }
+            public int DefenseFantasyPoints { get; set; }
+            public int GoalieFantasyPoints { get; set; }
+
+            // Skater segment (raw NHL stats, not FP; unchanged)
             public int SkaterGamesPlayed { get; set; }
             public int SkaterGoals { get; set; }
             public int SkaterAssists { get; set; }
             public int SkaterPoints { get; set; }
             public int SkaterHatTricks { get; set; }
 
-            // Goalie segment
+            // Goalie segment (raw NHL stats, not FP; unchanged)
             public int GoalieGamesPlayed { get; set; }
             public int GoalieWins { get; set; }
             public int GoalieLosses { get; set; }
@@ -1661,6 +1801,9 @@ PersistFinalGamesResult result)
 
             public bool IsEmpty =>
                 FantasyPoints == 0 &&
+                ForwardFantasyPoints == 0 &&
+                DefenseFantasyPoints == 0 &&
+                GoalieFantasyPoints == 0 &&
                 SkaterGamesPlayed == 0 && SkaterGoals == 0 &&
                 SkaterAssists == 0 && SkaterPoints == 0 &&
                 SkaterHatTricks == 0 &&
@@ -1671,6 +1814,10 @@ PersistFinalGamesResult result)
             public void Add(TeamStatDelta other)
             {
                 FantasyPoints += other.FantasyPoints;
+
+                ForwardFantasyPoints += other.ForwardFantasyPoints;
+                DefenseFantasyPoints += other.DefenseFantasyPoints;
+                GoalieFantasyPoints += other.GoalieFantasyPoints;
 
                 SkaterGamesPlayed += other.SkaterGamesPlayed;
                 SkaterGoals += other.SkaterGoals;

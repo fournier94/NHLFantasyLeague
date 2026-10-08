@@ -2,6 +2,7 @@
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Services;
+using NhlFantasyLeague.api.Services.Logging;
 using System;
 using System.Diagnostics;
 using System.Net.Http;
@@ -17,18 +18,27 @@ namespace NhlFantasyLeague.api.Services.NHL
         private readonly NhlStatsService _nhlStatsService;
         private readonly ILogger<NhlGameLogService> _logger;
 
+        /// <summary>
+        /// Used by the season recompute to record a Warning when the
+        /// per-position FP split no longer adds up to the total. Never
+        /// throws; a logging failure must not break the recompute.
+        /// </summary>
+        private readonly SystemEventLogService _log;
+
         public NhlGameLogService(
             HttpClient httpClient,
             AppDbContext dbContext,
             NhlPlayerService playerService,
             NhlStatsService nhlStatsService,
-            ILogger<NhlGameLogService> logger)
+            ILogger<NhlGameLogService> logger,
+            SystemEventLogService log)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
             _playerService = playerService;
             _nhlStatsService = nhlStatsService;
             _logger = logger;
+            _log = log;
         }
 
         /// <summary>
@@ -1105,6 +1115,13 @@ namespace NhlFantasyLeague.api.Services.NHL
                 fts.TotalFantasyPoints = 0;
                 fts.TotalFantasyPointsComputedAt = now;
 
+                // Position-split fantasy points. Reset to 0 before
+                // every recompute so the invariants below hold even
+                // if a previous run left the columns in a bad state.
+                fts.ForwardFantasyPoints = 0;
+                fts.DefenseFantasyPoints = 0;
+                fts.GoalieFantasyPoints = 0;
+
                 fts.SkaterGamesPlayed = 0;
                 fts.SkaterGoals = 0;
                 fts.SkaterAssists = 0;
@@ -1239,9 +1256,20 @@ namespace NhlFantasyLeague.api.Services.NHL
                 target.TotalFantasyPoints += game.FantasyPoints;
                 result.GamesCredited++;
 
-                // Route the game's individual stats to the skater or
-                // goalie segment. Unknown positions count as skaters on
-                // purpose, so no row is ever silently dropped.
+                // Route the game to a position bucket and to the
+                // corresponding raw-stat segment.
+                //
+                // The three-way FP split (forward / defense / goalie)
+                // is what the standings columns read. It must always
+                // sum back to TotalFantasyPoints; the invariant check
+                // after this loop verifies that and logs a Warning if
+                // it ever fails.
+                //
+                // Unknown positions are treated as forwards, matching
+                // the frontend's default (toLineupPositionGroup
+                // returns 'F' for unknown). This keeps the invariant
+                // exact: every game lands in exactly one of the three
+                // buckets.
                 positionsByPlayerId.TryGetValue(
                     game.PlayerId, out var position);
 
@@ -1249,6 +1277,8 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 if (group == PositionGroup.Goalie)
                 {
+                    target.GoalieFantasyPoints += game.FantasyPoints;
+
                     target.GoalieGamesPlayed++;
                     target.GoalieWins += game.GoalieWin ? 1 : 0;
                     target.GoalieOvertimeLosses +=
@@ -1270,6 +1300,18 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
                 else
                 {
+                    // Skater: forward, defense, or unknown. Unknown
+                    // routes to the forward bucket so the three FP
+                    // columns always add up to the total.
+                    if (group == PositionGroup.Defense)
+                    {
+                        target.DefenseFantasyPoints += game.FantasyPoints;
+                    }
+                    else
+                    {
+                        target.ForwardFantasyPoints += game.FantasyPoints;
+                    }
+
                     target.SkaterGamesPlayed++;
                     target.SkaterGoals += game.Goals;
                     target.SkaterAssists += game.Assists;
@@ -1280,9 +1322,78 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             result.PlayersWithoutHistory = playersWithoutHistory.Count;
 
+            // Invariant check: Forward + Defense + Goalie must equal
+            // Total for every team. If it does not, something in the
+            // routing is wrong and the standings would silently show
+            // numbers that do not reconcile. Log a Warning so the
+            // admin event log surfaces it, and continue — the numbers
+            // are still written, they just may not sum.
+            var invariantViolations = new List<string>();
+
+            foreach (var fts in teamSeasons)
+            {
+                var sum =
+                    fts.ForwardFantasyPoints +
+                    fts.DefenseFantasyPoints +
+                    fts.GoalieFantasyPoints;
+
+                if (sum != fts.TotalFantasyPoints)
+                {
+                    invariantViolations.Add(
+                        $"FantasyTeamId={fts.FantasyTeamId}: " +
+                        $"Total={fts.TotalFantasyPoints}, " +
+                        $"F+D+G={sum} " +
+                        $"(F={fts.ForwardFantasyPoints}, " +
+                        $"D={fts.DefenseFantasyPoints}, " +
+                        $"G={fts.GoalieFantasyPoints})");
+                }
+            }
+
+            result.InvariantViolations = invariantViolations.Count;
+
+            if (invariantViolations.Count > 0)
+            {
+                await LogInvariantViolationsAsync(
+                    seasonCode,
+                    invariantViolations,
+                    ct);
+            }
+
             await _dbContext.SaveChangesAsync(ct);
 
             return result;
+        }
+
+        /// <summary>
+        /// Records a Warning in SystemEventLogs listing every team whose
+        /// Forward + Defense + Goalie sum did not match its total.
+        /// Never throws: a logging failure must not break the recompute.
+        /// </summary>
+        private async Task LogInvariantViolationsAsync(
+            int seasonCode,
+            List<string> violations,
+            CancellationToken ct)
+        {
+            try
+            {
+                var details = string.Join("\n", violations);
+
+                await _log.RecordAsync(
+                    source: "NhlGameLogService",
+                    category: "TeamTotalInvariantViolation",
+                    severity: "Warning",
+                    message:
+                        $"Season {seasonCode} recompute produced " +
+                        $"{violations.Count} team(s) whose " +
+                        "Forward+Defense+Goalie sum did not match the " +
+                        "total.",
+                    details: details,
+                    ct: ct);
+            }
+            catch
+            {
+                // Never let logging failure cascade into the recompute.
+            }
         }
     }
 
@@ -1317,6 +1428,15 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// ever again creates a RosterEntry without history.
         /// </summary>
         public int HistoryRowsBackfilled { get; set; }
+
+        /// <summary>
+        /// Number of FantasyTeamSeason rows whose
+        /// Forward + Defense + Goalie sum did not equal their
+        /// TotalFantasyPoints after this recompute. Should always be
+        /// zero. A non-zero value means a routing bug and is logged
+        /// as a Warning in SystemEventLogs.
+        /// </summary>
+        public int InvariantViolations { get; set; }
 
         public List<string> Errors { get; set; } = new();
     }

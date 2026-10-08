@@ -96,6 +96,14 @@ namespace NhlFantasyLeague.api.Controllers
                     GoalieShutouts = fts.GoalieShutouts,
                     GoaliePoints = fts.GoaliePoints,
 
+                    // Position-split fantasy points. These three columns
+                    // always sum to TotalFantasyPoints; both writers
+                    // preserve that invariant and log a Warning if it
+                    // ever fails.
+                    ForwardFantasyPoints = fts.ForwardFantasyPoints,
+                    DefenseFantasyPoints = fts.DefenseFantasyPoints,
+                    GoalieFantasyPoints = fts.GoalieFantasyPoints,
+
                     TotalFantasyPoints = fts.TotalFantasyPoints,
                     TotalFantasyPointsComputedAt =
                         fts.TotalFantasyPointsComputedAt

@@ -22,10 +22,9 @@ import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 
 type SortKey =
     | 'totalGames'
-    | 'skaterHatTricks'
-    | 'goalieWins'
-    | 'goalieOvertimeLosses'
-    | 'goalieShutouts'
+    | 'forwardFantasyPoints'
+    | 'defenseFantasyPoints'
+    | 'goalieFantasyPoints'
     | 'totalPoints'
     | 'yesterdayFantasyPoints'
     | 'todayFantasyPoints'
@@ -53,7 +52,7 @@ const PTS_HIGHLIGHT = '#00F0FF';
 
 const RED_NEON = '#FF0F3D';
 
-const GRID_COLUMNS = '6% 20% repeat(9, calc((100% - 26%) / 9))';
+const GRID_COLUMNS = '6% 20% repeat(8, calc((100% - 26%) / 8))';
 
 /**
  * Accent used for the neon left bar on every row of the two
@@ -479,7 +478,12 @@ function ColumnHeader({
 }) {
     const active = activeSortField === sortField;
 
-    const isCompact = label === 'HIER' || label === 'AJD';
+    const isCompact =
+        label === 'HIER' ||
+        label === 'AJD' ||
+        label === 'Apts' ||
+        label === 'Dpts' ||
+        label === 'Gpts';
 
     return (
         <button
@@ -1038,9 +1042,12 @@ function MyPlayersSection({
                         <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
                             Joueur
                         </div>
-                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                            Temps
-                        </div>
+                            <div
+                                className='text-center font-bold uppercase tracking-wider'
+                                style={{ color: GOLD }}
+                            >
+                                Temps
+                            </div>
                         <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
                             G
                         </div>
@@ -1053,9 +1060,9 @@ function MyPlayersSection({
                         >
                             PTS
                         </div>
-                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                            TOI
-                        </div>
+                            <div className='text-center font-bold uppercase tracking-wider text-white'>
+                                TOI
+                            </div>
                         <div
                             className='text-center font-bold uppercase tracking-wider'
                             style={{ color: GOLD }}
@@ -1137,7 +1144,7 @@ function MyPlayersSection({
                                 >
                                     {formatStat(p.points)}
                                 </div>
-                                <div className='text-center text-[#7DD3FC]'>
+                                <div className='text-center text-white'>
                                     {p.timeOnIce ?? '—'}
                                 </div>
                                 <div
@@ -1459,14 +1466,12 @@ export default function ClassementPage() {
         switch (key) {
             case 'totalGames':
                 return row.skaterGamesPlayed + row.goalieGamesPlayed;
-            case 'skaterHatTricks':
-                return row.skaterHatTricks;
-            case 'goalieWins':
-                return row.goalieWins;
-            case 'goalieOvertimeLosses':
-                return row.goalieOvertimeLosses;
-            case 'goalieShutouts':
-                return row.goalieShutouts;
+            case 'forwardFantasyPoints':
+                return row.forwardFantasyPoints;
+            case 'defenseFantasyPoints':
+                return row.defenseFantasyPoints;
+            case 'goalieFantasyPoints':
+                return row.goalieFantasyPoints;
             case 'totalPoints':
                 return row.skaterPoints + row.goaliePoints;
             case 'yesterdayFantasyPoints':
@@ -1655,50 +1660,42 @@ export default function ClassementPage() {
                             Équipe
                         </div>
 
-                        <ColumnHeader
-                            label='GP'
-                            sortField='totalGames'
-                            activeSortField={sortKey}
-                            sortDirection={sortDirection}
-                            onClick={handleSort}
-                        />
-                        <ColumnHeader
-                            label='W'
-                            sortField='goalieWins'
-                            activeSortField={sortKey}
-                            sortDirection={sortDirection}
-                            onClick={handleSort}
-                            color={ELECTRIC_BRIGHT}
-                        />
-                        <ColumnHeader
-                            label='OTL'
-                            sortField='goalieOvertimeLosses'
-                            activeSortField={sortKey}
-                            sortDirection={sortDirection}
-                            onClick={handleSort}
-                        />
-                        <ColumnHeader
-                            label='SO'
-                            sortField='goalieShutouts'
-                            activeSortField={sortKey}
-                            sortDirection={sortDirection}
-                            onClick={handleSort}
-                        />
-                        <ColumnHeader
-                            label='3B'
-                            sortField='skaterHatTricks'
-                            activeSortField={sortKey}
-                            sortDirection={sortDirection}
-                            onClick={handleSort}
-                        />
-                        <ColumnHeader
-                            label='PTS'
-                            sortField='totalPoints'
-                            activeSortField={sortKey}
-                            sortDirection={sortDirection}
-                            onClick={handleSort}
-                            color={PTS_HIGHLIGHT}
-                        />
+                            <ColumnHeader
+                                label='GP'
+                                sortField='totalGames'
+                                activeSortField={sortKey}
+                                sortDirection={sortDirection}
+                                onClick={handleSort}
+                            />
+                            <ColumnHeader
+                                label='Apts'
+                                sortField='forwardFantasyPoints'
+                                activeSortField={sortKey}
+                                sortDirection={sortDirection}
+                                onClick={handleSort}
+                            />
+                            <ColumnHeader
+                                label='Dpts'
+                                sortField='defenseFantasyPoints'
+                                activeSortField={sortKey}
+                                sortDirection={sortDirection}
+                                onClick={handleSort}
+                            />
+                            <ColumnHeader
+                                label='Gpts'
+                                sortField='goalieFantasyPoints'
+                                activeSortField={sortKey}
+                                sortDirection={sortDirection}
+                                onClick={handleSort}
+                            />
+                            <ColumnHeader
+                                label='PTS'
+                                sortField='totalPoints'
+                                activeSortField={sortKey}
+                                sortDirection={sortDirection}
+                                onClick={handleSort}
+                                color={PTS_HIGHLIGHT}
+                            />
                         <ColumnHeader
                             label='HIER'
                             sortField='yesterdayFantasyPoints'
@@ -1834,10 +1831,14 @@ export default function ClassementPage() {
                                     </div>
 
                                     <div
-                                        className='text-center font-semibold'
-                                        style={{ color: ELECTRIC_BRIGHT }}
+                                        className={cn(
+                                            'text-center',
+                                            isMine
+                                                ? 'text-white'
+                                                : 'text-[#7DD3FC]',
+                                        )}
                                     >
-                                        {row.goalieWins}
+                                        {row.forwardFantasyPoints}
                                     </div>
 
                                     <div
@@ -1848,7 +1849,7 @@ export default function ClassementPage() {
                                                 : 'text-[#7DD3FC]',
                                         )}
                                     >
-                                        {row.goalieOvertimeLosses}
+                                        {row.defenseFantasyPoints}
                                     </div>
 
                                     <div
@@ -1859,18 +1860,7 @@ export default function ClassementPage() {
                                                 : 'text-[#7DD3FC]',
                                         )}
                                     >
-                                        {row.goalieShutouts}
-                                    </div>
-
-                                    <div
-                                        className={cn(
-                                            'text-center',
-                                            isMine
-                                                ? 'text-white'
-                                                : 'text-[#7DD3FC]',
-                                        )}
-                                    >
-                                        {row.skaterHatTricks}
+                                        {row.goalieFantasyPoints}
                                     </div>
 
                                     <div
