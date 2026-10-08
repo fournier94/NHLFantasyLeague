@@ -35,6 +35,20 @@ namespace NhlFantasyLeague.api.Services.Jobs
     /// always get the first crack at a free lock and can never be
     /// starved by FREQUENT ones (frequent refresh).
     ///
+    /// SETTLE RETRIES
+    ///
+    /// Some jobs (post-game write, season reconciliation) can run
+    /// successfully yet find their target date not fully settled:
+    /// a West Coast game scheduled on the target date is still LIVE
+    /// when the job fires at 02:30 ET. Those jobs decline to mark
+    /// themselves complete and instead schedule a short follow-up
+    /// via the same _nextAttemptAllowedUtcByJob slot that the failure
+    /// path uses. The next tick sees the elapsed delay and re-fires
+    /// the job, which repeats until the target is settled. The job's
+    /// own time-of-day gate bounds the retry chain: once the ET date
+    /// rolls over, the old target can no longer fire, and the new day
+    /// starts a fresh attempt with the correct target.
+    ///
     /// Priority order, most important first:
     ///
     ///   1. Weekly deep refresh       (once a week, must not miss)
@@ -164,6 +178,22 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// </summary>
         private static readonly TimeSpan FailureBackoff =
             TimeSpan.FromMinutes(10);
+
+        /// <summary>
+        /// How long to wait before re-firing a once-per-day job that
+        /// either failed or ran successfully but found its target
+        /// date not fully settled (a game on the target date is
+        /// still LIVE or CRIT).
+        ///
+        /// Fifteen minutes is short enough that a West Coast game
+        /// ending at 03:15 ET gets its final stats persisted by
+        /// 03:30 ET, and long enough that the retry loop is not
+        /// hammering the NHL API. The retry chain is bounded by the
+        /// job's own time-of-day gate: once the ET date rolls over,
+        /// the old target can no longer fire.
+        /// </summary>
+        private static readonly TimeSpan SettleRetryInterval =
+            TimeSpan.FromMinutes(15);
 
         /// <summary>UTC instant the heavy lock was last acquired (watchdog).</summary>
         private DateTime _heavyLockAcquiredAtUtc = DateTime.MinValue;
@@ -416,7 +446,14 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// <summary>
         /// Marks a once-per-day job as successfully completed for the
         /// given ET calendar date. Called by the job itself at the very
-        /// end, only when the work finished without throwing.
+        /// end, only when the work finished without throwing AND the
+        /// target was fully settled.
+        ///
+        /// Also clears any pending settle retry for the job. Once the
+        /// job has reported its target as settled, there is nothing
+        /// left to retry today, and a stale timestamp in the retry
+        /// dictionary could otherwise suppress the first fire on the
+        /// next ET day.
         /// </summary>
         private void MarkJobCompleted(
             string jobName,
@@ -425,6 +462,35 @@ namespace NhlFantasyLeague.api.Services.Jobs
             lock (_stateLock)
             {
                 _lastCompletedEtDateByJob[jobName] = completedEtDate;
+                _nextAttemptAllowedUtcByJob.Remove(jobName);
+            }
+        }
+
+        /// <summary>
+        /// Schedules a short follow-up attempt for a once-per-day job
+        /// whose target was not fully settled when it ran, or whose
+        /// run failed. Both cases are handled the same way: the
+        /// scheduler simply does not fire this job again until the
+        /// retry interval has elapsed.
+        ///
+        /// Reuses _nextAttemptAllowedUtcByJob so no additional state
+        /// is needed: the same dictionary already gates
+        /// ShouldFireOncePerDayJob, and its semantics ("do not fire
+        /// this job before instant X") fit both the failure backoff
+        /// and the settle retry.
+        ///
+        /// The retry chain stops on its own. The job's work function
+        /// will either reach a settled target and call
+        /// MarkJobCompleted (which clears the entry), or the ET date
+        /// will roll over and the job's own time-of-day gate will
+        /// stop firing for its old target.
+        /// </summary>
+        private void ScheduleSettleRetry(string jobName)
+        {
+            lock (_stateLock)
+            {
+                _nextAttemptAllowedUtcByJob[jobName] =
+                    DateTime.UtcNow + SettleRetryInterval;
             }
         }
 
@@ -802,8 +868,8 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 return;
             }
 
-            var completedEtDate = DateOnly.FromDateTime(
-                TimeZoneHelper.ToEastern(DateTime.UtcNow));
+            var completedEtDate = TimeZoneHelper.GetNhlGameDateEt(
+                DateTime.UtcNow);
 
             try
             {
@@ -819,24 +885,59 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     .PersistFinalGamesForDateAsync(targetEtDate, ct);
 
                 _logger.LogInformation(
-                    "Post-game write done. Games={Games}, " +
+                    "Post-game write done for {Date}. Games={Games}, " +
                     "Inserted={Inserted}, Updated={Updated}, " +
                     "SeasonStatsInserted={SeasonStatsInserted}, " +
-                    "TeamDelta={TeamDelta}, Errors={Errors}.",
+                    "TeamDelta={TeamDelta}, Unsettled={Unsettled}, " +
+                    "Errors={Errors}.",
+                    targetEtDate,
                     result.FinalGamesOnSchedule,
                     result.GameLogsInserted,
                     result.GameLogsUpdated,
                     result.SeasonStatsInserted,
                     result.TotalFantasyPointsDelta,
+                    result.UnsettledGameIds.Count,
                     result.Errors.Count);
 
                 // Standings changed. Drop the cached copies so the
                 // next read reflects the fresh totals.
                 _responseCache.Invalidate("standings:");
 
-                // Only mark the job as done-for-today on success. A
-                // throw leaves the flag unset so the next tick retries.
-                MarkJobCompleted(JobPostGameWrite, completedEtDate);
+                if (result.IsSettled)
+                {
+                    // Every game on the target date is FINAL/OFF and
+                    // has been written (or was already up to date).
+                    // The job is done for today; no follow-up is
+                    // scheduled, and MarkJobCompleted clears any
+                    // retry state.
+                    MarkJobCompleted(JobPostGameWrite, completedEtDate);
+                }
+                else
+                {
+                    // At least one game on the target date is still
+                    // LIVE, CRIT, FUT or PRE. Do NOT mark the job as
+                    // done for today; schedule a short follow-up so
+                    // the tick keeps re-firing it until the date
+                    // settles.
+                    //
+                    // The most common real-world trigger is a West
+                    // Coast game still in the third period when the
+                    // post-game write first fires at 02:30 ET. Without
+                    // this, the job would mark itself complete for
+                    // the day and never come back for the game that
+                    // finished at 03:15 ET; the pipeline would only
+                    // recover the final stats on the 05:00
+                    // reconciliation, hours later.
+                    ScheduleSettleRetry(JobPostGameWrite);
+
+                    _logger.LogInformation(
+                        "Post-game write for {Date} is not settled " +
+                        "yet ({Unsettled} game(s) still active). " +
+                        "Scheduling a retry in {Minutes} minute(s).",
+                        targetEtDate,
+                        result.UnsettledGameIds.Count,
+                        SettleRetryInterval.TotalMinutes);
+                }
             }
             catch (Exception ex)
             {
@@ -844,6 +945,11 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     ex,
                     "Post-game write failed for ET date {Date}.",
                     targetEtDate);
+
+                // A thrown exception means we cannot know whether the
+                // target is settled. Schedule a retry so a persistent
+                // failure does not hot-loop the scheduler.
+                ScheduleSettleRetry(JobPostGameWrite);
             }
             finally
             {
@@ -981,6 +1087,11 @@ namespace NhlFantasyLeague.api.Services.Jobs
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Daily refresh failed.");
+
+                // A thrown exception means the cleanup did not run to
+                // completion. Schedule a retry so a persistent failure
+                // does not hot-loop the scheduler.
+                ScheduleSettleRetry(JobDailyCleanup);
             }
             finally
             {
@@ -1047,6 +1158,11 @@ namespace NhlFantasyLeague.api.Services.Jobs
             {
                 _logger.LogError(
                     ex, "Career stats refresh failed.");
+
+                // A thrown exception means we cannot know whether the
+                // landing refresh completed. Schedule a retry so a
+                // persistent failure does not hot-loop the scheduler.
+                ScheduleSettleRetry(JobCareerStatsRefresh);
             }
             finally
             {
@@ -1146,7 +1262,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     // Mark the weekly job as completed for today ONLY
                     // when every sub-step succeeded. A partial success
                     // is treated as a failure: the flag stays unset, so
-                    // the next tick retries with the 10-minute backoff.
+                    // the next tick retries with the 15-minute backoff.
                     MarkJobCompleted(JobWeeklyRefresh, completedEtDate);
                 }
                 else
@@ -1154,14 +1270,23 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     _logger.LogWarning(
                         "Weekly deep refresh finished with {Count} " +
                         "failing step(s): {Steps}. Not marking as " +
-                        "completed; will retry with backoff.",
+                        "completed; scheduling a retry in {Minutes} " +
+                        "minute(s).",
                         failedSteps.Count,
-                        string.Join(", ", failedSteps));
+                        string.Join(", ", failedSteps),
+                        SettleRetryInterval.TotalMinutes);
+
+                    ScheduleSettleRetry(JobWeeklyRefresh);
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Weekly deep refresh failed.");
+
+                // A thrown exception means we cannot know whether the
+                // deep refresh completed. Schedule a retry so a
+                // persistent failure does not hot-loop the scheduler.
+                ScheduleSettleRetry(JobWeeklyRefresh);
             }
             finally
             {
@@ -1213,16 +1338,37 @@ namespace NhlFantasyLeague.api.Services.Jobs
         ///
         /// Failure behaviour:
         ///
-        /// The job is marked complete when every day's reconciliation
-        /// ran without throwing. Per-game boxscore errors are logged
-        /// but do not fail the job: they are almost always transient,
-        /// and re-running the same date later is already guaranteed by
-        /// the 10:00 and 15:00 slots. A thrown exception (schedule
-        /// fetch failed, DB save failed) leaves the job un-marked so
-        /// the next tick retries with the 10-minute failure backoff.
+        /// The job is marked complete only when BOTH of these hold:
         ///
-        /// Runs at 05:00, 10:00, 15:00 ET. The 15:00 ET slot is skipped
-        /// when an afternoon NHL game is scheduled.
+        ///   1. Every day's reconciliation ran without throwing.
+        ///   2. Every day in the re-verified window is settled:
+        ///      each game scheduled on it is FINAL/OFF. If any
+        ///      game is still LIVE, CRIT, FUT or PRE, the date is
+        ///      treated as not yet settled.
+        ///
+        /// When either condition fails, the job schedules a short
+        /// follow-up via the shared _nextAttemptAllowedUtcByJob slot
+        /// and does not mark itself complete for today. The next tick
+        /// re-fires it, and it keeps re-firing until the window is
+        /// settled or the ET date rolls over (at which point the old
+        /// target can no longer fire and the new day starts a fresh
+        /// reconciliation).
+        ///
+        /// The settle check is what lets the 05:00 reconciliation
+        /// catch a West Coast game that finished after the post-game
+        /// write ran. Without it, the job would mark itself complete
+        /// as soon as it ran, and the game that went FINAL at 05:15
+        /// would not get its final stats until the 10:00 slot.
+        ///
+        /// Per-game boxscore errors are logged but do not fail the
+        /// job on their own. They are almost always transient, and
+        /// the follow-up retries and the later 10:00 / 15:00 slots
+        /// cover them. A thrown exception (schedule fetch failed,
+        /// DB save failed) also schedules a retry, so a persistent
+        /// failure does not hot-loop the scheduler.
+        ///
+        /// Runs at 05:00, 10:00, 15:00 ET. The 15:00 ET slot is
+        /// skipped when an afternoon NHL game is scheduled.
         /// </summary>
         private async Task RunSeasonReconciliationAsync(
             string slotLabel,
@@ -1288,6 +1434,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 var totalUpdated = 0;
                 var totalFpDelta = 0;
                 var totalBoxscoreErrors = 0;
+                var totalUnsettled = 0;
                 var anyDayThrew = false;
 
                 _logger.LogInformation(
@@ -1312,18 +1459,20 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         totalUpdated += result.GameLogsUpdated;
                         totalFpDelta += result.TotalFantasyPointsDelta;
                         totalBoxscoreErrors += result.Errors.Count;
+                        totalUnsettled += result.UnsettledGameIds.Count;
 
                         _logger.LogInformation(
                             "Season reconciliation ({Slot}) re-verified " +
                             "{Date}: {Games} game(s), {Inserted} inserted, " +
                             "{Updated} updated, {Delta} FP delta, " +
-                            "{Errors} boxscore error(s).",
+                            "{Unsettled} unsettled, {Errors} boxscore error(s).",
                             slotLabel,
                             date,
                             result.FinalGamesOnSchedule,
                             result.GameLogsInserted,
                             result.GameLogsUpdated,
                             result.TotalFantasyPointsDelta,
+                            result.UnsettledGameIds.Count,
                             result.Errors.Count);
                     }
                     catch (Exception ex)
@@ -1390,11 +1539,38 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     totalFpDelta,
                     totalBoxscoreErrors);
 
-                // Mark done only when nothing threw. Per-game errors
-                // are tolerated; a full day throwing is not.
-                if (!anyDayThrew)
+                // Mark done only when nothing threw AND every date in
+                // the re-verified window is settled. The distinction
+                // matters on a night with a late West Coast game: the
+                // 05:00 reconciliation can see that game still LIVE
+                // even after the post-game write has run, and without
+                // the unsettled check it would mark itself complete
+                // and never come back for the game that finished at
+                // 05:15.
+                //
+                // When either condition fails, schedule a short retry
+                // via the existing _nextAttemptAllowedUtcByJob slot.
+                // The job's time-of-day gate bounds the retry chain:
+                // once the ET date rolls over, the old target date
+                // can no longer fire, and the new day starts a fresh
+                // reconciliation.
+                if (!anyDayThrew && totalUnsettled == 0)
                 {
                     MarkJobCompleted(jobName, todayEt);
+                }
+                else
+                {
+                    ScheduleSettleRetry(jobName);
+
+                    _logger.LogInformation(
+                        "Season reconciliation ({Slot}) not marked " +
+                        "complete: AnyDayThrew={AnyDayThrew}, " +
+                        "UnsettledGames={Unsettled}. Scheduling a retry " +
+                        "in {Minutes} minute(s).",
+                        slotLabel,
+                        anyDayThrew,
+                        totalUnsettled,
+                        SettleRetryInterval.TotalMinutes);
                 }
             }
             catch (Exception ex)
@@ -1402,6 +1578,12 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 _logger.LogError(
                     ex, "Season reconciliation ({Slot}) failed.",
                     slotLabel);
+
+                // A thrown exception means we cannot know whether the
+                // re-verified window is settled. Schedule a retry so
+                // a persistent failure does not hot-loop the
+                // scheduler.
+                ScheduleSettleRetry(jobName);
             }
             finally
             {
@@ -1563,14 +1745,23 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     _logger.LogWarning(
                         "Non-NHL landing refresh produced zero successes " +
                         "out of {Total} player(s). Not marking as " +
-                        "completed; will retry with backoff.",
-                        totalPlayers);
+                        "completed; scheduling a retry in {Minutes} " +
+                        "minute(s).",
+                        totalPlayers,
+                        SettleRetryInterval.TotalMinutes);
+
+                    ScheduleSettleRetry(JobNonNhlRefresh);
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(
                     ex, "Non-NHL landing refresh failed.");
+
+                // A thrown exception means we cannot know whether any
+                // player was refreshed. Schedule a retry so a
+                // persistent failure does not hot-loop the scheduler.
+                ScheduleSettleRetry(JobNonNhlRefresh);
             }
             finally
             {

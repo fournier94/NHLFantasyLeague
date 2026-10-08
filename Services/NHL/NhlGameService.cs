@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Models.Dtos;
+using NhlFantasyLeague.api.Services.Logging;
 
 namespace NhlFantasyLeague.api.Services.NHL
 {
@@ -111,15 +112,62 @@ namespace NhlFantasyLeague.api.Services.NHL
         private static readonly TimeSpan BoxscoreCacheRetention =
             TimeSpan.FromDays(7);
 
+        /// <summary>
+        /// Defensive cap on how long a game is allowed to stay in a
+        /// LIVE or CRIT state before we stop polling it.
+        ///
+        /// Real NHL games never come close to this. It exists only so
+        /// a stuck or suspended game cannot poll forever and burn our
+        /// share of the NHL API budget. Eight hours is well past the
+        /// longest plausible game including pre-game delays.
+        /// </summary>
+        private static readonly TimeSpan MaxLiveDurationSinceStart =
+            TimeSpan.FromHours(8);
+
+        /// <summary>
+        /// Grace window after a game's scheduled start during which a
+        /// FINAL/OFF game is still polled even if its ET calendar
+        /// date is no longer today.
+        ///
+        /// This is the fix for the LIVE -> FINAL transition that
+        /// crosses ET midnight. A West Coast game that starts Oct 1
+        /// at 22:00 ET and goes FINAL at 00:30 ET on Oct 2 would
+        /// otherwise be excluded by the same-ET-day check the moment
+        /// the date rolled over, leaving the live cache frozen on the
+        /// last pre-midnight LIVE snapshot and the user-visible clock
+        /// stuck on the Game Day page. With this window, the tick
+        /// keeps polling the game until it has fetched the real FINAL
+        /// boxscore, then it drops out naturally.
+        ///
+        /// Twelve hours covers any real game plus a generous buffer
+        /// for the NHL's post-game corrections. Once the window
+        /// expires, the same-day check (or the absence of the game
+        /// from the schedule) takes over.
+        /// </summary>
+        private static readonly TimeSpan RecentFinishedGameGraceWindow =
+            TimeSpan.FromHours(12);
+
         private readonly HttpClient _httpClient;
         private readonly AppDbContext _dbContext;
 
+        /// <summary>
+        /// Records unsettled-game warnings into SystemEventLogs so the
+        /// admin page can surface "the post-game write for date X ran
+        /// while game Y was still LIVE" without anyone having to read
+        /// server logs. Every call site wraps the usage in a
+        /// try/catch so a logging failure can never break the persist
+        /// path.
+        /// </summary>
+        private readonly SystemEventLogService _log;
+
         public NhlGameService(
             HttpClient httpClient,
-            AppDbContext dbContext)
+            AppDbContext dbContext,
+            SystemEventLogService log)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
+            _log = log;
         }
 
         // =================================================================
@@ -231,12 +279,57 @@ namespace NhlFantasyLeague.api.Services.NHL
                 // method, so cache.Get returns the previous tick's
                 // snapshot.
                 var cached = cache.Get(game.Id);
+
                 if (cached?.Boxscore != null)
                 {
                     snapshot.Boxscore = cached.Boxscore;
                 }
 
-                if (ShouldAttachBoxscore(game, now))
+                // State-transition override.
+                //
+                // ShouldAttachBoxscore answers "is it worth polling
+                // this game on this tick?" using time-based rules.
+                // Those rules have a blind spot: a game that goes
+                // FINAL after the live window has closed (or after
+                // the ET calendar day rolled over, or after the
+                // 12-hour grace window) can end up preserved in the
+                // cache with a stale LIVE boxscore, and
+                // ShouldAttachBoxscore will keep returning false
+                // forever.
+                //
+                // The fix: whenever the schedule says the game has
+                // moved to FINAL/OFF but the cache still says
+                // LIVE/CRIT, force a fetch regardless of any
+                // time-based rule. The transition itself is the
+                // trigger.
+                //
+                // This covers three cases:
+                //   - a game that ends while the live window is
+                //     closed (between 02:00 and 11:00 ET),
+                //   - a game that ends after the ET calendar day
+                //     has rolled over,
+                //   - a game that ends after the 12-hour grace
+                //     window has elapsed.
+                var cachedState = cached?.Boxscore?.GameState;
+
+                var scheduleSaysFinished =
+                    FinishedStates.Contains(game.GameState);
+
+                var cacheSaysActive =
+                    cachedState != null &&
+                    (string.Equals(
+                        cachedState,
+                        "LIVE",
+                        StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(
+                        cachedState,
+                        "CRIT",
+                        StringComparison.OrdinalIgnoreCase));
+
+                var forceTransitionFetch =
+                    scheduleSaysFinished && cacheSaysActive;
+
+                if (forceTransitionFetch || ShouldAttachBoxscore(game, now))
                 {
                     try
                     {
@@ -363,24 +456,32 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// Decides whether to fetch a fresh boxscore for one game on
         /// the current tick.
         ///
-        /// Rule: a game is only polled while it belongs to today's ET
-        /// calendar date. This covers the whole NHL slate (matinee
-        /// through late-night West Coast games) and automatically
-        /// stops polling games once the ET day rolls over. That is
-        /// what keeps yesterday's games out of the network pipeline
-        /// without needing a fixed number of hours.
+        /// There are two independent questions this function answers:
         ///
-        /// Within today:
-        ///   - LIVE / CRIT    -> fetched every tick.
-        ///   - FINAL / OFF    -> fetched on a per-game backoff: every
-        ///                        minute for the first 3 hours after
-        ///                        start, then every 5 minutes until
-        ///                        midnight ET.
+        ///   1. Is this game still producing data? (LIVE / CRIT)
+        ///      Live games must always be polled, regardless of
+        ///      which ET calendar day they started on. This is what
+        ///      stops a West Coast game that started at 22:30 ET
+        ///      from falling out of the poll set at 00:00 ET.
         ///
-        /// This means an ended game stays in the cache (and
-        /// clickable on the Game Day page) for the rest of the ET
-        /// day, instead of disappearing a few hours after its final
-        /// horn.
+        ///   2. Is this game finished, and recent enough to still be
+        ///      worth re-fetching? (FINAL / OFF)
+        ///      A finished game is polled if either its ET calendar
+        ///      date is today, or it started within the grace window.
+        ///      The grace window is what keeps polling a game that
+        ///      went FINAL just after ET midnight, so its real final
+        ///      boxscore lands in the cache before the game drops
+        ///      out of the schedule.
+        ///
+        /// Defensive cap: a game stuck in a LIVE state for more than
+        /// MaxLiveDurationSinceStart is treated as if it were done.
+        /// This exists only so a suspended or otherwise stuck game
+        /// cannot poll forever.
+        ///
+        /// The ET-day comparison uses TimeZoneHelper.GetNhlGameDateEt,
+        /// the same computation the rest of the pipeline uses for
+        /// PlayerGameLog.GameDate, so the polling decision stays
+        /// consistent with the game's assigned date.
         /// </summary>
         private static bool ShouldAttachBoxscore(
             NhlScheduleGame game,
@@ -391,39 +492,66 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return false;
             }
 
-            // Only poll games that are "today" in ET. This replaces
-            // the previous hours-since-start cutoff.
-            var todayEt = DateOnly.FromDateTime(
-                TimeZoneHelper.ToEastern(now));
-            var gameDateEt = DateOnly.FromDateTime(
-                TimeZoneHelper.ToEastern(game.StartTimeUtc));
+            var timeSinceStart = now - game.StartTimeUtc;
 
-            if (gameDateEt != todayEt)
-            {
-                return false;
-            }
+            var isLive =
+                string.Equals(
+                    game.GameState,
+                    "LIVE",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    game.GameState,
+                    "CRIT",
+                    StringComparison.OrdinalIgnoreCase);
 
-            var isLive = string.Equals(
-                    game.GameState, "LIVE", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(
-                    game.GameState, "CRIT", StringComparison.OrdinalIgnoreCase);
-
-            // LIVE / CRIT: fetch every tick, no backoff.
             if (isLive)
             {
+                // Defensive cap: real NHL games never run this long.
+                // If the NHL has left a game in a LIVE state past
+                // this window, treat it as done so we stop polling.
+                if (timeSinceStart > MaxLiveDurationSinceStart)
+                {
+                    return false;
+                }
+
                 _lastBoxscoreFetchUtc[game.Id] = now;
                 return true;
             }
 
-            // FINAL / OFF. Poll aggressively for the first 3 hours
-            // after start (covers the game ending and any immediate
-            // post-game corrections), then back off to once every 5
-            // minutes for the rest of the ET day.
-            var minutesSinceStart =
-                (now - game.StartTimeUtc).TotalMinutes;
+            // FINAL / OFF.
+            //
+            // Two conditions qualify a finished game for polling:
+            //
+            //   a) Same ET calendar day. The game started today and
+            //      finished today, so we keep refreshing it for the
+            //      rest of the day.
+            //
+            //   b) Within the grace window after its scheduled start.
+            //      This catches the LIVE -> FINAL transition that
+            //      crosses ET midnight. Without it, the tick that
+            //      sees FINAL for the first time after midnight
+            //      would skip the game, and the cache would hold the
+            //      last pre-midnight LIVE snapshot indefinitely.
+            var todayEt = TimeZoneHelper.GetNhlGameDateEt(now);
+            var gameDateEt = TimeZoneHelper.GetNhlGameDateEt(
+                game.StartTimeUtc);
 
+            var sameEtDay = gameDateEt == todayEt;
+            var withinGraceWindow =
+                timeSinceStart < RecentFinishedGameGraceWindow;
+
+            if (!sameEtDay && !withinGraceWindow)
+            {
+                return false;
+            }
+
+            // Per-game backoff. A game that started recently is
+            // polled aggressively (once a minute for the first 3
+            // hours); one that started longer ago backs off to
+            // once every 5 minutes. This runs the same way whether
+            // the game qualified via (a) or (b).
             var minMinutesBetweenFetches =
-                minutesSinceStart < 180 ? 1 : 5;
+                timeSinceStart.TotalMinutes < 180 ? 1 : 5;
 
             if (_lastBoxscoreFetchUtc.TryGetValue(game.Id, out var last) &&
                 (now - last).TotalMinutes < minMinutesBetweenFetches)
@@ -443,8 +571,30 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// Persists the final stats of every FINAL or OFF game for the
         /// given date. One bulk transaction.
         ///
-        /// Runs once a night at 2:30 AM ET. Idempotent: running it
-        /// twice on the same date does zero writes the second time.
+        /// Idempotent: running it twice on the same date does zero
+        /// writes the second time.
+        ///
+        /// CONVERGENCE CONTRACT
+        ///
+        /// The method reports two separate things to its caller:
+        ///
+        ///   - The FINAL/OFF games it managed to persist (same
+        ///     statistics as before).
+        ///   - The set of games on this date that are NOT yet in a
+        ///     terminal state (FUT, PRE, LIVE, CRIT), via
+        ///     result.UnsettledGameIds.
+        ///
+        /// The second signal is what lets the post-game write and the
+        /// season reconciliation retry themselves until every game on
+        /// the date has settled. The most common real-world case is a
+        /// West Coast game still in the third period when the 02:30 ET
+        /// post-game write fires; without this signal, the job would
+        /// mark the date done and never come back for the game that
+        /// finished at 03:15 ET.
+        ///
+        /// A Warning is written to SystemEventLogs whenever unsettled
+        /// games are found, so the admin page can show what happened
+        /// without needing server-side log access.
         /// </summary>
         public async Task<PersistFinalGamesResult> PersistFinalGamesForDateAsync(
             DateOnly date,
@@ -453,6 +603,25 @@ namespace NhlFantasyLeague.api.Services.NHL
             var result = new PersistFinalGamesResult { Date = date };
 
             var schedule = await GetScheduleForDateAsync(date, ct);
+
+            // Unsettled = any game scheduled on this date whose state
+            // is not FINAL or OFF. That includes FUT, PRE, LIVE and
+            // CRIT — all of them mean "we cannot finalize this date
+            // yet." The already-final games on the date are still
+            // persisted below; the caller uses UnsettledGameIds to
+            // decide whether to retry later.
+            var unsettled = schedule
+                .Where(g => !FinishedStates.Contains(g.GameState))
+                .ToList();
+
+            result.UnsettledGameIds = unsettled
+                .Select(g => g.Id)
+                .ToList();
+
+            if (unsettled.Count > 0)
+            {
+                await LogUnsettledGamesAsync(date, unsettled, ct);
+            }
 
             var finalGames = schedule
                 .Where(g => FinishedStates.Contains(g.GameState))
@@ -510,6 +679,49 @@ namespace NhlFantasyLeague.api.Services.NHL
             result.Errors.AddRange(persistResult.Errors);
 
             return result;
+        }
+
+        /// <summary>
+        /// Records a Warning in SystemEventLogs listing every game on
+        /// the target date that was not in a terminal state when the
+        /// persist ran. Never throws: a logging failure must not
+        /// cascade into the persist path.
+        ///
+        /// The message is kept short so it fits the 500-char Message
+        /// column; per-game detail (id, state, start time) goes into
+        /// Details, which allows up to 2000 chars.
+        /// </summary>
+        private async Task LogUnsettledGamesAsync(
+            DateOnly date,
+            List<NhlScheduleGame> unsettled,
+            CancellationToken ct)
+        {
+            try
+            {
+                var ids = string.Join(
+                    ", ",
+                    unsettled.Select(g => g.Id));
+
+                var details = string.Join(
+                    "\n",
+                    unsettled.Select(g =>
+                        $"{g.Id} {g.GameState} " +
+                        $"starts {g.StartTimeUtc:yyyy-MM-dd HH:mm:ss} UTC"));
+
+                await _log.RecordAsync(
+                    source: "NhlGameService",
+                    category: "PostGameWriteUnsettled",
+                    severity: "Warning",
+                    message:
+                        $"Post-game write for {date:yyyy-MM-dd} found " +
+                        $"{unsettled.Count} unsettled game(s): {ids}.",
+                    details: details,
+                    ct: ct);
+            }
+            catch
+            {
+                // Never let logging failure cascade.
+            }
         }
 
         // =================================================================
@@ -1494,6 +1706,17 @@ PersistFinalGamesResult result)
         public List<string> Errors { get; set; } = new();
     }
 
+    /// <summary>
+    /// Outcome of one persist run for a specific ET calendar date.
+    ///
+    /// Carries two separate signals that callers rely on:
+    ///
+    ///   - What was actually written (GameLogsInserted, etc.).
+    ///   - Whether the date is fully settled (UnsettledGameIds,
+    ///     IsSettled). The post-game write and the season
+    ///     reconciliation use the latter to decide whether they are
+    ///     done for this date or need to retry later.
+    /// </summary>
     public class PersistFinalGamesResult
     {
         public DateOnly Date { get; set; }
@@ -1503,6 +1726,34 @@ PersistFinalGamesResult result)
         public int SeasonStatsInserted { get; set; }
         public int TeamSeasonsUpdated { get; set; }
         public int TotalFantasyPointsDelta { get; set; }
+
+        /// <summary>
+        /// NHL game IDs for every game on the target date that was
+        /// still in a non-terminal state (FUT, PRE, LIVE, CRIT) when
+        /// the persist ran.
+        ///
+        /// An empty list means the date is fully settled: every game
+        /// on it is FINAL or OFF and has been written (or was already
+        /// up to date). A non-empty list means the caller should
+        /// retry later; the post-game write and the season
+        /// reconciliation use this signal to keep themselves running
+        /// until the date converges.
+        /// </summary>
+        public List<long> UnsettledGameIds { get; set; } = new();
+
+        /// <summary>
+        /// True when every game on the target date is FINAL or OFF.
+        /// Convenience for callers that only care about the boolean.
+        ///
+        /// Deliberately does NOT consider Errors: a fetch failure on a
+        /// game that the schedule already reported as FINAL is a
+        /// different class of problem, and the caller sees it via the
+        /// Errors list. Keeping IsSettled purely about the schedule
+        /// lets a caller distinguish "the game hasn't finished" from
+        /// "the game finished but we couldn't reach the NHL API."
+        /// </summary>
+        public bool IsSettled => UnsettledGameIds.Count == 0;
+
         public List<string> Errors { get; set; } = new();
     }
 }

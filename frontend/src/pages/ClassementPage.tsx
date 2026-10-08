@@ -105,8 +105,36 @@ const REFRESH_SLOW_MS = 5 * 60_000;
  * visible again, the counter is bumped immediately so the user sees
  * current data on the very first frame after switching back.
  */
-function useAutoRefreshTick(): number {
+interface AutoRefreshState {
+    /**
+     * Tick counter. Increments on every scheduled refresh. Used by
+     * the page's data-fetching effects as a dependency so they know
+     * when to re-run.
+     */
+    tick: number;
+
+    /**
+     * Current fantasy date in ET, "yyyy-MM-dd", or null before the
+     * first fetch has landed. Backend-supplied: the frontend never
+     * recomputes the 3 AM cutoff.
+     */
+    currentFantasyDate: string | null;
+
+    /**
+     * Real ET calendar date, "yyyy-MM-dd", or null before the first
+     * fetch has landed.
+     */
+    currentEtDate: string | null;
+}
+
+function useAutoRefresh(): AutoRefreshState {
     const [tick, setTick] = useState(0);
+
+    const [currentFantasyDate, setCurrentFantasyDate] =
+        useState<string | null>(null);
+
+    const [currentEtDate, setCurrentEtDate] =
+        useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -137,6 +165,15 @@ function useAutoRefreshTick(): number {
                 const data = await getTodayGames();
 
                 if (cancelled) return;
+
+                // Refresh the two backend-supplied date fields. If
+                // the 3 AM ET cutoff has just passed, the fantasy
+                // date will change here, and every dependent effect
+                // on the page will re-run with the new value — that
+                // is what flips the "Aujourd'hui" and "Hier" columns
+                // together at 3 AM.
+                setCurrentFantasyDate(data.currentFantasyDate);
+                setCurrentEtDate(data.currentEtDate);
 
                 const hasLive = data.games.some(
                     (g) =>
@@ -182,11 +219,29 @@ function useAutoRefreshTick(): number {
 
     // When the tab becomes visible again, fire one immediate tick so
     // the user sees current data without waiting for the next timer.
+    //
+    // The tick alone is not enough: it re-runs the consumer effects
+    // with whatever currentFantasyDate they already had. If the tab
+    // was hidden across the 3 AM ET rollover, currentFantasyDate
+    // would still be yesterday's until the next scheduled tick. The
+    // additional getTodayGames() call here refreshes the two
+    // backend-supplied dates immediately, so the visible day flips
+    // at the same instant as the rest of the app.
     useEffect(() => {
         const onVisibility = () => {
-            if (document.visibilityState === 'visible') {
-                setTick((t) => t + 1);
-            }
+            if (document.visibilityState !== 'visible') return;
+
+            void (async () => {
+                try {
+                    const data = await getTodayGames();
+                    setCurrentFantasyDate(data.currentFantasyDate);
+                    setCurrentEtDate(data.currentEtDate);
+                } catch {
+                    // Non-fatal: the next scheduled tick retries.
+                }
+            })();
+
+            setTick((t) => t + 1);
         };
 
         document.addEventListener('visibilitychange', onVisibility);
@@ -199,7 +254,7 @@ function useAutoRefreshTick(): number {
         };
     }, []);
 
-    return tick;
+    return { tick, currentFantasyDate, currentEtDate };
 }
 
 // ---------------------------------------------------------------------
@@ -557,12 +612,24 @@ const VARIANT_CONFIG: Record<
  * first load (the one that runs on mount) still shows the loading
  * state as before.
  */
+
 function MyPlayersSection({
     variant,
     refreshTick,
+    currentFantasyDate,
 }: {
     variant: MyPlayersVariant;
     refreshTick: number;
+    /**
+     * Backend-supplied current fantasy date in ET, "yyyy-MM-dd", or
+     * null before the first fetch has landed. The "Hier" table uses
+     * this minus one day as its target date; the "Aujourd'hui" table
+     * filters the schedule by this value directly.
+     *
+     * The frontend never recomputes the 3 AM cutoff; it only reads
+     * this prop. That keeps the day boundary in one place.
+     */
+    currentFantasyDate: string | null;
 }) {
     const { user } = useAuth();
     const teamId = user?.fantasyTeamId ?? null;
@@ -574,12 +641,20 @@ function MyPlayersSection({
     const config = VARIANT_CONFIG[variant];
 
     /**
-     * Shared fetch routine. `silent` skips the loading/error toggles
-     * so an auto-refresh never flashes the UI.
+     * Shared fetch routine.
+     *
+     * `silent` skips the loading/error toggles so an auto-refresh
+     * never flashes the UI.
+     *
+     * `fantasyDate` is the backend-supplied current fantasy date and
+     * is what the two variants key off:
+     *   - "yesterday" reads PlayerGameLog for `fantasyDate - 1`
+     *   - "today"     filters the live schedule by `fantasyDate`
      */
     const loadPlayers = async (
         cancelledRef: { cancelled: boolean },
         silent: boolean,
+        fantasyDate: string,
     ) => {
         if (teamId == null) {
             if (!silent) {
@@ -604,18 +679,19 @@ function MyPlayersSection({
             if (variant === 'yesterday') {
                 // ---------------------------------------------------
                 // HIER — read from PlayerGameLog, never from the
-                // NHL API. Yesterday's games are final and frozen,
-                // so the DB already has everything we need. This
-                // path is instant and cannot trigger a 429.
+                // NHL API. The target date is the backend-supplied
+                // fantasy date minus one day. Because the fantasy
+                // date carries the 3 AM ET cutoff, this table flips
+                // at 3 AM instead of at midnight, together with the
+                // "Aujourd'hui" table and the standings columns.
                 //
                 // Only players who dressed are returned by the
                 // endpoint: a PlayerGameLog row exists only when
                 // the player actually appeared in a game.
                 // ---------------------------------------------------
 
-                const yesterdayIso = toIsoDate(
-                    new Date(Date.now() - 86_400_000),
-                );
+                const yesterdayIso =
+                    subtractOneDayFromIso(fantasyDate);
 
                 const stats = await getRosterGameStatsForDate(
                     teamId,
@@ -663,12 +739,25 @@ function MyPlayersSection({
                 // ---------------------------------------------------
                 // AUJOURD'HUI — keep the boxscore path. Live games
                 // need the clock, which only the boxscore carries.
+                //
+                // The filter is by the game's ET calendar start
+                // date (GameDayGameSummary.GameDate) against the
+                // backend-supplied fantasy date. This is the rule
+                // the league wants: a game that started Oct 1 at
+                // 22:00 ET and is still running at 01:00 ET on
+                // Oct 2 counts as Oct 1's game. The `|| isLive(g)`
+                // clause keeps a still-running game visible even
+                // once the fantasy date has rolled past its start
+                // date, so it never disappears from the table
+                // mid-play.
                 // ---------------------------------------------------
 
                 const schedule = await getTodayGames();
 
                 const games = schedule.games.filter(
-                    (g) => isTodayLocal(g.startTimeUtc) || isLive(g),
+                    (g) =>
+                        g.gameDate === fantasyDate ||
+                        isLive(g),
                 );
 
                 if (cancelledRef.cancelled) return;
@@ -863,19 +952,22 @@ function MyPlayersSection({
         }
     };
 
-    // Initial load. Fires on mount and whenever the team, the
-    // variant, or the error message (i.e. the display context)
-    // changes. Shows the loading state.
+    // Initial load. Fires on mount, whenever the team or variant
+    // changes, and — importantly — whenever the fantasy date
+    // changes. That last case is what flips the "Aujourd'hui" and
+    // "Hier" tables together at 3 AM ET.
     useEffect(() => {
+        if (!currentFantasyDate) return;
+
         const ref = { cancelled: false };
 
-        void loadPlayers(ref, false);
+        void loadPlayers(ref, false, currentFantasyDate);
 
         return () => {
             ref.cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [teamId, variant, config.errorMessage]);
+    }, [teamId, variant, currentFantasyDate, config.errorMessage]);
 
     // Auto-refresh tick. Fires only when the scheduler bumps the
     // counter, so it is silent by construction. Skipped on the very
@@ -883,16 +975,17 @@ function MyPlayersSection({
     // load effect above already fetched everything.
     useEffect(() => {
         if (refreshTick === 0) return;
+        if (!currentFantasyDate) return;
 
         const ref = { cancelled: false };
 
-        void loadPlayers(ref, true);
+        void loadPlayers(ref, true, currentFantasyDate);
 
         return () => {
             ref.cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [refreshTick]);
+    }, [refreshTick, currentFantasyDate]);
 
     if (teamId == null) return null;
 
@@ -928,48 +1021,48 @@ function MyPlayersSection({
                 <div className='relative mt-2'>
                     {/* ---- Header row (same chrome as the standings
                         table's header) ---- */}
-                        <div
-                            className='grid items-center rounded-t-lg border-b px-2 py-2.5 text-[0.7rem] sm:text-[0.8rem]'
-                            style={{
-                                gridTemplateColumns: MY_PLAYERS_GRID_COLUMNS,
-                                borderColor: 'rgba(51, 187, 255, 0.35)',
-                                borderTop: '1px solid #33BBFF',
-                                borderLeft: '1px solid #33BBFF',
-                                borderRight: '1px solid #33BBFF',
-                                background:
-                                    'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
-                                backgroundColor: '#050A16',
-                            }}
-                        >
-                            <div />
-                            <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
-                                Joueur
-                            </div>
-                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                                Temps
-                            </div>
-                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                                G
-                            </div>
-                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                                A
-                            </div>
-                            <div
-                                className='text-center font-bold uppercase tracking-wider'
-                                style={{ color: PTS_HIGHLIGHT }}
-                            >
-                                PTS
-                            </div>
-                            <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
-                                TOI
-                            </div>
-                            <div
-                                className='text-center font-bold uppercase tracking-wider'
-                                style={{ color: GOLD }}
-                            >
-                                FP
-                            </div>
+                    <div
+                        className='grid items-center rounded-t-lg border-b px-2 py-2.5 text-[0.7rem] sm:text-[0.8rem]'
+                        style={{
+                            gridTemplateColumns: MY_PLAYERS_GRID_COLUMNS,
+                            borderColor: 'rgba(51, 187, 255, 0.35)',
+                            borderTop: '1px solid #33BBFF',
+                            borderLeft: '1px solid #33BBFF',
+                            borderRight: '1px solid #33BBFF',
+                            background:
+                                'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
+                            backgroundColor: '#050A16',
+                        }}
+                    >
+                        <div />
+                        <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            Joueur
                         </div>
+                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            Temps
+                        </div>
+                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            G
+                        </div>
+                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            A
+                        </div>
+                        <div
+                            className='text-center font-bold uppercase tracking-wider'
+                            style={{ color: PTS_HIGHLIGHT }}
+                        >
+                            PTS
+                        </div>
+                        <div className='text-center font-bold uppercase tracking-wider text-[#33BBFF]'>
+                            TOI
+                        </div>
+                        <div
+                            className='text-center font-bold uppercase tracking-wider'
+                            style={{ color: GOLD }}
+                        >
+                            FP
+                        </div>
+                    </div>
 
                     {/* ---- Data rows wrapper (same chrome as the
                         standings table's row wrapper) ---- */}
@@ -981,80 +1074,80 @@ function MyPlayersSection({
                             backgroundColor: '#050A16',
                         }}
                     >
-                            {players.map((p) => (
+                        {players.map((p) => (
+                            <div
+                                key={p.entry.id}
+                                className='relative grid items-center border-b px-2 py-1.5 text-[0.85rem] tabular-nums transition-colors last:border-b-0 hover:bg-[#0088FF]/5 sm:py-2 sm:text-[0.95rem]'
+                                style={{
+                                    gridTemplateColumns:
+                                        MY_PLAYERS_GRID_COLUMNS,
+                                    backgroundImage: leftBarGradient(
+                                        PLAYER_ROW_ACCENT.accent,
+                                        PLAYER_ROW_ACCENT.mid,
+                                        PLAYER_ROW_ACCENT.core,
+                                    ),
+                                    borderLeft: '6px solid transparent',
+                                    backgroundOrigin: 'border-box',
+                                    backgroundClip: 'border-box',
+                                    borderBottomColor:
+                                        'rgba(51, 187, 255, 0.12)',
+                                }}
+                            >
                                 <div
-                                    key={p.entry.id}
-                                    className='relative grid items-center border-b px-2 py-1.5 text-[0.85rem] tabular-nums transition-colors last:border-b-0 hover:bg-[#0088FF]/5 sm:py-2 sm:text-[0.95rem]'
-                                    style={{
-                                        gridTemplateColumns:
-                                            MY_PLAYERS_GRID_COLUMNS,
-                                        backgroundImage: leftBarGradient(
-                                            PLAYER_ROW_ACCENT.accent,
-                                            PLAYER_ROW_ACCENT.mid,
-                                            PLAYER_ROW_ACCENT.core,
-                                        ),
-                                        borderLeft: '6px solid transparent',
-                                        backgroundOrigin: 'border-box',
-                                        backgroundClip: 'border-box',
-                                        borderBottomColor:
-                                            'rgba(51, 187, 255, 0.12)',
-                                    }}
+                                    className='flex items-center justify-center'
+                                    style={{ height: 20 }}
                                 >
-                                    <div
-                                        className='flex items-center justify-center'
-                                        style={{ height: 20 }}
-                                    >
-                                        <NhlTeamLogo
-                                            abbreviation={p.entry.nhlTeamAbbreviation}
-                                            size={32}
-                                        />
-                                    </div>
-
-                                    <Link
-                                        to={`/joueurs/${p.entry.nhlPlayerId}`}
-                                        className={cn(
-                                            'truncate pl-0.5 text-left font-semibold transition-colors',
-                                            isGoaliePosition(p.entry.position)
-                                                ? 'text-[#22C55E] hover:brightness-125'
-                                                : 'text-foreground hover:text-[#33BBFF]',
-                                        )}
-                                    >
-                                        {shortName(
-                                            p.entry.firstName,
-                                            p.entry.lastName,
-                                        )}
-                                    </Link>
-
-                                    <div
-                                        className='text-center text-[0.7rem] font-semibold tabular-nums'
-                                        style={{ color: GOLD }}
-                                    >
-                                        {p.gameClockLabel}
-                                    </div>
-
-                                    <div className='text-center text-[#7DD3FC]'>
-                                        {formatStat(p.goals)}
-                                    </div>
-                                    <div className='text-center text-[#7DD3FC]'>
-                                        {formatStat(p.assists)}
-                                    </div>
-                                    <div
-                                        className='text-center font-semibold'
-                                        style={{ color: PTS_HIGHLIGHT }}
-                                    >
-                                        {formatStat(p.points)}
-                                    </div>
-                                    <div className='text-center text-[#7DD3FC]'>
-                                        {p.timeOnIce ?? '—'}
-                                    </div>
-                                    <div
-                                        className='text-center font-semibold'
-                                        style={{ color: GOLD }}
-                                    >
-                                        {formatStat(p.fantasyPoints)}
-                                    </div>
+                                    <NhlTeamLogo
+                                        abbreviation={p.entry.nhlTeamAbbreviation}
+                                        size={32}
+                                    />
                                 </div>
-                            ))}
+
+                                <Link
+                                    to={`/joueurs/${p.entry.nhlPlayerId}`}
+                                    className={cn(
+                                        'truncate pl-0.5 text-left font-semibold transition-colors',
+                                        isGoaliePosition(p.entry.position)
+                                            ? 'text-[#22C55E] hover:brightness-125'
+                                            : 'text-foreground hover:text-[#33BBFF]',
+                                    )}
+                                >
+                                    {shortName(
+                                        p.entry.firstName,
+                                        p.entry.lastName,
+                                    )}
+                                </Link>
+
+                                <div
+                                    className='text-center text-[0.7rem] font-semibold tabular-nums'
+                                    style={{ color: GOLD }}
+                                >
+                                    {p.gameClockLabel}
+                                </div>
+
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {formatStat(p.goals)}
+                                </div>
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {formatStat(p.assists)}
+                                </div>
+                                <div
+                                    className='text-center font-semibold'
+                                    style={{ color: PTS_HIGHLIGHT }}
+                                >
+                                    {formatStat(p.points)}
+                                </div>
+                                <div className='text-center text-[#7DD3FC]'>
+                                    {p.timeOnIce ?? '—'}
+                                </div>
+                                <div
+                                    className='text-center font-semibold'
+                                    style={{ color: GOLD }}
+                                >
+                                    {formatStat(p.fantasyPoints)}
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -1067,40 +1160,41 @@ function MyPlayersSection({
 // ---------------------------------------------------------------------
 
 /**
- * Formats a Date as a local ISO date (yyyy-MM-dd). Same logic the
- * GameDay page uses for its date picker.
+ * Subtracts one calendar day from an ISO "yyyy-MM-dd" string.
+ *
+ * Used by the "Hier" table to compute its target date from the
+ * backend-supplied currentFantasyDate. It is pure string arithmetic
+ * on the date components, not on a local Date object, so it cannot
+ * drift with the browser's time zone or DST.
  */
-function toIsoDate(d: Date): string {
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-}
+function subtractOneDayFromIso(iso: string): string {
+    const parts = iso.split('-');
 
-/**
- * True when the given UTC instant falls on the user's local
- * calendar day. Mirrors the helper in GameDayPage so both pages
- * agree on what "today" means.
- */
-function isTodayLocal(iso: string): boolean {
-    const start = new Date(iso);
-
-    if (Number.isNaN(start.getTime())) {
-        return false;
+    if (parts.length !== 3) {
+        return iso;
     }
 
-    const now = new Date();
+    const year = Number(parts[0]);
+    const month = Number(parts[1]);
+    const day = Number(parts[2]);
 
-    const startOfToday = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-    );
+    if (
+        !Number.isFinite(year) ||
+        !Number.isFinite(month) ||
+        !Number.isFinite(day)
+    ) {
+        return iso;
+    }
 
-    const startOfTomorrow = new Date(startOfToday);
-    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+    // Use UTC midnight so DST can never shift the result by an hour.
+    const d = new Date(Date.UTC(year, month - 1, day));
+    d.setUTCDate(d.getUTCDate() - 1);
 
-    return start >= startOfToday && start < startOfTomorrow;
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+
+    return `${yyyy}-${mm}-${dd}`;
 }
 
 function isLive(g: GameDayGameSummary): boolean {
@@ -1301,10 +1395,13 @@ export default function ClassementPage() {
     const [sortDirection, setSortDirection] =
         useState<SortDirection>('desc');
 
-    // Schedule-aware refresh tick. Every bump triggers a silent
-    // re-fetch of both the standings table and the two "Mes joueurs"
-    // tables, with no loading flash and no page reload.
-    const refreshTick = useAutoRefreshTick();
+    // Schedule-aware refresh tick and the current fantasy date,
+    // both sourced from the backend. Every tick bump triggers a
+    // silent re-fetch of the standings table and the two "Mes
+    // joueurs" tables. When the fantasy date changes (3 AM ET
+    // rollover), the two tables re-run with the new value, which is
+    // what flips them from "Aujourd'hui" to "Hier" together.
+    const { tick: refreshTick, currentFantasyDate } = useAutoRefresh();
 
     // Initial load. Runs once on mount.
     useEffect(() => {
@@ -1818,6 +1915,7 @@ export default function ClassementPage() {
             <MyPlayersSection
                 variant='today'
                 refreshTick={refreshTick}
+                currentFantasyDate={currentFantasyDate}
             />
 
             {/* ============================================================
@@ -1826,6 +1924,7 @@ export default function ClassementPage() {
             <MyPlayersSection
                 variant='yesterday'
                 refreshTick={refreshTick}
+                currentFantasyDate={currentFantasyDate}
             />
         </section>
     );

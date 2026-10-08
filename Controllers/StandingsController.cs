@@ -111,9 +111,23 @@ namespace NhlFantasyLeague.api.Controllers
                 .ThenBy(h => h.Id)
                 .ToListAsync(ct);
 
-            var nowEt = NhlFantasyLeague.api.Services.NHL.TimeZoneHelper
-      .ToEastern(DateTime.UtcNow);
-            var today = DateOnly.FromDateTime(nowEt);
+            // The "HIER" and "AJD" columns use the fantasy date, not
+            // the real ET calendar date. Between 00:00 and 03:00 ET
+            // the fantasy date stays on the previous calendar day, so
+            // a still-running West Coast game that started at 22:30 ET
+            // continues to be counted under "Aujourd'hui" for a
+            // manager watching it past midnight. At 03:00 ET the same
+            // game slides to "Hier" together with the two player
+            // tables on the Classement page.
+            //
+            // ComputeTeamDailyTotalsAsync filters PlayerGameLog rows by
+            // their GameDate, which is the real ET calendar date the
+            // game started on (written by NhlGameService.BuildSnapshot).
+            // Passing fantasyDate as "today" here is correct because
+            // the game's stored GameDate and the fantasy date coincide
+            // whenever a game belongs to the currently-displayed day.
+            var nowUtc = DateTime.UtcNow;
+            var today = TimeZoneHelper.GetFantasyDateEt(nowUtc);
             var yesterday = today.AddDays(-1);
 
             var yesterdayTotals = await _nhlGameLogService

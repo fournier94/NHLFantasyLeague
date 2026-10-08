@@ -31,6 +31,18 @@ import { cn } from '@/lib/utils';
 const POLL_LIVE_MS = 2 * 60_000;
 const POLL_IDLE_MS = 10 * 60_000;
 
+/**
+ * Mount-time fetch retry schedule.
+ *
+ * The first attempt runs immediately. Each subsequent attempt waits
+ * for the current delay, then doubles it, up to MOUNT_RETRY_MAX_MS.
+ * This keeps a persistent backend outage from turning into a 3-second
+ * hammer without capping the total wait so long that a transient
+ * hiccup keeps the page on "Chargement..." for minutes.
+ */
+const MOUNT_RETRY_BASE_MS = 1_000;
+const MOUNT_RETRY_MAX_MS = 30_000;
+
 const TIME_FORMATTER = new Intl.DateTimeFormat('fr-CA', {
     hour: 'numeric',
     minute: '2-digit',
@@ -97,33 +109,6 @@ function startTimeLabel(iso: string): string {
     } catch {
         return '';
     }
-}
-
-/**
- * True when the given UTC instant falls on the user's local
- * calendar day (from local midnight to local midnight). This is
- * what "today" means to the user, and it matches the arena date
- * the NHL uses in ET for the vast majority of games.
- */
-function isTodayLocal(iso: string): boolean {
-    const start = new Date(iso);
-
-    if (Number.isNaN(start.getTime())) {
-        return false;
-    }
-
-    const now = new Date();
-
-    const startOfToday = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-    );
-
-    const startOfTomorrow = new Date(startOfToday);
-    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
-
-    return start >= startOfToday && start < startOfTomorrow;
 }
 
 function sortGamesByStartTime(
@@ -609,9 +594,24 @@ function GameCard({
 // ---------------------------------------------------------------------
 
 export default function GameDayPage() {
-    const todayIso = toIsoDate(new Date());
+    /**
+     * Current fantasy date in ET, format "yyyy-MM-dd". Backend-
+     * supplied: the frontend never recomputes the 3 AM ET cutoff.
+     * Null until the first fetch lands.
+     */
+    const [currentFantasyDate, setCurrentFantasyDate] =
+        useState<string | null>(null);
 
-    const [selectedDate, setSelectedDate] = useState<string>(todayIso);
+    /**
+     * The date the user is currently looking at. Null until the
+     * first fetch seeds it to the fantasy date. From then on, it
+     * only changes when the user explicitly picks another date from
+     * the date picker. It does not silently follow the fantasy date
+     * when the 3 AM rollover happens, so a user who is studying one
+     * specific day does not get yanked off it.
+     */
+    const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
     const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
     const datePickerRef = useRef<HTMLDivElement>(null);
 
@@ -672,7 +672,13 @@ export default function GameDayPage() {
 
     const neonAuraOn = !isAuraOff(neonAura);
 
-    // --- Date options: today + previous 6 days ------------------------
+    // --- Date options: fantasy date + previous 6 days -----------------
+    //
+    // The picker's day 0 is the backend-supplied fantasy date, so
+    // between 00:00 and 03:00 ET "Aujourd'hui" is still the previous
+    // ET calendar day. Day 1 is labeled "Hier" and is
+    // fantasyDate - 1. Days 2..6 are labeled with their actual
+    // calendar date.
     const dateOptions = useMemo(() => {
         const options: {
             iso: string;
@@ -680,11 +686,37 @@ export default function GameDayPage() {
             shortLabel: string;
         }[] = [];
 
-        const now = new Date();
+        if (!currentFantasyDate) {
+            return options;
+        }
+
+        const parts = currentFantasyDate.split('-');
+
+        if (parts.length !== 3) {
+            return options;
+        }
+
+        const baseYear = Number(parts[0]);
+        const baseMonth = Number(parts[1]);
+        const baseDay = Number(parts[2]);
+
+        if (
+            !Number.isFinite(baseYear) ||
+            !Number.isFinite(baseMonth) ||
+            !Number.isFinite(baseDay)
+        ) {
+            return options;
+        }
 
         for (let i = 0; i <= 6; i++) {
-            const d = new Date(now);
-            d.setDate(d.getDate() - i);
+            // Construct in local components so the formatter renders
+            // the intended calendar day, then read back the local
+            // yyyy-MM-dd for the option value.
+            const d = new Date(
+                baseYear,
+                baseMonth - 1,
+                baseDay - i,
+            );
 
             const iso = toIsoDate(d);
 
@@ -706,7 +738,7 @@ export default function GameDayPage() {
         }
 
         return options;
-    }, []);
+    }, [currentFantasyDate]);
 
     const selectedOption =
         dateOptions.find((o) => o.iso === selectedDate) ?? dateOptions[0];
@@ -755,6 +787,11 @@ export default function GameDayPage() {
                 const result = await getTodayGames(force);
                 if (!isMountedRef.current) return null;
                 setData(result);
+                // Refresh the fantasy date on every fetch so a 3 AM
+                // rollover is picked up without a page reload.
+                // React bails out if the value is unchanged, so this
+                // does not cause extra renders.
+                setCurrentFantasyDate(result.currentFantasyDate);
                 setError(null);
                 return result;
             } catch {
@@ -794,24 +831,73 @@ export default function GameDayPage() {
         [],
     );
 
-    // --- Fetch effect -------------------------------------------------
+    // --- Mount effect: seed the fantasy date and the selected date ---
+    //
+    // Runs once. Fetches the schedule, records the fantasy date, and
+    // — only on this first load — sets the selected date to the
+    // fantasy date.
+    //
+    // If the fetch fails (network hiccup, backend still warming up),
+    // retries on an exponentially backing-off schedule so the page
+    // never gets stuck on "Chargement..." with no way out, and a
+    // persistent backend outage does not produce a request storm.
     useEffect(() => {
+        let cancelled = false;
+        let retryTimeout: number | null = null;
+        let delayMs = MOUNT_RETRY_BASE_MS;
+
+        const attempt = async () => {
+            if (cancelled) return;
+
+            const result = await fetchTodayGames(false);
+
+            if (cancelled) return;
+
+            if (result) {
+                setSelectedDate(
+                    (prev) => prev ?? result.currentFantasyDate,
+                );
+                return;
+            }
+
+            retryTimeout = window.setTimeout(
+                () => void attempt(),
+                delayMs,
+            );
+
+            delayMs = Math.min(delayMs * 2, MOUNT_RETRY_MAX_MS);
+        };
+
+        void attempt();
+
+        return () => {
+            cancelled = true;
+            if (retryTimeout != null) {
+                window.clearTimeout(retryTimeout);
+            }
+        };
+    }, [fetchTodayGames]);
+
+    // --- Polling effect: react to selected date and polling cadence ---
+    useEffect(() => {
+        if (!selectedDate || !currentFantasyDate) return;
+
         let cancelled = false;
         let timeoutId: number | null = null;
 
-        const isToday = selectedDate === todayIso;
+        const isOnToday = selectedDate === currentFantasyDate;
 
         const tick = async (force: boolean) => {
             if (cancelled) return;
 
-            if (isToday) {
+            if (isOnToday) {
                 const result = await fetchTodayGames(force);
-                if (cancelled) return;
+                if (cancelled || !result) return;
 
-                const hasLive = result?.games.some(isLive) ?? false;
+                const hasLive = result.games.some(isLive);
                 const needsForce =
-                    !result?.isFresh ||
-                    (result?.games.length ?? 0) === 0;
+                    !result.isFresh ||
+                    (result.games.length ?? 0) === 0;
 
                 // If the cached snapshot we just received is stale
                 // AND we did not already force, fire a background
@@ -841,11 +927,7 @@ export default function GameDayPage() {
 
         // First pass on mount: DO NOT force a synchronous NHL
         // refresh. Serve whatever the backend already has in its
-        // in-memory cache. During a live slate the backend keeps
-        // that cache warm on its own 60 s loop, so this returns in
-        // ~50 ms instead of ~2 s. If the snapshot turns out to be
-        // stale, the block above fires a background refresh that
-        // lands a moment later without blocking the initial paint.
+        // in-memory cache.
         void tick(false);
 
         return () => {
@@ -854,7 +936,7 @@ export default function GameDayPage() {
         };
     }, [
         selectedDate,
-        todayIso,
+        currentFantasyDate,
         fetchTodayGames,
         fetchGamesForDate,
     ]);
@@ -921,27 +1003,45 @@ export default function GameDayPage() {
 
     // --- Games list ---------------------------------------------------
     //
-    // The /Games/today endpoint returns the whole NHL game week
-    // (Saturday through Friday), so when today is selected we must
-    // filter to the user's local calendar day. The /Games/by-date
-    // endpoint already returns a single day, so past dates skip the
-    // filter. A game that started late yesterday and is still LIVE
-    // is kept on today's view so a West Coast game running past
-    // midnight ET does not disappear.
+    // The /Games/today endpoint returns the whole NHL game week, so
+    // when the selected date matches the fantasy date, we filter to
+    // games whose ET calendar start date equals that date. A game
+    // that started late on that date and is still LIVE is kept even
+    // if it has just crossed into the next ET day, so it stays
+    // visible while it is being played.
+    //
+    // The /Games/by-date endpoint already returns a single day, so
+    // past dates skip the filter.
     const games = useMemo(() => {
-        const raw = data?.games ?? [];
+        if (!data || !selectedDate || !currentFantasyDate) {
+            return [];
+        }
+
+        const raw = data.games ?? [];
 
         const filtered =
-            selectedDate === todayIso
+            selectedDate === currentFantasyDate
                 ? raw.filter(
-                    (g) => isTodayLocal(g.startTimeUtc) || isLive(g),
+                    (g) =>
+                        g.gameDate === currentFantasyDate ||
+                        isLive(g),
                 )
                 : raw;
 
         return sortGamesByStartTime(filtered);
-    }, [data?.games, selectedDate, todayIso]);
+    }, [data, selectedDate, currentFantasyDate]);
 
     if (loading && !data) {
+        return (
+            <section className='w-full space-y-4'>
+                <div className='flex justify-center'>
+                    <p className='text-muted-foreground'>Chargement...</p>
+                </div>
+            </section>
+        );
+    }
+
+    if (!data || !currentFantasyDate || !selectedDate || !selectedOption) {
         return (
             <section className='w-full space-y-4'>
                 <div className='flex justify-center'>
@@ -972,8 +1072,8 @@ export default function GameDayPage() {
                         <span className='relative inline-block'>
                             <span
                                 className={`text-2xl leading-none tracking-[0.02em] capitalize ${neonAuraOn
-                                        ? `${auraPulseClass('text')} aura-mobile-keep`
-                                        : ''
+                                    ? `${auraPulseClass('text')} aura-mobile-keep`
+                                    : ''
                                     }`}
                                 style={{
                                     fontFamily:
@@ -997,8 +1097,8 @@ export default function GameDayPage() {
                             <span
                                 aria-hidden='true'
                                 className={`pointer-events-none absolute left-full top-1/2 ml-2 inline-block text-sm leading-none transition-transform duration-200 ${neonAuraOn
-                                        ? `${auraPulseClass('text')} aura-mobile-keep`
-                                        : ''
+                                    ? `${auraPulseClass('text')} aura-mobile-keep`
+                                    : ''
                                     }`}
                                 style={{
                                     transform: isDatePickerOpen
@@ -1041,8 +1141,8 @@ export default function GameDayPage() {
                                                 setIsDatePickerOpen(false);
                                             }}
                                             className={`w-full cursor-pointer px-4 py-2.5 text-center text-lg font-semibold capitalize transition-colors ${isSelected
-                                                    ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
-                                                    : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
+                                                ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
+                                                : 'text-foreground hover:bg-[#00E5FF]/10 hover:text-[#00E5FF]'
                                                 }`}
                                         >
                                             {opt.label}
@@ -1063,7 +1163,7 @@ export default function GameDayPage() {
 
             {games.length === 0 && !error && (
                 <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
-                    {selectedDate === todayIso
+                    {selectedDate === currentFantasyDate
                         ? "Aucun match prévu aujourd'hui."
                         : 'Aucun match prévu à cette date.'}
                 </p>

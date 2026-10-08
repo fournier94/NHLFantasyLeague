@@ -1121,6 +1121,29 @@ export interface GameDayGameSummary {
 export interface GameDayScheduleResponse {
     lastRefreshUtc: string | null;
     isFresh: boolean;
+
+    /**
+     * Current fantasy date in ET, format "yyyy-MM-dd". This is the
+     * real ET calendar date, except between 00:00 and 03:00 ET, when
+     * it stays on the previous calendar day. It is the single source
+     * of truth for the "Aujourd'hui" / "Hier" columns:
+     *
+     *   - "Aujourd'hui" table = games whose ET start date equals this
+     *   - "Hier" table        = games whose ET start date equals this
+     *                           minus one day
+     *
+     * The backend applies the 3 AM cutoff; the frontend never
+     * recomputes it in JavaScript.
+     */
+    currentFantasyDate: string;
+
+    /**
+     * Real ET calendar date right now, format "yyyy-MM-dd". No
+     * cutoff applied. Use this to detect the 3 AM rollover and for
+     * anything that needs the unambiguous ET date.
+     */
+    currentEtDate: string;
+
     games: GameDayGameSummary[];
 }
 

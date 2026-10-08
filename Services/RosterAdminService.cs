@@ -1098,15 +1098,27 @@ namespace NhlFantasyLeague.api.Services
                     .ToDictionary(g => g.Key, g => g.ToList());
             }
 
-            // Yesterday / today fantasy points per player. Today and
-            // yesterday are ET calendar days matching the stored
-            // PlayerGameLog.GameDate (the NHL labels games with the
-            // local arena date). Using UTC would put us one day off
-            // for any game that starts in the evening ET, because by
-            // then UTC has already rolled over to tomorrow.
-            var nowEt = NhlFantasyLeague.api.Services.NHL.TimeZoneHelper
-                .ToEastern(DateTime.UtcNow);
-            var today = DateOnly.FromDateTime(nowEt);
+            // Yesterday / today fantasy points per player.
+            //
+            // The two dates are the backend's current fantasy date
+            // and the day before it. The fantasy date is the real ET
+            // calendar date, except between 00:00 and 03:00 ET, when
+            // it stays on the previous calendar day. That cutoff is
+            // what makes the "HIER" and "AJD" columns on the roster
+            // cards flip at 3 AM ET instead of at midnight, matching
+            // the same columns in the standings table and the two
+            // player tables on the Classement page.
+            //
+            // PlayerGameLog.GameDate stores the real ET calendar date
+            // the game started on (written by NhlGameService.
+            // BuildSnapshot), so a query for GameDate == today returns
+            // every game that started on the fantasy date. A game
+            // that started at 22:30 ET and is still running at 01:00
+            // ET is still a "today" game under this rule, exactly as
+            // the league wants.
+            var nowUtc = DateTime.UtcNow;
+            var today = NhlFantasyLeague.api.Services.NHL.TimeZoneHelper
+                .GetFantasyDateEt(nowUtc);
             var yesterday = today.AddDays(-1);
 
             var recentLogs = new List<RecentGameLogRow>();

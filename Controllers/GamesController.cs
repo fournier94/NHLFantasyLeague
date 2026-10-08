@@ -59,12 +59,25 @@ namespace NhlFantasyLeague.api.Controllers
 
             var snapshots = _cache.GetAll();
 
+            var nowUtc = DateTime.UtcNow;
+
             var response = new GameDayScheduleResponse
             {
                 LastRefreshUtc = _cache.LastRefreshUtc == DateTime.MinValue
                     ? null
                     : _cache.LastRefreshUtc,
                 IsFresh = _cache.IsFresh(CacheFreshnessWindow),
+
+                // Two "today" values:
+                //   - CurrentFantasyDate  : what the "Aujourd'hui" /
+                //                           "Hier" columns should
+                //                           show. Applies the 3 AM
+                //                           ET cutoff.
+                //   - CurrentEtDate       : the real ET calendar
+                //                           date, no cutoff.
+                CurrentFantasyDate = TimeZoneHelper.GetFantasyDateEt(nowUtc),
+                CurrentEtDate = TimeZoneHelper.GetNhlGameDateEt(nowUtc),
+
                 Games = snapshots
                     .Select(s => new GameDayGameSummary
                     {
@@ -130,8 +143,18 @@ namespace NhlFantasyLeague.api.Controllers
         /// <summary>
         /// Returns the schedule for a specific NHL calendar date
         /// (yyyy-MM-dd, ET). Used by the Game Day date picker to show
-        /// the last 7 days of games. The historical range is limited
-        /// to the previous 7 days to keep the NHL API load bounded.
+        /// the last 7 days of games.
+        ///
+        /// The validation window is [fantasyDate - 6, fantasyDate],
+        /// where fantasyDate is the backend's current fantasy date
+        /// (real ET calendar date, with the 3 AM ET cutoff). This is
+        /// exactly the seven dates the frontend's date picker offers,
+        /// so a user cannot request a date the UI would never show
+        /// and cannot be rejected for a date the UI does show.
+        ///
+        /// Between 00:00 and 03:00 ET, fantasyDate is the previous ET
+        /// calendar date, so the window shifts back by a day in the
+        /// same window the picker does.
         /// </summary>
         [HttpGet("by-date/{date}")]
         public async Task<IActionResult> GetByDate(
@@ -151,11 +174,11 @@ namespace NhlFantasyLeague.api.Controllers
                 });
             }
 
-            var todayEt = DateOnly.FromDateTime(
-                TimeZoneHelper.ToEastern(DateTime.UtcNow));
-            var minDate = todayEt.AddDays(-7);
+            var nowUtc = DateTime.UtcNow;
+            var fantasyDate = TimeZoneHelper.GetFantasyDateEt(nowUtc);
+            var minDate = fantasyDate.AddDays(-6);
 
-            if (parsed < minDate || parsed > todayEt)
+            if (parsed < minDate || parsed > fantasyDate)
             {
                 return BadRequest(new
                 {
@@ -193,8 +216,16 @@ namespace NhlFantasyLeague.api.Controllers
 
             var response = new GameDayScheduleResponse
             {
-                LastRefreshUtc = DateTime.UtcNow,
+                LastRefreshUtc = nowUtc,
                 IsFresh = true,
+
+                // Same two date fields as GetToday, so a frontend that
+                // renders the date picker and the Ajd/Hier columns
+                // from one response shape does not need to branch on
+                // which endpoint produced it.
+                CurrentFantasyDate = fantasyDate,
+                CurrentEtDate = TimeZoneHelper.GetNhlGameDateEt(nowUtc),
+
                 Games = games,
             };
 
@@ -244,7 +275,13 @@ namespace NhlFantasyLeague.api.Controllers
         /// date. Idempotent: running it twice for the same date
         /// produces the same state.
         ///
-        /// Omit ?date to target yesterday in ET.
+        /// Omit ?date to target yesterday in real ET, which is the ET
+        /// calendar date of the most recently completed NHL slate.
+        /// This is the right default for a commissioner who wants to
+        /// re-run the write for the games that just ended, regardless
+        /// of whether the current instant is inside the 3 AM fantasy
+        /// cutoff window. The fantasy date is a display concept and
+        /// is deliberately not used here.
         /// </summary>
         [HttpPost("refresh-post-game")]
         [Authorize(Roles = AuthService.CommissionerRole)]
@@ -252,10 +289,9 @@ namespace NhlFantasyLeague.api.Controllers
             [FromQuery] DateOnly? date,
             CancellationToken ct)
         {
-            var targetDateOnly = date ?? DateOnly.FromDateTime(
-                TimeZoneHelper
-                    .ToEastern(DateTime.UtcNow)
-                    .AddDays(-1));
+            var targetDateOnly = date ?? TimeZoneHelper
+                .GetNhlGameDateEt(DateTime.UtcNow)
+                .AddDays(-1);
 
             await _runner.RunPostGameWriteAsync(targetDateOnly, ct);
 
@@ -272,7 +308,8 @@ namespace NhlFantasyLeague.api.Controllers
         /// current-season totals) for every player who appeared in a
         /// game on that date.
         ///
-        /// Omit ?date to target yesterday in ET.
+        /// Omit ?date to target yesterday in real ET, matching the
+        /// post-game write default and for the same reason.
         /// </summary>
         [HttpPost("refresh-career-stats")]
         [Authorize(Roles = AuthService.CommissionerRole)]
@@ -280,10 +317,9 @@ namespace NhlFantasyLeague.api.Controllers
             [FromQuery] DateOnly? date,
             CancellationToken ct)
         {
-            var targetDateOnly = date ?? DateOnly.FromDateTime(
-                TimeZoneHelper
-                    .ToEastern(DateTime.UtcNow)
-                    .AddDays(-1));
+            var targetDateOnly = date ?? TimeZoneHelper
+                .GetNhlGameDateEt(DateTime.UtcNow)
+                .AddDays(-1);
 
             await _runner.RunCareerStatsRefreshAsync(targetDateOnly, ct);
 
