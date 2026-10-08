@@ -13,6 +13,31 @@ import {
 import { consumePendingRestore } from '@/lib/scrollRestoration';
 import { useAuth } from '@/lib/AuthContext';
 
+/**
+ * Small trending-up glyph shown to the right of every FP value.
+ * Copied from ClassementPage so both tables use the exact same
+ * icon at the same size and color.
+ */
+function TrendGlyph({ color = '#FFC72C' }: { color?: string }) {
+    return (
+        <svg
+            viewBox='0 0 24 24'
+            width={12}
+            height={12}
+            fill='none'
+            stroke={color}
+            strokeWidth={2}
+            strokeLinecap='round'
+            strokeLinejoin='round'
+            aria-hidden='true'
+            style={{ filter: `drop-shadow(0 0 2px ${color})` }}
+        >
+            <path d='M3 17 L9 11 L13 15 L21 6' />
+            <path d='M15 6 L21 6 L21 12' />
+        </svg>
+    );
+}
+
 function isActive(entry: RosterEntry): boolean {
     return entry.rosterStatus === 'Active';
 }
@@ -90,18 +115,35 @@ function toLineupPositionGroup(
 }
 
 /**
- * Color for the position letter. Matches the group: red for forwards,
- * blue for defensemen, green for goalies.
+ * Contained tube gradient for the left edge of every lineup row.
+ * Same 3-layer shape as the standings table's rank bars on the
+ * Classement page: a thick accent "tube", a mid step, and a warm
+ * inner highlight, all contained inside the row's own 6px strip.
+ * Nothing extends outside the row's bounding box.
+ *
+ * Forwards -> red, defensemen -> blue, goalies -> green.
  */
-function positionBorderColor(group: LineupPositionGroup): string {
-    switch (group) {
-        case 'F':
-            return '#EF4444';
-        case 'D':
-            return '#3B82F6';
-        case 'G':
-            return '#22C55E';
+function positionBarGradient(group: LineupPositionGroup): string {
+    // Same 3-layer color pattern as the Classement rank bars:
+    // a thick accent (the "tube"), a mid step, and a warm inner
+    // core. All three are kept close together so the bar reads as
+    // a single continuous material with a subtle highlight, not a
+    // gradient that fades to white.
+    let accent = '#FF0F3D';
+    let mid = '#FF4A62';
+    let core = '#FF6878';
+
+    if (group === 'D') {
+        accent = '#3B82F6';
+        mid = '#5C97F8';
+        core = '#7AA8FA';
+    } else if (group === 'G') {
+        accent = '#22C55E';
+        mid = '#3ECD6E';
+        core = '#5AD786';
     }
+
+    return `linear-gradient(to right, ${accent} 0px 1.5px, ${mid} 1.5px 2.5px, ${core} 2.5px 3.5px, ${mid} 3.5px 4.5px, ${accent} 4.5px 6px, transparent 6px)`;
 }
 
 /**
@@ -147,7 +189,7 @@ function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
 // which is enough to fit longer names without touching the row
 // height.
 const LINEUP_GRID_COLUMNS =
-    'minmax(0, 1fr) 22px 29px 25px 25px 29px 25px 31px 31px 35px';
+    'minmax(0, 1fr) 22px 27px 23px 23px 27px 23px 31px 31px 35px';
 
 // Cyan separator glow, matching the segmented button accent
 // (#00E5FF). Applied to the bottom border of the last row of a
@@ -176,44 +218,130 @@ const LineupHeader = memo(function LineupHeader({
 }) {
     return (
         <div
-            className={`grid w-full items-center gap-x-0.5 border-b border-border/40 pb-0.5 pl-1 text-[0.7rem] uppercase tracking-wide text-white ${isGoalie ? 'mt-3' : ''
+            className={`grid w-full items-center gap-x-0.5 py-2 pl-1 pr-2 text-[0.7rem] font-bold uppercase tracking-wider sm:text-[0.8rem] ${isGoalie ? '' : ''
                 }`}
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
                 borderLeft: '2px solid transparent',
+                // Two different header treatments:
+                //
+                //   Skater header (top of each table): blue gradient
+                //   band, no position bar, no bottom border. The
+                //   first data row starts flush against the header,
+                //   with no cyan line in between.
+                //
+                //   Goalie header (mid-table, above the goalie rows):
+                //   no background band, the green position bar drawn
+                //   on the left border so it visually continues from
+                //   the last defenseman row's blue bar down into the
+                //   goalie rows below, and a cyan bottom border so
+                //   the goalie section stays clearly separated from
+                //   the skaters above it.
+                ...(isGoalie
+                    ? {
+                        borderBottom:
+                            '1px solid rgba(51, 187, 255, 0.35)',
+                        backgroundImage: positionBarGradient('G'),
+                        backgroundOrigin: 'border-box',
+                        backgroundClip: 'border-box',
+                        backgroundColor: 'transparent',
+                    }
+                    : {
+                        // Two stacked background layers:
+                        //
+                        //   1. The 1px cyan connector on the very
+                        //      left edge of the header. Drawn from
+                        //      0px to 1px of the header's border
+                        //      box, which is exactly where the first
+                        //      data row's position bar starts.
+                        //
+                        //   2. The header's blue gradient band.
+                        //
+                        // The first layer is drawn on top of the
+                        // second. backgroundOrigin / backgroundClip
+                        // are single values that apply to both
+                        // layers, so both are measured from the
+                        // border box of the header.
+                        background: [
+                            'linear-gradient(to right, #33BBFF 0px 1px, transparent 1px)',
+                            'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
+                        ].join(', '),
+                        backgroundOrigin: 'border-box',
+                        backgroundClip: 'border-box',
+                        backgroundColor: '#050A16',
+                    }),
             }}
         >
-            {/* The name and logo columns have no header labels on
-                purpose: the user already knows what they are. The
-                cells stay empty so the grid columns still line up
-                with the rows beneath. */}
-            <div className='text-left' />
-            <div />
-            <div className='text-center text-[#7DD3FC]'>GP</div>
+            {/* The "Joueur" header spans both the name column and the
+                logo column. The label is centered within that whole
+                span, then nudged 2px left via pr-1 (4px right
+                padding) so its midpoint lands on the midpoint
+                between the table's left edge and the GP column's
+                left edge.
+
+                No separate logo-column cell is needed here: the
+                col-span-2 already occupies both the name and the
+                logo columns. Adding a second empty cell would push
+                the header to 11 grid cells worth of content in a
+                10-column grid, and FP would wrap onto a second row.
+
+                The player names in the data rows stay left-aligned
+                in the name column and are unaffected. */}
+            <div className='col-span-2 pr-1 text-center text-white'>
+                Joueur
+            </div>
+
+            <div className='text-center' style={{ color: '#33BBFF' }}>
+                GP
+            </div>
+
             {isGoalie ? (
                 <>
-                    <div className='text-center text-[#00F0FF]'>W</div>
-                    <div className='text-center'>L</div>
-                    <div className='text-center'>OTL</div>
-                    <div className='text-center'>SO</div>
+                    <div className='text-center' style={{ color: '#00F0FF' }}>
+                        W
+                    </div>
+                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                        L
+                    </div>
+                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                        OTL
+                    </div>
+                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                        SO
+                    </div>
                 </>
             ) : (
                 <>
-                    <div className='text-center'>G</div>
-                    <div className='text-center'>A</div>
-                    <div className='text-center text-[#00F0FF]'>PTS</div>
-                    <div className='text-center'>3B</div>
+                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                        G
+                    </div>
+                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                        A
+                    </div>
+                    <div className='text-center' style={{ color: '#00F0FF' }}>
+                        PTS
+                    </div>
+                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                        3B
+                    </div>
                 </>
             )}
-            {/* Hier / Ajd headers are one step smaller than the
-                rest of the header row so the daily columns feel
-                secondary to the season columns. text-[0.7rem] is
-                smaller than both text-sm (skater header) and
-                text-xs (goalie header), so the reduction shows in
-                both tables. */}
-            <div className='text-center text-[0.7rem]'>Hier</div>
-            <div className='text-center text-[0.7rem]'>Ajd</div>
-            <div className='text-center text-[#FFC72C]'>FP</div>
+
+            <div
+                className='text-center text-[0.6rem] sm:text-[0.7rem]'
+                style={{ color: '#7DD3FC' }}
+            >
+                HIER
+            </div>
+            <div
+                className='text-center text-[0.6rem] sm:text-[0.7rem]'
+                style={{ color: '#7DD3FC' }}
+            >
+                AJD
+            </div>
+            <div className='text-center' style={{ color: '#FFC72C' }}>
+                FP
+            </div>
         </div>
     );
 });
@@ -265,17 +393,27 @@ const LineupRow = memo(function LineupRow({
     return (
         <Link
             to={`/joueurs/${entry.nhlPlayerId}`}
-            className='grid w-full items-center gap-x-0.5 border-b border-border/20 py-0.5 pl-1 text-base tabular-nums transition-[filter] duration-150 hover:brightness-110'
+            className='grid w-full items-center gap-x-0.5 border-b py-0.5 pl-1 pr-2 text-base tabular-nums transition-[filter] duration-150 hover:brightness-110'
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
-                borderLeft: `2px solid ${positionBorderColor(group)}`,
+                // Position bar, drawn as a background image under the
+                // row's transparent 6px left border. Same tube shape
+                // as the Classement rank bars.
+                borderLeft: '6px solid transparent',
+                backgroundImage: positionBarGradient(group),
+                backgroundOrigin: 'border-box',
+                backgroundClip: 'border-box',
+                // The status tint (injured / AHL / off-roster) layers
+                // under the bar. The bar's gradient ends at 6px with
+                // transparent, so the tint shows through the rest of
+                // the row.
+                backgroundColor: rowTint,
                 borderBottomColor: isLastOfSection
                     ? 'rgba(0, 229, 255, 0.6)'
-                    : undefined,
+                    : 'rgba(51, 187, 255, 0.12)',
                 boxShadow: isLastOfSection
                     ? LINEUP_SEPARATOR_GLOW
                     : undefined,
-                backgroundColor: rowTint,
             }}
         >
             <div className='truncate pl-0.5 text-left text-foreground'>
@@ -326,10 +464,12 @@ const LineupRow = memo(function LineupRow({
                 </>
             ) : (
                 <>
-                    <div className='text-center'>{g}</div>
-                    <div className='text-center'>{a}</div>
-                    <div className='text-center text-[#00F0FF]'>{pts}</div>
-                    <div className='text-center'>{ht}</div>
+                        <>
+                            <div className='text-center text-[0.9rem]'>{g}</div>
+                            <div className='text-center text-[0.9rem]'>{a}</div>
+                            <div className='text-center text-[#00F0FF]'>{pts}</div>
+                            <div className='text-center'>{ht}</div>
+                        </>
                 </>
             )}
 
@@ -340,7 +480,10 @@ const LineupRow = memo(function LineupRow({
                 {renderDailyPoints(entry.todayFantasyPoints)}
             </div>
 
-            <div className='text-center font-bold text-[#FFC72C]'>{fp}</div>
+            <div className='flex items-center justify-center gap-0.5 font-bold text-[#FFC72C]'>
+                <span>{fp}</span>
+                <TrendGlyph color='#FFC72C' />
+            </div>
         </Link>
     );
 });
@@ -372,7 +515,26 @@ const LineupTable = memo(function LineupTable({
     }
 
     return (
-        <div className='w-full'>
+        <div
+            className='w-full overflow-hidden rounded-lg'
+            style={{
+                // Same technique as the Classement standings table:
+                // only the top, right and bottom sides of the frame
+                // carry a border. The left side is left open so the
+                // position bars of the rows below define the left
+                // edge of the table, instead of a redundant vertical
+                // cyan line running the full height of the frame.
+                //
+                // The top-left and bottom-left corners still curve
+                // (rounded-lg + overflow-hidden), so the top and
+                // bottom borders taper off at the corner the way
+                // Classement's do.
+                borderTop: '1px solid #33BBFF',
+                borderRight: '1px solid #33BBFF',
+                borderBottom: '1px solid #33BBFF',
+                backgroundColor: '#050A16',
+            }}
+        >
             {hasSkaters && <LineupHeader isGoalie={false} />}
 
             {forwards.map((entry, i) => {
