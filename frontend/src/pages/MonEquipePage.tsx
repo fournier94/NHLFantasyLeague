@@ -4,7 +4,6 @@ import { getLeagueTeams, getTeamRoster, type FantasyTeam, type RosterEntry, type
 import { RosterSection } from '@/components/roster/RosterSection';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { useAura } from '@/lib/auraContext';
-import { getNhlTeamAuraColor } from '@/lib/nhlTeamColors';
 import {
     auraPulseClass,
     auraPulseStyle,
@@ -177,7 +176,7 @@ const LineupHeader = memo(function LineupHeader({
 }) {
     return (
         <div
-            className={`grid w-full items-center gap-x-0.5 border-b border-border/40 pb-0.5 pl-1 uppercase tracking-wide text-white ${isGoalie ? 'mt-3 text-xs' : 'text-sm'
+            className={`grid w-full items-center gap-x-0.5 border-b border-border/40 pb-0.5 pl-1 text-[0.7rem] uppercase tracking-wide text-white ${isGoalie ? 'mt-3' : ''
                 }`}
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
@@ -214,7 +213,7 @@ const LineupHeader = memo(function LineupHeader({
                 both tables. */}
             <div className='text-center text-[0.7rem]'>Hier</div>
             <div className='text-center text-[0.7rem]'>Ajd</div>
-            <div className='text-center text-[#F59E0B]'>FP</div>
+            <div className='text-center text-[#FFC72C]'>FP</div>
         </div>
     );
 });
@@ -245,13 +244,6 @@ const LineupRow = memo(function LineupRow({
     const shortName = initial
         ? `${initial}. ${entry.lastName}`
         : entry.lastName;
-
-    // Aura-only color for this row: drives the logo glow and the
-    // name text-shadow. Falls back to the base team color for teams
-    // with no aura override, and to the league cyan when the
-    // abbreviation is unknown. The row background uses the default
-    // page color; only the glows are team-tinted.
-    const teamAuraColor = getNhlTeamAuraColor(entry.nhlTeamAbbreviation);
 
     // Row background tint, chosen from the player's current status.
     // Priority (top wins):
@@ -298,16 +290,29 @@ const LineupRow = memo(function LineupRow({
                 the logo is always as big as the row allows,
                 regardless of font-size tweaks. The `8C` suffix on
                 the aura color is ~55% alpha on the 6-digit hex. */}
-            <div
-                className='flex self-stretch items-center justify-center'
-                style={{
-                    filter: `drop-shadow(0 0 3px ${teamAuraColor}8C)`,
-                }}
-            >
-                <NhlTeamLogo
-                    abbreviation={entry.nhlTeamAbbreviation}
-                    fillHeight
-                />
+            <div className='flex self-stretch items-center justify-center'>
+                {/* Logo wrapper: keeps the row height unchanged and
+                    enlarges the logo visually via transform. The
+                    transform scales around the wrapper's center and
+                    never affects layout, so the 22px logo grid column
+                    and the row track height stay the same. */}
+                <div
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        height: '100%',
+                        aspectRatio: '1 / 1',
+                        flexShrink: 0,
+                        transform: 'scale(1.35)',
+                        transformOrigin: 'center',
+                    }}
+                >
+                    <NhlTeamLogo
+                        abbreviation={entry.nhlTeamAbbreviation}
+                        fillHeight
+                    />
+                </div>
             </div>
 
             <div className='text-center text-[#7DD3FC]'>{gp}</div>
@@ -335,7 +340,7 @@ const LineupRow = memo(function LineupRow({
                 {renderDailyPoints(entry.todayFantasyPoints)}
             </div>
 
-            <div className='text-center font-bold text-[#F59E0B]'>{fp}</div>
+            <div className='text-center font-bold text-[#FFC72C]'>{fp}</div>
         </Link>
     );
 });

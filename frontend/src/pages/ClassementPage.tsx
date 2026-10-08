@@ -52,20 +52,61 @@ const PTS_HIGHLIGHT = '#00F0FF';
 
 const RED_NEON = '#FF0F3D';
 
+/**
+ * Highlight color for the GP column on the standings table.
+ *
+ * Sits between the neutral column color (#7DD3FC, used by the rest
+ * of the stat columns) and the PTS highlight (#00F0FF): bright
+ * enough to read as "this column is a little more important", soft
+ * enough not to compete with the PTS or FP columns.
+ */
+const GP_HIGHLIGHT = '#00E5FF';
+
 const GRID_COLUMNS = '6% 20% repeat(8, calc((100% - 26%) / 8))';
 
 /**
  * Accent used for the neon left bar on every row of the two
- * "Mes joueurs" tables. Kept separate from the standings table's
- * rank-based accent because those tables do not have a rank — every
- * row belongs to the current user, so a single consistent blue tube
- * reads better and matches the header cyan.
+ * "Mes joueurs" tables, chosen by the position of the player on
+ * that row. The three colors match the position border colors
+ * used on Mon équipe (see positionBorderColor in MonEquipePage),
+ * so a forward reads as red in both pages, a defenseman as blue,
+ * and a goalie as green.
+ *
+ * Same tube / mid / core shape as the standings table's rank
+ * accents, so the bar reads as one continuous material across the
+ * whole app.
  */
-const PLAYER_ROW_ACCENT = {
-    accent: '#0088FF',
-    mid: '#33BBFF',
-    core: '#7DD3FC',
+const POSITION_ROW_ACCENT = {
+    F: {
+        accent: '#EF4444',
+        mid: '#F87171',
+        core: '#FCA5A5',
+    },
+    D: {
+        accent: '#3B82F6',
+        mid: '#60A5FA',
+        core: '#93C5FD',
+    },
+    G: {
+        accent: '#22C55E',
+        mid: '#4ADE80',
+        core: '#86EFAC',
+    },
 };
+
+/**
+ * Returns the row accent triple for a player's position.
+ * Forwards -> red, defensemen -> blue, goalies -> green.
+ * Any unclassifiable position falls back to the forward color,
+ * matching the frontend's default everywhere else.
+ */
+function positionRowAccent(position: string | null | undefined) {
+    const order = positionOrder(position);
+
+    if (order === 2) return POSITION_ROW_ACCENT.G;
+    if (order === 1) return POSITION_ROW_ACCENT.D;
+    return POSITION_ROW_ACCENT.F;
+}
 
 // ---------------------------------------------------------------------
 // Auto-refresh
@@ -468,6 +509,7 @@ function ColumnHeader({
     sortDirection,
     onClick,
     color = ELECTRIC_SOFT,
+    activeColor,
 }: {
     label: string;
     sortField: SortKey;
@@ -475,6 +517,17 @@ function ColumnHeader({
     sortDirection: SortDirection;
     onClick: (key: SortKey) => void;
     color?: string;
+    /**
+     * Color used when this column is the active sort column.
+     *
+     * Defaults to ELECTRIC_BRIGHT so the neutral columns keep their
+     * "highlighted while sorted" cue. Columns with a dedicated
+     * meaning color (like FP, which is always gold in the data
+     * cells below it) can pass their own color here so the header
+     * stays visually consistent with its content even when the
+     * sort arrow is on it.
+     */
+    activeColor?: string;
 }) {
     const active = activeSortField === sortField;
 
@@ -494,7 +547,9 @@ function ColumnHeader({
                 isCompact && 'text-[0.5rem] sm:text-[0.6rem]',
             )}
             style={{
-                color: active ? ELECTRIC_BRIGHT : color,
+                color: active
+                    ? (activeColor ?? ELECTRIC_BRIGHT)
+                    : color,
             }}
         >
             {label}
@@ -707,9 +762,25 @@ function MyPlayersSection({
                 // Cross-reference with the current roster so we can
                 // render the same card shape as the today variant
                 // (name, position, team abbreviation, isGoalie).
+                //
+                // Only players on the current STARTING LINEUP
+                // (rosterStatus === 'Active') are included. Bench and
+                // prospects are intentionally excluded from both
+                // bottom tables: those tables exist to show what the
+                // active lineup produced.
+                //
+                // The filter is on the CURRENT roster status, not on
+                // the status the player had at the time of the game.
+                // That is deliberate: the tables answer "what did my
+                // current starting lineup produce", not "what did
+                // every player I owned produce". A player who was
+                // Active yesterday and got benched today simply
+                // drops out of yesterday's table, which matches the
+                // intent of the section.
                 const entryByPlayerId = new Map<number, RosterEntry>();
 
                 for (const entry of roster.entries) {
+                    if (entry.rosterStatus !== 'Active') continue;
                     entryByPlayerId.set(entry.playerId, entry);
                 }
 
@@ -773,19 +844,23 @@ function MyPlayersSection({
                     gameByTeam.set(g.homeAbbreviation, g);
                 }
 
-                // Hide players who should not appear in today's
-                // table even if their NHL team has a game scheduled:
-                //   - injured or suspended (ESPN flag on the entry)
-                //   - sent down to the AHL affiliate
-                //   - no longer on any active NHL or AHL roster
+                // Only players on the current STARTING LINEUP
+                // (rosterStatus === 'Active') are included, and only
+                // if they are currently available:
+                //   - rosterStatus must be 'Active' (bench and
+                //     prospects are excluded)
+                //   - not injured or suspended
+                //   - not sent down to the AHL affiliate
+                //   - not off the active NHL/AHL rosters entirely
                 //
-                // The "Hier" table is a historical game log and is
-                // intentionally NOT filtered here: it still shows
-                // every player who dressed yesterday, including one
-                // who got hurt mid-game. Only the "Aujourd'hui"
-                // table cares about the current availability.
+                // The filter is on the CURRENT roster status, not on
+                // the status the player had at the time of the game.
+                // Both bottom tables exist to show what the active
+                // lineup produces, so a bench or prospect player
+                // never appears in either.
                 const visibleEntries = roster.entries.filter(
                     (entry) =>
+                        entry.rosterStatus === 'Active' &&
                         !entry.isInjured &&
                         entry.rosterLocation !== 'AhlRoster' &&
                         entry.rosterLocation !== 'NotOnActiveRoster',
@@ -1039,9 +1114,9 @@ function MyPlayersSection({
                         }}
                     >
                         <div />
-                        <div className='pl-0.5 font-bold uppercase tracking-wider text-[#33BBFF]'>
-                            Joueur
-                        </div>
+                            <div className='pl-0.5 font-bold uppercase tracking-wider text-white'>
+                                Joueur
+                            </div>
                             <div
                                 className='text-center font-bold uppercase tracking-wider'
                                 style={{ color: GOLD }}
@@ -1081,80 +1156,91 @@ function MyPlayersSection({
                             backgroundColor: '#050A16',
                         }}
                     >
-                        {players.map((p) => (
-                            <div
-                                key={p.entry.id}
-                                className='relative grid items-center border-b px-2 py-1.5 text-[0.85rem] tabular-nums transition-colors last:border-b-0 hover:bg-[#0088FF]/5 sm:py-2 sm:text-[0.95rem]'
-                                style={{
-                                    gridTemplateColumns:
-                                        MY_PLAYERS_GRID_COLUMNS,
-                                    backgroundImage: leftBarGradient(
-                                        PLAYER_ROW_ACCENT.accent,
-                                        PLAYER_ROW_ACCENT.mid,
-                                        PLAYER_ROW_ACCENT.core,
-                                    ),
-                                    borderLeft: '6px solid transparent',
-                                    backgroundOrigin: 'border-box',
-                                    backgroundClip: 'border-box',
-                                    borderBottomColor:
-                                        'rgba(51, 187, 255, 0.12)',
-                                }}
-                            >
-                                <div
-                                    className='flex items-center justify-center'
-                                    style={{ height: 20 }}
-                                >
-                                    <NhlTeamLogo
-                                        abbreviation={p.entry.nhlTeamAbbreviation}
-                                        size={32}
-                                    />
-                                </div>
+                            {players.map((p) => {
+                                const accent = positionRowAccent(
+                                    p.entry.position,
+                                );
 
-                                <Link
-                                    to={`/joueurs/${p.entry.nhlPlayerId}`}
-                                    className={cn(
-                                        'truncate pl-0.5 text-left font-semibold transition-colors',
-                                        isGoaliePosition(p.entry.position)
-                                            ? 'text-[#22C55E] hover:brightness-125'
-                                            : 'text-foreground hover:text-[#33BBFF]',
-                                    )}
-                                >
-                                    {shortName(
-                                        p.entry.firstName,
-                                        p.entry.lastName,
-                                    )}
-                                </Link>
+                                return (
+                                    <div
+                                        key={p.entry.id}
+                                        className='relative grid items-center border-b px-2 py-1.5 text-[0.85rem] tabular-nums transition-colors last:border-b-0 hover:bg-[#0088FF]/5 sm:py-2 sm:text-[0.95rem]'
+                                        style={{
+                                            gridTemplateColumns:
+                                                MY_PLAYERS_GRID_COLUMNS,
+                                            backgroundImage: leftBarGradient(
+                                                accent.accent,
+                                                accent.mid,
+                                                accent.core,
+                                            ),
+                                            borderLeft:
+                                                '6px solid transparent',
+                                            backgroundOrigin: 'border-box',
+                                            backgroundClip: 'border-box',
+                                            borderBottomColor:
+                                                'rgba(51, 187, 255, 0.12)',
+                                        }}
+                                    >
+                                        <div
+                                            className='flex items-center justify-center'
+                                            style={{ height: 20 }}
+                                        >
+                                            <NhlTeamLogo
+                                                abbreviation={
+                                                    p.entry.nhlTeamAbbreviation
+                                                }
+                                                size={32}
+                                            />
+                                        </div>
 
-                                <div
-                                    className='text-center text-[0.7rem] font-semibold tabular-nums'
-                                    style={{ color: GOLD }}
-                                >
-                                    {p.gameClockLabel}
-                                </div>
+                                        <Link
+                                            to={`/joueurs/${p.entry.nhlPlayerId}`}
+                                            className={cn(
+                                                'truncate pl-0.5 text-left font-semibold transition-colors',
+                                                isGoaliePosition(
+                                                    p.entry.position,
+                                                )
+                                                    ? 'text-[#22C55E] hover:brightness-125'
+                                                    : 'text-foreground hover:text-[#33BBFF]',
+                                            )}
+                                        >
+                                            {shortName(
+                                                p.entry.firstName,
+                                                p.entry.lastName,
+                                            )}
+                                        </Link>
 
-                                <div className='text-center text-[#7DD3FC]'>
-                                    {formatStat(p.goals)}
-                                </div>
-                                <div className='text-center text-[#7DD3FC]'>
-                                    {formatStat(p.assists)}
-                                </div>
-                                <div
-                                    className='text-center font-semibold'
-                                    style={{ color: PTS_HIGHLIGHT }}
-                                >
-                                    {formatStat(p.points)}
-                                </div>
-                                <div className='text-center text-white'>
-                                    {p.timeOnIce ?? '—'}
-                                </div>
-                                <div
-                                    className='text-center font-semibold'
-                                    style={{ color: GOLD }}
-                                >
-                                    {formatStat(p.fantasyPoints)}
-                                </div>
-                            </div>
-                        ))}
+                                        <div
+                                            className='text-center text-[0.7rem] font-semibold tabular-nums'
+                                            style={{ color: GOLD }}
+                                        >
+                                            {p.gameClockLabel}
+                                        </div>
+
+                                        <div className='text-center text-[#7DD3FC]'>
+                                            {formatStat(p.goals)}
+                                        </div>
+                                        <div className='text-center text-[#7DD3FC]'>
+                                            {formatStat(p.assists)}
+                                        </div>
+                                        <div
+                                            className='text-center font-semibold'
+                                            style={{ color: PTS_HIGHLIGHT }}
+                                        >
+                                            {formatStat(p.points)}
+                                        </div>
+                                        <div className='text-center text-white'>
+                                            {p.timeOnIce ?? '—'}
+                                        </div>
+                                        <div
+                                            className='text-center font-semibold'
+                                            style={{ color: GOLD }}
+                                        >
+                                            {formatStat(p.fantasyPoints)}
+                                        </div>
+                                    </div>
+                                );
+                            })}
                     </div>
                 </div>
             )}
@@ -1666,6 +1752,7 @@ export default function ClassementPage() {
                                 activeSortField={sortKey}
                                 sortDirection={sortDirection}
                                 onClick={handleSort}
+                                color={GP_HIGHLIGHT}
                             />
                             <ColumnHeader
                                 label='Apts'
@@ -1710,14 +1797,15 @@ export default function ClassementPage() {
                             sortDirection={sortDirection}
                             onClick={handleSort}
                         />
-                        <ColumnHeader
-                            label='FP'
-                            sortField='totalFantasyPoints'
-                            activeSortField={sortKey}
-                            sortDirection={sortDirection}
-                            onClick={handleSort}
-                            color={GOLD}
-                        />
+                            <ColumnHeader
+                                label='FP'
+                                sortField='totalFantasyPoints'
+                                activeSortField={sortKey}
+                                sortDirection={sortDirection}
+                                onClick={handleSort}
+                                color={GOLD}
+                                activeColor={GOLD}
+                            />
                     </div>
 
                     {/* ---- Data rows wrapper ---- */}
@@ -1819,47 +1907,22 @@ export default function ClassementPage() {
                                     </div>
 
                                     <div
-                                        className={cn(
-                                            'text-center',
-                                            isMine
-                                                ? 'text-white'
-                                                : 'text-[#7DD3FC]',
-                                        )}
+                                        className='text-center font-semibold'
+                                        style={{ color: GP_HIGHLIGHT }}
                                     >
                                         {row.skaterGamesPlayed +
                                             row.goalieGamesPlayed}
                                     </div>
 
-                                    <div
-                                        className={cn(
-                                            'text-center',
-                                            isMine
-                                                ? 'text-white'
-                                                : 'text-[#7DD3FC]',
-                                        )}
-                                    >
+                                    <div className='text-center text-[#7DD3FC]'>
                                         {row.forwardFantasyPoints}
                                     </div>
 
-                                    <div
-                                        className={cn(
-                                            'text-center',
-                                            isMine
-                                                ? 'text-white'
-                                                : 'text-[#7DD3FC]',
-                                        )}
-                                    >
+                                    <div className='text-center text-[#7DD3FC]'>
                                         {row.defenseFantasyPoints}
                                     </div>
 
-                                    <div
-                                        className={cn(
-                                            'text-center',
-                                            isMine
-                                                ? 'text-white'
-                                                : 'text-[#7DD3FC]',
-                                        )}
-                                    >
+                                    <div className='text-center text-[#7DD3FC]'>
                                         {row.goalieFantasyPoints}
                                     </div>
 
