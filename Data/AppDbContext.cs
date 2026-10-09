@@ -23,6 +23,13 @@ namespace NhlFantasyLeague.api.Data
         /// </summary>
         public DbSet<NhlTeamSeasonStat> NhlTeamSeasonStats { get; set; }
 
+        /// <summary>
+        /// One row per NHL game: per-team shots and score. Populated
+        /// by the live refresh and post-game write; read by the Game
+        /// Day page for the shots line on past dates.
+        /// </summary>
+        public DbSet<NhlGameStat> NhlGameStats { get; set; }
+
         public DbSet<FantasyTeam> FantasyTeams { get; set; }
         public DbSet<Season> Seasons { get; set; }
         public DbSet<RosterEntry> RosterEntries { get; set; }
@@ -224,6 +231,20 @@ namespace NhlFantasyLeague.api.Data
         .HasForeignKey(s => s.NhlTeamId)
         .HasPrincipalKey(t => t.NhlTeamId)
         .OnDelete(DeleteBehavior.Cascade);
+
+            // -----------------------------------------------------------------
+            // NhlGameStat
+            // -----------------------------------------------------------------
+
+            // One row per NHL game. The live refresh and post-game
+            // write upsert against this key.
+            modelBuilder.Entity<NhlGameStat>()
+                .HasIndex(s => s.NhlGameId)
+                .IsUnique();
+
+            // Reading past-game shots: one query per date.
+            modelBuilder.Entity<NhlGameStat>()
+                .HasIndex(s => s.GameDate);
 
             // Percentage fields. numeric(6,3) is enough for values
             // like 0.737 (save pctg style) or 21.500 (PP% style), so

@@ -919,6 +919,22 @@ namespace NhlFantasyLeague.api.Services.NHL
             var teamSeasonByTeamId = teamSeasons
                 .ToDictionary(fts => fts.FantasyTeamId);
 
+            // ----- Bulk read 5b: existing NhlGameStat rows ------------
+            //
+            // One row per game for the current batch. Loaded so we can
+            // upsert in place instead of inserting a duplicate on every
+            // live tick. Same pattern as existing PlayerGameLogs.
+            var batchGameIds = snapshots
+                .Select(s => s.GameId)
+                .ToList();
+
+            var existingGameStats = await _dbContext.NhlGameStats
+                .Where(s => batchGameIds.Contains(s.NhlGameId))
+                .ToListAsync(ct);
+
+            var gameStatByGameId = existingGameStats
+                .ToDictionary(s => s.NhlGameId);
+
             // ----- Bulk read 6: PlayerSeasonStats ---------------------
             var playerSeasonStats = await _dbContext.PlayerSeasonStats
                 .Where(s =>
@@ -961,21 +977,21 @@ namespace NhlFantasyLeague.api.Services.NHL
                 }
 
                 ProcessTeamStats(
-       box,
-       box.PlayerByGameStats.AwayTeam,
-       nhlTeamId: awayTeam.NhlTeamId,
-       opponentNhlTeamId: homeTeam.NhlTeamId,
-       isHomeGame: false,
-       gameDate: gameDate,
-       seasonId: seasonId,
-       gameIsFinal: gameIsFinal,
-       playersByNhlId: playersByNhlId,
-       logsByKey: logsByKey,
-       newLogsToInsert: newLogsToInsert,
-       historyByPlayerId: historyByPlayerId,
-       seasonStatByPlayerId: seasonStatByPlayerId,
-       teamDeltaByTeamId: teamDeltaByTeamId,
-       result: result);
+box,
+box.PlayerByGameStats.AwayTeam,
+nhlTeamId: awayTeam.NhlTeamId,
+opponentNhlTeamId: homeTeam.NhlTeamId,
+isHomeGame: false,
+gameDate: gameDate,
+seasonId: seasonId,
+gameIsFinal: gameIsFinal,
+playersByNhlId: playersByNhlId,
+logsByKey: logsByKey,
+newLogsToInsert: newLogsToInsert,
+historyByPlayerId: historyByPlayerId,
+seasonStatByPlayerId: seasonStatByPlayerId,
+teamDeltaByTeamId: teamDeltaByTeamId,
+result: result);
 
                 ProcessTeamStats(
       box,
@@ -993,6 +1009,28 @@ namespace NhlFantasyLeague.api.Services.NHL
       seasonStatByPlayerId: seasonStatByPlayerId,
       teamDeltaByTeamId: teamDeltaByTeamId,
       result: result);
+
+                // Upsert the per-game stat row. This is what makes the
+                // Game Day page able to show shots for past dates: the
+                // schedule endpoint does not carry them, so this table
+                // is the only persistent source.
+                //
+                // Written on every tick that touches a snapshot
+                // (LIVE, CRIT, FINAL, OFF), so live shots update as
+                // the game progresses and final shots freeze on the
+                // last write.
+                UpsertGameStat(
+                    gameStatByGameId,
+                    snapshot.GameId,
+                    snapshot.Season,
+                    snapshot.GameType,
+                    gameDate,
+                    awayTeam.NhlTeamId,
+                    homeTeam.NhlTeamId,
+                    awayScore: box.AwayTeam.Score,
+                    homeScore: box.HomeTeam.Score,
+                    awayShotsOnGoal: box.AwayTeam.ShotsOnGoal,
+                    homeShotsOnGoal: box.HomeTeam.ShotsOnGoal);
             }
 
             // ----- Insert new PlayerGameLog rows -----------------------
@@ -1750,12 +1788,58 @@ PersistFinalGamesResult result)
         // stats live in PlayerSeasonStat (derived from PlayerGameLog).
 
         private static void CollectNhlPlayerIds(
-            NhlTeamPlayerStats team,
-            HashSet<int> target)
+       NhlTeamPlayerStats team,
+       HashSet<int> target)
         {
             foreach (var f in team.Forwards) target.Add(f.PlayerId);
             foreach (var d in team.Defense) target.Add(d.PlayerId);
             foreach (var g in team.Goalies) target.Add(g.PlayerId);
+        }
+
+        /// <summary>
+        /// Upserts the per-game NhlGameStat row for one NHL game.
+        /// Called from PersistSnapshotsAsync for every snapshot that
+        /// has a boxscore. Idempotent: the row is looked up by
+        /// NhlGameId and updated in place, never duplicated.
+        ///
+        /// Owned by the persist path, not by any single service, so
+        /// both the live refresh and the post-game write/reconciliation
+        /// keep the row current without any extra HTTP calls.
+        /// </summary>
+        private void UpsertGameStat(
+            Dictionary<long, NhlGameStat> gameStatByGameId,
+            long nhlGameId,
+            int nhlSeasonCode,
+            int gameTypeId,
+            DateOnly gameDate,
+            int awayNhlTeamId,
+            int homeNhlTeamId,
+            int awayScore,
+            int homeScore,
+            int awayShotsOnGoal,
+            int homeShotsOnGoal)
+        {
+            if (!gameStatByGameId.TryGetValue(nhlGameId, out var stat))
+            {
+                stat = new NhlGameStat
+                {
+                    NhlGameId = nhlGameId,
+                };
+
+                _dbContext.NhlGameStats.Add(stat);
+                gameStatByGameId[nhlGameId] = stat;
+            }
+
+            stat.NhlSeasonCode = nhlSeasonCode;
+            stat.GameTypeId = gameTypeId;
+            stat.GameDate = gameDate;
+            stat.AwayNhlTeamId = awayNhlTeamId;
+            stat.HomeNhlTeamId = homeNhlTeamId;
+            stat.AwayScore = awayScore;
+            stat.HomeScore = homeScore;
+            stat.AwayShotsOnGoal = awayShotsOnGoal;
+            stat.HomeShotsOnGoal = homeShotsOnGoal;
+            stat.LastUpdatedUtc = DateTime.UtcNow;
         }
 
         /// <summary>

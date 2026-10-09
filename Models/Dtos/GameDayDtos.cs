@@ -82,6 +82,15 @@ namespace NhlFantasyLeague.api.Models.Dtos
 
         public int? AwayScore { get; set; }
 
+        /// <summary>
+        /// Shots on goal for the away team. Populated from the cached
+        /// boxscore for games that have one (LIVE, CRIT, FINAL, OFF).
+        /// Null for FUT / PRE games and for games whose boxscore the
+        /// live cache has never fetched. The Game Day card hides the
+        /// shots row when this is null.
+        /// </summary>
+        public int? AwayShots { get; set; }
+
         // ---- Home side ----
 
         public string HomeAbbreviation { get; set; } = string.Empty;
@@ -98,6 +107,11 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public string? HomeArenaName { get; set; }
 
         public int? HomeScore { get; set; }
+
+        /// <summary>
+        /// Shots on goal for the home team. Same rule as AwayShots.
+        /// </summary>
+        public int? HomeShots { get; set; }
 
         // ---- Game state ----
 

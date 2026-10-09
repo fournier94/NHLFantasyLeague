@@ -107,6 +107,15 @@ namespace NhlFantasyLeague.api.Controllers
                             HomeAbbreviation = s.HomeAbbreviation,
                             AwayScore = s.AwayScore,
                             HomeScore = s.HomeScore,
+                            // Shots come straight off the cached
+                            // boxscore. Null when we have never
+                            // fetched it (FUT / PRE games, or a game
+                            // whose boxscore the live refresh has
+                            // not yet retrieved), which is exactly
+                            // when the card should hide the shots
+                            // row.
+                            AwayShots = s.Boxscore?.AwayTeam.ShotsOnGoal,
+                            HomeShots = s.Boxscore?.HomeTeam.ShotsOnGoal,
                             PeriodNumber = s.PeriodNumber,
                             PeriodType = s.PeriodType,
                             HasBoxscore = s.Boxscore != null,
@@ -193,33 +202,59 @@ namespace NhlFantasyLeague.api.Controllers
             }
 
             var schedule = await _gameService
-                .GetScheduleForDateAsync(parsed, ct);
+     .GetScheduleForDateAsync(parsed, ct);
 
             var teamLookup = await GetTeamLookupAsync(ct);
 
+            // Load the persisted per-game shots for this date. One
+            // query for the whole day, keyed by NhlGameId. The
+            // schedule endpoint does not carry shots, so this table
+            // (written by the live refresh and the post-game write)
+            // is the only source for past-date views.
+            var gameStatsForDate = await _dbContext.NhlGameStats
+                .AsNoTracking()
+                .Where(s => s.GameDate == parsed)
+                .ToListAsync(ct);
+
+            var gameStatByGameId = gameStatsForDate
+                .ToDictionary(s => s.NhlGameId);
+
             var games = schedule
-                .Select(g => EnrichSummary(
-                    new GameDayGameSummary
-                    {
-                        GameId = g.Id,
-                        GameDate = g.GameDate,
-                        StartTimeUtc = g.StartTimeUtc,
-                        GameState = g.GameState,
-                        AwayAbbreviation = g.AwayTeam.Abbreviation,
-                        HomeAbbreviation = g.HomeTeam.Abbreviation,
-                        AwayScore = g.AwayTeam.Score,
-                        HomeScore = g.HomeTeam.Score,
-                        PeriodNumber = g.PeriodDescriptor?.Number,
-                        PeriodType = g.PeriodDescriptor?.PeriodType,
-                        HasBoxscore =
-                            !string.Equals(
-                                g.GameState, "FUT",
-                                StringComparison.OrdinalIgnoreCase) &&
-                            !string.Equals(
-                                g.GameState, "PRE",
-                                StringComparison.OrdinalIgnoreCase),
-                    },
-                    teamLookup))
+                .Select(g =>
+                {
+                    gameStatByGameId.TryGetValue(
+                        g.Id,
+                        out var storedGameStat);
+
+                    return EnrichSummary(
+                        new GameDayGameSummary
+                        {
+                            GameId = g.Id,
+                            GameDate = g.GameDate,
+                            StartTimeUtc = g.StartTimeUtc,
+                            GameState = g.GameState,
+                            AwayAbbreviation = g.AwayTeam.Abbreviation,
+                            HomeAbbreviation = g.HomeTeam.Abbreviation,
+                            AwayScore = g.AwayTeam.Score,
+                            HomeScore = g.HomeTeam.Score,
+                            // Shots come from the persisted per-game
+                            // stat row. Null when the row does not
+                            // exist yet, which happens only for dates
+                            // the post-game write has not processed.
+                            AwayShots = storedGameStat?.AwayShotsOnGoal,
+                            HomeShots = storedGameStat?.HomeShotsOnGoal,
+                            PeriodNumber = g.PeriodDescriptor?.Number,
+                            PeriodType = g.PeriodDescriptor?.PeriodType,
+                            HasBoxscore =
+                                !string.Equals(
+                                    g.GameState, "FUT",
+                                    StringComparison.OrdinalIgnoreCase) &&
+                                !string.Equals(
+                                    g.GameState, "PRE",
+                                    StringComparison.OrdinalIgnoreCase),
+                        },
+                        teamLookup);
+                })
                 .ToList();
 
             var response = new GameDayScheduleResponse

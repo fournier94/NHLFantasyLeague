@@ -726,11 +726,20 @@ function GameCard({
             ? 'EN DIRECT'
             : 'TERMINÉ';
 
-    // Big center display: start time for scheduled games, score for
-    // live/final games.
-    const bigDisplay = scheduled
+    // Center display: start time for scheduled games, score for
+    // live/final games. The score is rendered as a two-row block
+    // below so the shots line can sit exactly under the score
+    // digits. `showShots` gates the second row: it appears only
+    // when the backend actually sent shot counts, which happens
+    // only when a boxscore is cached for this game.
+    const startLabel = scheduled
         ? startTimeLabel(game.startTimeUtc)
-        : `${awayScore} - ${homeScore}`;
+        : null;
+
+    const showShots =
+        !scheduled &&
+        game.awayShots != null &&
+        game.homeShots != null;
 
     // Small caption under the big display: blank for scheduled and
     // final, period info for live.
@@ -826,9 +835,61 @@ function GameCard({
                         />
                     </div>
 
-                    <div className='mt-1 whitespace-nowrap text-[1.35rem] font-bold leading-tight text-white tabular-nums'>
-                        {bigDisplay}
-                    </div>
+                    {startLabel !== null ? (
+                        <div className='mt-1 whitespace-nowrap text-[1.35rem] font-bold leading-tight text-white tabular-nums'>
+                            {startLabel}
+                        </div>
+                    ) : (
+                        <div className='mt-1 flex flex-col items-center gap-0.5 tabular-nums'>
+                            {/* Score row. Two fixed-width columns
+                                (w-8) center the two digits, with the
+                                dash auto-sized between them. */}
+                            <div className='flex items-center justify-center gap-2'>
+                                <span className='w-8 text-center text-[1.35rem] font-bold leading-tight text-white'>
+                                    {awayScore}
+                                </span>
+                                <span className='text-[1.35rem] font-bold leading-tight text-white'>
+                                    -
+                                </span>
+                                <span className='w-8 text-center text-[1.35rem] font-bold leading-tight text-white'>
+                                    {homeScore}
+                                </span>
+                            </div>
+
+                                {/* Shots row. Laid out as two fixed-width
+                                columns flanking a "-", mirroring the
+                                score row's structure. Because both
+                                outer columns share the same width
+                                (w-14), the middle "-" sits at the
+                                exact horizontal center of the row —
+                                which is also where the score row's
+                                "-" sits, since the score row is
+                                symmetric (w-8 | "-" | w-8). The two
+                                "-"s therefore line up vertically.
+
+                                Left column is right-aligned and the
+                                right column is left-aligned, so the
+                                shot counts hug the "-" separator.
+                                "shots :" is rendered smaller than
+                                the numbers so it reads as a label,
+                                not as part of the counts.
+
+                                Rendered in the app's muted grey so
+                                it reads as secondary information
+                                under the score. */}
+                                {showShots && (
+                                    <div className='flex items-center justify-center gap-1 text-[0.7rem] font-semibold text-muted-foreground'>
+                                        <span className='w-14 text-right'>
+                                            {game.awayShots}
+                                        </span>
+                                        <span>-</span>
+                                        <span className='w-14 text-left'>
+                                            {game.homeShots}
+                                        </span>
+                                    </div>
+                                )}
+                        </div>
+                    )}
 
                     {smallCaption && (
                         <div className='text-[0.6rem] font-semibold uppercase tracking-widest text-[#7DD3FC]'>

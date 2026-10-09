@@ -1141,6 +1141,14 @@ export interface GameDayGameSummary {
     awayRecord: string | null;
     awayArenaName: string | null;
     awayScore: number | null;
+    /**
+     * Shots on goal for the away team. Populated for games that have
+     * a cached boxscore (LIVE, CRIT, FINAL, OFF). Null for FUT/PRE
+     * games and for past-date views, where the backend does not
+     * fetch one boxscore per game. The card hides the shots row
+     * when this is null.
+     */
+    awayShots: number | null;
 
     homeAbbreviation: string;
     homeFullName: string;
@@ -1149,6 +1157,8 @@ export interface GameDayGameSummary {
     homeRecord: string | null;
     homeArenaName: string | null;
     homeScore: number | null;
+    /** Same rule as awayShots. */
+    homeShots: number | null;
 
     periodNumber: number | null;
     periodType: string | null;
