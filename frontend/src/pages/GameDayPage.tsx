@@ -167,6 +167,23 @@ function goalieDecisionLabel(decision: string | null): string {
     return decision;
 }
 
+/**
+ * Short French label for a period: "1re", "2e", "3e", "Prol." (OT),
+ * "TAB" (shootout). Falls back to "Ne" for anything unexpected.
+ * Mirrors the helper used by ClassementPage so the two pages agree.
+ */
+function formatPeriodLabel(
+    number: number,
+    type: string | null,
+): string {
+    if (type === 'OT') return 'Prol.';
+    if (type === 'SO') return 'TAB';
+    if (number === 1) return '1re';
+    if (number === 2) return '2e';
+    if (number === 3) return '3e';
+    return `${number}e`;
+}
+
 // ---------------------------------------------------------------------
 // Boxscore subcomponents
 // ---------------------------------------------------------------------
@@ -725,11 +742,36 @@ function GameCard({
     };
 
     // Header label depends on game state.
-    const headerLabel = scheduled
-        ? 'MATCH À VENIR'
-        : live
-            ? 'EN DIRECT'
-            : 'TERMINÉ';
+    //
+    // For live games, replace the generic "EN DIRECT" with the
+    // current period and time remaining, so the label carries real
+    // information rather than a static tag. Falls back to
+    // "EN DIRECT" only in the brief window between a game going
+    // LIVE and the live refresh publishing a clock.
+    //
+    // Scheduled and final games keep their static labels.
+    let headerLabel: string;
+
+    if (scheduled) {
+        headerLabel = 'MATCH À VENIR';
+    } else if (live && game.periodNumber != null) {
+        const periodText = formatPeriodLabel(
+            game.periodNumber,
+            game.periodType,
+        );
+
+        if (game.isIntermission) {
+            headerLabel = `${periodText} · Entracte`;
+        } else if (game.periodTimeRemaining) {
+            headerLabel = `${periodText} · ${game.periodTimeRemaining}`;
+        } else {
+            headerLabel = periodText;
+        }
+    } else if (live) {
+        headerLabel = 'EN DIRECT';
+    } else {
+        headerLabel = 'TERMINÉ';
+    }
 
     // Center display: start time for scheduled games, score for
     // live/final games. The score is rendered as a two-row block
@@ -746,18 +788,9 @@ function GameCard({
         game.awayShots != null &&
         game.homeShots != null;
 
-    // Small caption under the big display: blank for scheduled and
-    // final, period info for live.
-    let smallCaption = '';
-    if (live && game.periodNumber) {
-        const periodSuffix =
-            game.periodType === 'OT'
-                ? 'Prol.'
-                : game.periodType === 'SO'
-                    ? 'TAB'
-                    : `${game.periodNumber}e`;
-        smallCaption = periodSuffix;
-    }
+    // The period info used to live in its own caption under the
+    // score. It has been folded into the header label above, so
+    // there is nothing to compute here anymore.
 
     return (
         <div
@@ -896,11 +929,11 @@ function GameCard({
                         </div>
                     )}
 
-                    {smallCaption && (
-                        <div className='text-[0.6rem] font-semibold uppercase tracking-widest text-[#7DD3FC]'>
-                            {smallCaption}
-                        </div>
-                    )}
+                    {/* The old small caption that showed the period
+                        under the score has been removed. The period
+                        and time now live in the header label above,
+                        and the shots row sits directly under the
+                        score with nothing in between. */}
                 </div>
 
                 {/* Home side. Owns its solid team-color background. */}

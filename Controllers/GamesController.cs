@@ -118,6 +118,16 @@ namespace NhlFantasyLeague.api.Controllers
                             HomeShots = s.Boxscore?.HomeTeam.ShotsOnGoal,
                             PeriodNumber = s.PeriodNumber,
                             PeriodType = s.PeriodType,
+                            // Live clock, straight from the cached
+                            // boxscore. Null on FUT/PRE (no clock
+                            // yet) and on FINAL/OFF (the NHL drops
+                            // it once the horn sounds), which is
+                            // exactly when the card should fall
+                            // back to the plain "EN DIRECT" label.
+                            PeriodTimeRemaining =
+                                s.Boxscore?.Clock?.TimeRemaining,
+                            IsIntermission =
+                                s.Boxscore?.Clock?.InIntermission,
                             HasBoxscore = s.Boxscore != null,
                         },
                         teamLookup))

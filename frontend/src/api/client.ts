@@ -1162,6 +1162,16 @@ export interface GameDayGameSummary {
 
     periodNumber: number | null;
     periodType: string | null;
+    /**
+     * Time remaining in the current period, "MM:SS". Populated for
+     * live games only; null for scheduled games, final games, and
+     * past-date views where no boxscore is cached.
+     */
+    periodTimeRemaining: string | null;
+    /**
+     * True when the game is between periods. Null when unknown.
+     */
+    isIntermission: boolean | null;
     hasBoxscore: boolean;
 }
 

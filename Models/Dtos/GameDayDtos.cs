@@ -121,6 +121,23 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// <summary>REG, OT or SO. Null before the first period.</summary>
         public string? PeriodType { get; set; }
 
+        /// <summary>
+        /// Time remaining in the current period, formatted "MM:SS".
+        /// Populated from the cached boxscore's live clock for games
+        /// that are currently LIVE or CRIT. Null for scheduled games,
+        /// final games (the clock is no longer meaningful), and past
+        /// dates where no boxscore is cached.
+        /// </summary>
+        public string? PeriodTimeRemaining { get; set; }
+
+        /// <summary>
+        /// True when the game is between periods. Null when unknown
+        /// (no cached boxscore, or the NHL has not started publishing
+        /// a clock yet). The card renders "Entracte" when this is
+        /// true and a period number is available.
+        /// </summary>
+        public bool? IsIntermission { get; set; }
+
         /// <summary>True when a boxscore is cached for this game.</summary>
         public bool HasBoxscore { get; set; }
     }
