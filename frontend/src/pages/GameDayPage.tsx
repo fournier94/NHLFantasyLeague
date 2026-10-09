@@ -401,7 +401,12 @@ function BoxscorePanel({
 
     return (
         <div
-            className='max-h-[28rem] space-y-4 overflow-y-auto border-t px-3 py-3 md:max-h-none'
+            // No max-height, no internal scroll. The panel takes its
+            // natural height so the whole boxscore is visible without
+            // a nested scrollbar. Since only one team's boxscore is
+            // shown at a time (the away OR the home side), the total
+            // content fits comfortably on any screen.
+            className='space-y-4 border-t px-3 py-3'
             style={boxscoreStyle}
             onClick={(event) => event.stopPropagation()}
         >
