@@ -16,6 +16,13 @@ namespace NhlFantasyLeague.api.Data
 
         public DbSet<Player> Players { get; set; }
         public DbSet<NhlTeam> NhlTeams { get; set; }
+
+        /// <summary>
+        /// One row per (NHL team, season, game type). Stores every
+        /// season-level team aggregate the NHL API exposes.
+        /// </summary>
+        public DbSet<NhlTeamSeasonStat> NhlTeamSeasonStats { get; set; }
+
         public DbSet<FantasyTeam> FantasyTeams { get; set; }
         public DbSet<Season> Seasons { get; set; }
         public DbSet<RosterEntry> RosterEntries { get; set; }
@@ -196,16 +203,112 @@ namespace NhlFantasyLeague.api.Data
                 .IsUnique();
 
             modelBuilder.Entity<NhlTeam>()
-                .HasIndex(t => t.NhlTeamId)
+     .HasIndex(t => t.NhlTeamId)
+     .IsUnique();
+
+            // One row per (team, season, game type). The daily sync
+            // upserts against this key, so it must be unique or the
+            // upsert would silently create duplicates.
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .HasIndex(s => new
+                {
+                    s.NhlTeamId,
+                    s.NhlSeasonCode,
+                    s.GameTypeId
+                })
                 .IsUnique();
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+        .HasOne(s => s.NhlTeam)
+        .WithMany()
+        .HasForeignKey(s => s.NhlTeamId)
+        .HasPrincipalKey(t => t.NhlTeamId)
+        .OnDelete(DeleteBehavior.Cascade);
+
+            // Percentage fields. numeric(6,3) is enough for values
+            // like 0.737 (save pctg style) or 21.500 (PP% style), so
+            // the same precision works whether the API sends a
+            // fraction or a percentage.
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.PointPctg)
+                .HasPrecision(6, 3);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.PowerPlayPct)
+                .HasPrecision(6, 3);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.PowerPlayNetPct)
+                .HasPrecision(6, 3);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.PenaltyKillPct)
+                .HasPrecision(6, 3);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.PenaltyKillNetPct)
+                .HasPrecision(6, 3);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.FaceoffWinPct)
+                .HasPrecision(6, 3);
+
+            // Per-game averages. numeric(6,2) fits values like
+            // "31.42" (shots per game) or "3.21" (goals per game).
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.ShotsForPerGame)
+                .HasPrecision(6, 2);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.ShotsAgainstPerGame)
+                .HasPrecision(6, 2);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.GoalsForPerGame)
+                .HasPrecision(6, 2);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.GoalsAgainstPerGame)
+                .HasPrecision(6, 2);
+
+            modelBuilder.Entity<NhlTeamSeasonStat>()
+                .Property(s => s.PenaltyMinutesPerGame)
+                .HasPrecision(6, 2);
 
             modelBuilder.Entity<FantasyTeam>()
                 .HasIndex(x => new { x.LeagueId, x.Name })
                 .IsUnique();
 
             modelBuilder.Entity<FantasyTeamSeason>()
-                .HasIndex(x => new { x.FantasyTeamId, x.SeasonId })
-                .IsUnique();
+      .HasIndex(x => new { x.FantasyTeamId, x.SeasonId })
+      .IsUnique();
+
+            // Optimistic concurrency on FantasyTeamSeason.
+            //
+            // PostgreSQL's xmin system column is automatically maintained
+            // by the database and incremented on every UPDATE. Mapping it
+            // as a concurrency token means two concurrent writers of the
+            // same FantasyTeamSeason row cannot silently overwrite each
+            // other: the second one to save throws
+            // DbUpdateConcurrencyException, and the two write paths
+            // (live persist, season recompute) each handle it.
+            //
+            // Why this matters here: the live refresh (under _liveLock)
+            // and the season recompute (under _heavyLock) run on
+            // separate locks and can execute concurrently. Both add
+            // fantasy points to the same FantasyTeamSeason rows. Without
+            // the token, the second SaveChangesAsync silently overwrites
+            // the first one's deltas. The race fires most often when a
+            // roster change triggers the on-demand recompute while a
+            // live game is being persisted.
+            //
+            // Retry logic lives in:
+            //   - NhlGameService.PersistSnapshotsAsync
+            //     (throws; the caller's existing tick retry picks it up)
+            //   - NhlGameLogService.RecomputeTeamSeasonTotalsAsync
+            //     (bounded retry, ChangeTracker.Clear between attempts)
+            modelBuilder.Entity<FantasyTeamSeason>()
+                .UseXminAsConcurrencyToken();
 
             modelBuilder.Entity<Season>()
                 .HasIndex(x => new { x.LeagueId, x.Name })

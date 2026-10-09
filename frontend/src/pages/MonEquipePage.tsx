@@ -1198,7 +1198,7 @@ export default function MonEquipePage() {
             )}
 
             {activeView === 'cap' && roster.futureCapBySeason.length > 0 && (
-                <div className='w-full'>
+                <div className='mt-7 w-full'>
                     <div className='space-y-2'>
                         {roster.futureCapBySeason.map((row) => {
                             const pct = capPercentage(row.capSalary, row.salaryCap);

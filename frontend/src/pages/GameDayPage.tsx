@@ -1,6 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
     getGameBoxscore,
     getGamesByDate,
@@ -15,6 +14,10 @@ import {
     type PlayerOwnership,
 } from '@/api/client';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
+import {
+    getNhlTeamAuraColor,
+    getNhlTeamColor,
+} from '@/lib/nhlTeamColors';
 import { useAura } from '@/lib/auraContext';
 import {
     auraPulseClass,
@@ -51,11 +54,13 @@ const TIME_FORMATTER = new Intl.DateTimeFormat('fr-CA', {
 
 // Shared frame style, matching the Classement page.
 const FRAME_BG = '#080D1A';
-const FRAME_BORDER = 'rgba(0, 168, 255, 0.6)';
+const FRAME_BORDER = '#090212';
 const FRAME_GLOW =
-    '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)';
-const HEADER_GRADIENT =
-    'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))';
+    '0 2px 8px rgba(0, 0, 0, 0.45), 0 0 18px rgba(0, 168, 255, 0.20), inset 0 0 16px rgba(0, 168, 255, 0.06)';
+
+// Base dark color for every panel. Kept as a single constant so the
+// whole card stays visually coherent.
+const PANEL_BG = '#050B18';
 
 // ---------------------------------------------------------------------
 // Date helpers
@@ -90,17 +95,6 @@ function isLive(game: GameDayGameSummary): boolean {
 
 function isScheduled(game: GameDayGameSummary): boolean {
     return game.gameState === 'FUT' || game.gameState === 'PRE';
-}
-
-function isFinal(game: GameDayGameSummary): boolean {
-    return !isLive(game) && !isScheduled(game);
-}
-
-function periodLabel(game: GameDayGameSummary): string {
-    if (game.periodType === 'OT') return 'Prol.';
-    if (game.periodType === 'SO') return 'TAB';
-    if (game.periodNumber) return `${game.periodNumber}e`;
-    return '';
 }
 
 function startTimeLabel(iso: string): string {
@@ -234,6 +228,11 @@ function GoalieRow({
     const decision = goalieDecisionLabel(goalie.decision);
     const name = goalie.name.default;
 
+    // A loss shows in red so it stands out from the wins and OT
+    // losses at a glance. Wins and OT losses stay green.
+    const decisionColor =
+        decision === 'L' ? '#EF4444' : '#22C55E';
+
     return (
         <Link
             to={`/joueurs/${goalie.playerId}`}
@@ -252,7 +251,10 @@ function GoalieRow({
             </div>
 
             <div className='flex shrink-0 gap-2 tabular-nums'>
-                <span className='w-6 text-center font-bold text-[#22C55E]'>
+                <span
+                    className='w-6 text-center font-bold'
+                    style={{ color: decisionColor }}
+                >
                     {decision || '—'}
                 </span>
                 <span className='w-14 text-center text-muted-foreground'>
@@ -299,6 +301,31 @@ function TeamBoxscore({
                 </span>
             </div>
 
+            {/* Goalie section first. The single starting goalie is
+                the most important line in the boxscore, so it sits
+                at the top of the team block. */}
+            {goalies.length > 0 && (
+                <div>
+                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
+                        <span className='flex-1'>Gardien</span>
+                        <div className='flex shrink-0 gap-2'>
+                            <span className='w-6 text-center'>Déc.</span>
+                            <span className='w-14 text-center'>Arrêts</span>
+                        </div>
+                    </div>
+                    {goalies.map((g) => (
+                        <GoalieRow
+                            key={g.playerId}
+                            goalie={g}
+                            ownership={
+                                ownershipByPlayerId.get(g.playerId) ?? null
+                            }
+                        />
+                    ))}
+                </div>
+            )}
+
+            {/* Skaters below the goalie. */}
             {skaters.length > 0 && (
                 <div>
                     <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
@@ -320,27 +347,6 @@ function TeamBoxscore({
                     ))}
                 </div>
             )}
-
-            {goalies.length > 0 && (
-                <div>
-                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
-                        <span className='flex-1'>Gardien</span>
-                        <div className='flex shrink-0 gap-2'>
-                            <span className='w-6 text-center'>Déc.</span>
-                            <span className='w-14 text-center'>Arrêts</span>
-                        </div>
-                    </div>
-                    {goalies.map((g) => (
-                        <GoalieRow
-                            key={g.playerId}
-                            goalie={g}
-                            ownership={
-                                ownershipByPlayerId.get(g.playerId) ?? null
-                            }
-                        />
-                    ))}
-                </div>
-            )}
         </div>
     );
 }
@@ -349,16 +355,26 @@ function BoxscorePanel({
     boxscore,
     loading,
     ownershipByPlayerId,
+    side,
 }: {
     boxscore: NhlBoxscoreResponse | null;
     loading: boolean;
     ownershipByPlayerId: Map<number, PlayerOwnership>;
+    side: 'away' | 'home';
 }) {
+    // The card-level team gradient would otherwise bleed into the
+    // expanded boxscore. Pin a solid dark base on both the loading
+    // state and the loaded state so the boxscore stays flat.
+    const boxscoreStyle: React.CSSProperties = {
+        borderColor: 'rgba(0, 168, 255, 0.2)',
+        backgroundColor: PANEL_BG,
+    };
+
     if (loading) {
         return (
             <div
                 className='border-t px-3 py-4 text-center text-xs text-muted-foreground'
-                style={{ borderColor: 'rgba(0, 168, 255, 0.2)' }}
+                style={boxscoreStyle}
                 onClick={(event) => event.stopPropagation()}
             >
                 Chargement du sommaire...
@@ -368,23 +384,31 @@ function BoxscorePanel({
 
     if (!boxscore) return null;
 
+    // Only render the team the user picked. The two sides of the
+    // game card are now click-to-pick: left side shows the away
+    // team's boxscore, right side shows the home team's boxscore.
+    const isAway = side === 'away';
+
+    const team = isAway
+        ? boxscore.playerByGameStats.awayTeam
+        : boxscore.playerByGameStats.homeTeam;
+
+    const abbreviation = isAway
+        ? boxscore.awayTeam.abbrev
+        : boxscore.homeTeam.abbrev;
+
+    const label = isAway ? 'Visiteurs' : 'Locaux';
+
     return (
         <div
             className='max-h-[28rem] space-y-4 overflow-y-auto border-t px-3 py-3 md:max-h-none'
-            style={{ borderColor: 'rgba(0, 168, 255, 0.2)' }}
+            style={boxscoreStyle}
             onClick={(event) => event.stopPropagation()}
         >
             <TeamBoxscore
-                team={boxscore.playerByGameStats.awayTeam}
-                abbreviation={boxscore.awayTeam.abbrev}
-                label='Visiteurs'
-                ownershipByPlayerId={ownershipByPlayerId}
-            />
-
-            <TeamBoxscore
-                team={boxscore.playerByGameStats.homeTeam}
-                abbreviation={boxscore.homeTeam.abbrev}
-                label='Locaux'
+                team={team}
+                abbreviation={abbreviation}
+                label={label}
                 ownershipByPlayerId={ownershipByPlayerId}
             />
         </div>
@@ -395,63 +419,225 @@ function BoxscorePanel({
 // Team row inside a game card
 // ---------------------------------------------------------------------
 
-function TeamRow({
+/**
+ * One side of the game card (away on the left, home on the right).
+ *
+ * Two colors, deliberately separated:
+ *
+ *   - `fillColor` — the base team color from NHL_TEAM_COLORS, used
+ *     for the solid background that fills the entire side panel.
+ *     This is the "true" team color, so a Colorado side reads as
+ *     real Avalanche burgundy and a Seattle side reads as the
+ *     Kraken's deep navy.
+ *
+ *   - `stripColor` — the aura override from NHL_TEAM_AURA_COLORS
+ *     when one exists (falls back to the base color otherwise),
+ *     used exclusively for the neon accent strip on the outer edge.
+ *     This is where a bright variant actually matters: a thin strip
+ *     of a dark color (LAK #111111, UTA #010101, SEA #001628) would
+ *     disappear against the dark panel, so the aura palette is the
+ *     right choice here.
+ *
+ * `dimmed` is used by the parent when the OTHER side of the same
+ * card is the currently-viewed one. When true, both the fill and
+ * the strip are replaced with a neutral grey so the user can see
+ * at a glance which side of the expanded card they are looking at.
+ *
+ * The glass overlay, the diagonal streaks, and the linear
+ * team-color gradient that used to fade toward the center have all
+ * been removed. The fill is flat and reaches the inner edge of the
+ * panel; the strip is a contained-filament two-layer build with a
+ * thick accent "tube" and a thin near-white "filament" inset inside
+ * it, and nothing extends outside the strip's own box.
+ */
+function TeamSide({
     abbreviation,
-    score,
-    isWinning,
-    isScheduled,
+    placeName,
+    commonName,
+    record,
+    fillColor,
+    stripColor,
+    side,
+    dimmed = false,
 }: {
     abbreviation: string;
-    score: number;
-    isWinning: boolean;
-    isScheduled: boolean;
+    placeName: string;
+    commonName: string;
+    record: string | null;
+    fillColor: string;
+    stripColor: string;
+    side: 'away' | 'home';
+    dimmed?: boolean;
 }) {
+    const isAway = side === 'away';
+    const accentSide: 'left' | 'right' = isAway ? 'left' : 'right';
+
+    // Black palette used when this side is the "inactive" side of an
+    // expanded game card. Both values are opaque hex; they are run
+    // through the same `99` alpha suffix below, so they end up at
+    // the same visual weight as the team colors they replace.
+    // Sitting over the navy PANEL_BG at ~60% alpha, this reads as a
+    // dark, neutral block with no team hue.
+    const DIMMED_FILL = '#000000';
+    const DIMMED_STRIP = '#000000';
+
+    const effectiveFill = dimmed ? DIMMED_FILL : fillColor;
+    const effectiveStrip = dimmed ? DIMMED_STRIP : stripColor;
+
+    // Solid fill. The two-hex-digit suffix on the six-digit hex sets
+    // the alpha: 99 is ~60%, which reads as a solid color while
+    // keeping the panel dark enough for the white text on top.
+    // Raise to CC (~80%) or drop the suffix entirely for a fully
+    // opaque, brighter side.
+    const solidTeamColor = `${effectiveFill}99`;
+
+    // Very subtle vertical shade so the panel doesn't read as flat.
+    // Top and bottom are slightly darker than the center; the effect
+    // is almost invisible but gives the panel a physical feel. It is
+    // painted on top of the solid fill.
+    const verticalShade =
+        'linear-gradient(180deg, ' +
+        'rgba(0, 0, 0, 0.18) 0%, ' +
+        'rgba(0, 0, 0, 0) 45%, ' +
+        'rgba(0, 0, 0, 0.22) 100%)';
+
     return (
-        <div className='flex items-center justify-between gap-2 px-3 py-[3px]'>
-            <div className='flex min-w-0 flex-1 items-center gap-2'>
-                <NhlTeamLogo abbreviation={abbreviation} size={22} />
-                <span
-                    className={cn(
-                        'truncate text-sm font-bold tracking-wide',
-                        isScheduled || !isWinning
-                            ? 'text-[#7DD3FC]'
-                            : 'text-white',
-                    )}
-                    style={
-                        !isScheduled && isWinning
-                            ? {
-                                textShadow:
-                                    '0 0 8px rgba(125, 211, 252, 0.5)',
-                            }
-                            : undefined
-                    }
-                >
-                    {abbreviation}
-                </span>
+        <div
+            className='relative flex min-w-0 flex-col items-center justify-center overflow-hidden px-3 pt-2 pb-4 text-center'
+            style={{
+                backgroundColor: PANEL_BG,
+                backgroundImage: [
+                    verticalShade,
+                    // A uniform fill. Repeating the same color at
+                    // both ends of a linear-gradient gives a flat,
+                    // gradient-free fill that sits on top of
+                    // PANEL_BG and underneath the vertical shade.
+                    `linear-gradient(${solidTeamColor}, ${solidTeamColor})`,
+                ].join(', '),
+            }}
+        >
+            {/* Contained-filament neon accent strip on the outer edge.
+                Two stacked layers at the same size and position:
+                a thick accent "tube" and a thin near-white "filament"
+                running through its center. Nothing extends outside
+                the strip's own bounding box.
+
+                Uses `effectiveStrip` (the aura-override variant when
+                the side is active, grey when it is dimmed), NOT
+                `fillColor`, so the strip stays visible for teams
+                whose base color is nearly black. */}
+            <div
+                aria-hidden='true'
+                className='pointer-events-none absolute inset-y-5 w-[3px] rounded-full'
+                style={{
+                    [accentSide]: 4,
+                    backgroundColor: effectiveStrip,
+                    zIndex: 2,
+                }}
+            >
+                <div
+                    aria-hidden='true'
+                    className='absolute inset-y-0 left-1/2 w-[1px] -translate-x-1/2 rounded-full'
+                    style={{ backgroundColor: '#FFFDF0' }}
+                />
             </div>
 
-            <span
-                className={cn(
-                    'shrink-0 text-base font-bold tabular-nums',
-                    isScheduled
-                        ? 'text-[#00A8FF]/50'
-                        : isWinning
-                            ? 'text-white'
-                            : 'text-[#7DD3FC]',
-                )}
-                style={
-                    !isScheduled && isWinning
-                        ? {
-                            textShadow:
-                                '0 0 10px rgba(125, 211, 252, 0.6)',
-                        }
-                        : undefined
-                }
+            {/* Content, lifted above the strip so it stays sharp. */}
+            <div
+                className='relative flex flex-col items-center'
+                style={{ zIndex: 3 }}
             >
-                {isScheduled ? '—' : score}
-            </span>
+                {/* When this side is the inactive one on an expanded
+                    card, the logo is desaturated to match the dimmed
+                    background. filter applies to the whole subtree,
+                    so wrapping the logo is enough — no changes to the
+                    NhlTeamLogo component are needed. 0.2 = 20%
+                    saturation = 80% reduction. */}
+                <div
+                    style={{
+                        filter: dimmed ? 'saturate(0.2)' : undefined,
+                    }}
+                >
+                    <NhlTeamLogo
+                        abbreviation={abbreviation}
+                        size={60}
+                    />
+                </div>
+
+                <div
+                    // mt-2 removed. The logo is 12px taller than before,
+                    // so removing this 8px margin pulls the place name
+                    // back up to its original vertical position relative
+                    // to the top of the panel. Without this, the text
+                    // would sit 12px lower than it did before the logo
+                    // resize.
+                    className='truncate text-[0.62rem] uppercase tracking-[0.22em] text-white/80'
+                    style={{ textShadow: '0 1px 2px rgba(0, 0, 0, 0.55)' }}
+                >
+                    {placeName}
+                </div>
+
+                <div
+                    // Reduced from text-[1rem] to text-[0.8rem] (20%
+                    // smaller). Combined with the padding change above,
+                    // this keeps the panel height identical despite the
+                    // larger logo.
+                    className='truncate text-[0.8rem] font-bold uppercase leading-tight tracking-wide text-white'
+                    style={{ textShadow: '0 1px 3px rgba(0, 0, 0, 0.6)' }}
+                >
+                    {commonName}
+                </div>
+
+                {record && (
+                    <div className='mt-1 text-[0.75rem] font-semibold tabular-nums text-white/90'>
+                        {record}
+                    </div>
+                )}
+            </div>
         </div>
     );
+}
+
+/**
+ * Short day label under the header, matching the date the game
+ * belongs to. Live games always read "EN DIRECT" regardless of
+ * which side of midnight they started on.
+ */
+function dayLabel(
+    gameDate: string,
+    currentFantasyDate: string,
+): string {
+    if (gameDate === currentFantasyDate) {
+        return "AUJOURD'HUI";
+    }
+
+    // Subtract one calendar day from the fantasy date, purely as
+    // string arithmetic on the ISO parts, so DST can never shift
+    // the result.
+    const parts = currentFantasyDate.split('-');
+    if (parts.length === 3) {
+        const y = Number(parts[0]);
+        const m = Number(parts[1]);
+        const d = Number(parts[2]);
+        if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+            const prev = new Date(Date.UTC(y, m - 1, d));
+            prev.setUTCDate(prev.getUTCDate() - 1);
+            const yyyy = prev.getUTCFullYear();
+            const mm = String(prev.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(prev.getUTCDate()).padStart(2, '0');
+            if (gameDate === `${yyyy}-${mm}-${dd}`) {
+                return 'HIER';
+            }
+        }
+    }
+
+    // Any older date: render as "JJ MMM" using the same formatter
+    // as the date picker's past entries.
+    const parsed = new Date(`${gameDate}T12:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) {
+        return '';
+    }
+    return SHORT_DATE_FORMATTER.format(parsed).toUpperCase();
 }
 
 // ---------------------------------------------------------------------
@@ -460,39 +646,114 @@ function TeamRow({
 
 function GameCard({
     game,
+    currentFantasyDate,
     expanded,
+    expandedSide,
     boxscore,
     boxscoreLoading,
     ownershipByPlayerId,
     onToggle,
 }: {
     game: GameDayGameSummary;
+    currentFantasyDate: string;
     expanded: boolean;
+    expandedSide: 'away' | 'home' | null;
     boxscore: NhlBoxscoreResponse | null;
     boxscoreLoading: boolean;
     ownershipByPlayerId: Map<number, PlayerOwnership>;
-    onToggle: (gameId: number) => void;
+    onToggle: (gameId: number, side: 'away' | 'home') => void;
 }) {
     const live = isLive(game);
-    const final = isFinal(game);
     const scheduled = isScheduled(game);
     const clickable = game.hasBoxscore;
 
+    // Two colors per side, used for two different purposes:
+    //
+    //   - fillColor  — the true team color from NHL_TEAM_COLORS,
+    //                  used as the flat background of the side panel.
+    //                  A Colorado side reads as real Avalanche
+    //                  burgundy, a Seattle side as the Kraken's deep
+    //                  navy, etc.
+    //
+    //   - stripColor — the aura override from NHL_TEAM_AURA_COLORS
+    //                  when one exists (falls back to the base color
+    //                  otherwise), used only for the thin neon strip
+    //                  on the outer edge. Several NHL primaries are
+    //                  nearly black (LAK #111111, UTA #010101,
+    //                  SEA #001628) and would disappear as a strip
+    //                  against the dark panel; the aura palette is
+    //                  exactly what keeps the strip visible.
+    //
+    // The divider lines under the center column also use stripColor
+    // so they stay visible for dark teams.
+    const awayFillColor = getNhlTeamColor(game.awayAbbreviation);
+    const awayStripColor = getNhlTeamAuraColor(game.awayAbbreviation);
+
+    const homeFillColor = getNhlTeamColor(game.homeAbbreviation);
+    const homeStripColor = getNhlTeamAuraColor(game.homeAbbreviation);
+
+    // When this card is expanded, whichever side is NOT currently
+    // being viewed is greyed out. This tells the user at a glance
+    // which side's boxscore is on screen. When the card is
+    // collapsed, neither side is dimmed.
+    const awayDimmed = expanded && expandedSide === 'home';
+    const homeDimmed = expanded && expandedSide === 'away';
+
     const awayScore = game.awayScore ?? 0;
     const homeScore = game.homeScore ?? 0;
-    const awayWinning = live || final ? awayScore > homeScore : false;
-    const homeWinning = live || final ? homeScore > awayScore : false;
 
-    const handleClick = () => {
-        if (clickable) {
-            onToggle(game.gameId);
-        }
+    // Determine which half of the card was clicked and forward
+    // that side to the parent. The card is divided by an
+    // imaginary vertical line through its horizontal midpoint:
+    // clicks left of center open the away boxscore, clicks right
+    // of center open the home boxscore.
+    const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+        if (!clickable) return;
+
+        const rect = event.currentTarget.getBoundingClientRect();
+        const clickX = event.clientX - rect.left;
+
+        const side: 'away' | 'home' =
+            clickX < rect.width / 2 ? 'away' : 'home';
+
+        onToggle(game.gameId, side);
     };
+
+    // Header label depends on game state.
+    const headerLabel = scheduled
+        ? 'MATCH À VENIR'
+        : live
+            ? 'EN DIRECT'
+            : 'TERMINÉ';
+
+    // Big center display: start time for scheduled games, score for
+    // live/final games.
+    const bigDisplay = scheduled
+        ? startTimeLabel(game.startTimeUtc)
+        : `${awayScore} - ${homeScore}`;
+
+    // Small caption under the big display: blank for scheduled and
+    // final, period info for live.
+    let smallCaption = '';
+    if (live && game.periodNumber) {
+        const periodSuffix =
+            game.periodType === 'OT'
+                ? 'Prol.'
+                : game.periodType === 'SO'
+                    ? 'TAB'
+                    : `${game.periodNumber}e`;
+        smallCaption = periodSuffix;
+    }
 
     return (
         <div
+            id={`game-card-${game.gameId}`}
             className={cn(
-                'overflow-hidden rounded-lg border transition-shadow',
+                // scroll-mt-... pushes the card down by the sticky
+                // header's height plus a small gap when scrollIntoView
+                // targets it with block: 'start'. Same pattern used by
+                // PlayerCard and the marketplace slot editors.
+                'overflow-hidden border transition-shadow scroll-mt-[calc(var(--header-height,4rem)+0.5rem)]',
                 clickable && 'cursor-pointer hover:brightness-110',
             )}
             onClick={handleClick}
@@ -505,84 +766,96 @@ function GameCard({
             }}
         >
             <div
-                className='flex items-center justify-between gap-2 border-b px-3 py-1'
+                className='grid items-stretch'
                 style={{
-                    borderColor: 'rgba(0, 168, 255, 0.35)',
-                    background: HEADER_GRADIENT,
+                    // Fixed-width center column, so every game card
+                    // shows the same middle panel width regardless of
+                    // the score, the start time or the day label.
+                    // The two team sides split the remaining space
+                    // evenly; minmax(0, 1fr) prevents long team names
+                    // from pushing a side wider than its sibling.
+                    gridTemplateColumns: 'minmax(0, 1fr) 110px minmax(0, 1fr)',
                 }}
             >
-                <div className='flex items-center gap-2'>
-                    {live && (
-                        <span className='relative inline-flex h-1.5 w-1.5'>
-                            <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
-                            <span className='relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500' />
-                        </span>
-                    )}
-
-                    <span
-                        className={cn(
-                            'text-[0.65rem] font-bold uppercase tracking-wider',
-                            live && 'text-emerald-400',
-                            final && 'text-muted-foreground',
-                            scheduled && 'text-[#00E5FF]',
-                        )}
-                        style={
-                            scheduled
-                                ? {
-                                    textShadow:
-                                        '0 0 8px rgba(0, 229, 255, 0.4)',
-                                }
-                                : live
-                                    ? {
-                                        textShadow:
-                                            '0 0 8px rgba(34, 197, 94, 0.5)',
-                                    }
-                                    : undefined
-                        }
-                    >
-                        {live
-                            ? `En direct${periodLabel(game) ? ` · ${periodLabel(game)}` : ''}`
-                            : final
-                                ? 'Terminé'
-                                : startTimeLabel(game.startTimeUtc)}
-                    </span>
-                </div>
-
-                <div className='flex items-center gap-1 text-muted-foreground'>
-                    {clickable && (
-                        <span className='text-[0.6rem] uppercase tracking-wider'>
-                            {expanded ? 'Réduire' : 'Détails'}
-                        </span>
-                    )}
-                    {clickable &&
-                        (expanded ? (
-                            <ChevronUp className='h-3.5 w-3.5' />
-                        ) : (
-                            <ChevronDown className='h-3.5 w-3.5' />
-                        ))}
-                </div>
-            </div>
-
-            <div className='py-[3px]'>
-                <TeamRow
+                {/* Away side. Owns its solid team-color background. */}
+                <TeamSide
                     abbreviation={game.awayAbbreviation}
-                    score={awayScore}
-                    isWinning={awayWinning}
-                    isScheduled={scheduled}
+                    placeName={game.awayPlaceName}
+                    commonName={game.awayCommonName}
+                    record={game.awayRecord}
+                    fillColor={awayFillColor}
+                    stripColor={awayStripColor}
+                    side='away'
+                    dimmed={awayDimmed}
                 />
-                <TeamRow
+
+                {/* Center column. Neutral navy with only the cyan
+                    ambience, so it visually separates the two solid
+                    team-colored sides. */}
+                <div
+                    className='relative flex min-w-0 flex-col items-center justify-center px-3 py-3 text-center'
+                    style={{
+                        backgroundColor: PANEL_BG,
+                        backgroundImage:
+                            'radial-gradient(ellipse at 50% 42%, rgba(0, 168, 255, 0.10) 0%, rgba(0, 168, 255, 0.03) 40%, transparent 75%)',
+                    }}
+                >
+                    <div className='text-[0.55rem] font-bold uppercase tracking-widest text-[#7DD3FC]'>
+                        {headerLabel}
+                    </div>
+
+                    <div className='mt-2 flex w-full items-center justify-center gap-2'>
+                        <span
+                            aria-hidden='true'
+                            className='h-px flex-1'
+                            style={{
+                                maxWidth: 24,
+                                background: awayStripColor,
+                            }}
+                        />
+                        <span className='whitespace-nowrap text-[0.7rem] font-bold uppercase tracking-wider text-white'>
+                            {dayLabel(game.gameDate, currentFantasyDate)}
+                        </span>
+                        <span
+                            aria-hidden='true'
+                            className='h-px flex-1'
+                            style={{
+                                maxWidth: 24,
+                                background: homeStripColor,
+                            }}
+                        />
+                    </div>
+
+                    <div className='mt-1 whitespace-nowrap text-[1.35rem] font-bold leading-tight text-white tabular-nums'>
+                        {bigDisplay}
+                    </div>
+
+                    {smallCaption && (
+                        <div className='text-[0.6rem] font-semibold uppercase tracking-widest text-[#7DD3FC]'>
+                            {smallCaption}
+                        </div>
+                    )}
+                </div>
+
+                {/* Home side. Owns its solid team-color background. */}
+                <TeamSide
                     abbreviation={game.homeAbbreviation}
-                    score={homeScore}
-                    isWinning={homeWinning}
-                    isScheduled={scheduled}
+                    placeName={game.homePlaceName}
+                    commonName={game.homeCommonName}
+                    record={game.homeRecord}
+                    fillColor={homeFillColor}
+                    stripColor={homeStripColor}
+                    side='home'
+                    dimmed={homeDimmed}
                 />
             </div>
 
-            {expanded && (
+            {expanded && expandedSide && (
                 <BoxscorePanel
                     boxscore={boxscore}
                     loading={boxscoreLoading}
                     ownershipByPlayerId={ownershipByPlayerId}
+                    side={expandedSide}
                 />
             )}
         </div>
@@ -620,6 +893,17 @@ export default function GameDayPage() {
     const [error, setError] = useState<string | null>(null);
 
     const [expandedGameId, setExpandedGameId] = useState<number | null>(null);
+
+    /**
+     * Which side of the expanded card the user is currently viewing.
+     * Null when nothing is expanded. Clicking the same side again
+     * collapses; clicking the other side of the same game swaps
+     * without re-fetching (the boxscore is already in memory).
+     */
+    const [expandedSide, setExpandedSide] = useState<
+        'away' | 'home' | null
+    >(null);
+
     const [boxscore, setBoxscore] = useState<NhlBoxscoreResponse | null>(null);
     const [boxscoreLoading, setBoxscoreLoading] = useState(false);
 
@@ -635,6 +919,21 @@ export default function GameDayPage() {
 
     const isMountedRef = useRef(true);
     const boxscoreRequestIdRef = useRef(0);
+
+    /**
+     * Game id the page is currently trying to scroll into view.
+     *
+     * Set on click; cleared by the scroll effect below after the
+     * scroll has actually been dispatched. The scroll itself is
+     * deferred until the boxscore panel has finished loading, so
+     * the browser measures the final expanded layout instead of
+     * the collapsed card or the short "Chargement..." placeholder.
+     * Without this, a game with a small expanded panel (or one
+     * whose fetch hasn't returned yet) ends up positioned lower
+     * than the top of the viewport, because the card grew after
+     * the scroll was dispatched.
+     */
+    const pendingScrollToGameIdRef = useRef<number | null>(null);
 
     // Same aura channel as the MonEquipePage team picker, so the
     // admin appearance slider drives both at once.
@@ -773,8 +1072,10 @@ export default function GameDayPage() {
 
     // --- Reset expanded boxscore when the date changes ----------------
     useEffect(() => {
+        pendingScrollToGameIdRef.current = null;
         boxscoreRequestIdRef.current += 1;
         setExpandedGameId(null);
+        setExpandedSide(null);
         setBoxscore(null);
         setBoxscoreLoading(false);
         setOwnershipByPlayerId(new Map());
@@ -942,18 +1243,47 @@ export default function GameDayPage() {
     ]);
 
     // --- Boxscore expand handler --------------------------------------
-    const handleToggleExpand = async (gameId: number) => {
-        if (expandedGameId === gameId) {
+    //
+    // This handler only updates state. The scroll to the expanded
+    // card is handled by a dedicated effect below, which waits for
+    // the boxscore panel to finish loading before it dispatches.
+    const handleToggleExpand = async (
+        gameId: number,
+        side: 'away' | 'home',
+    ) => {
+        // Same game, same side → collapse.
+        if (expandedGameId === gameId && expandedSide === side) {
+            pendingScrollToGameIdRef.current = null;
             boxscoreRequestIdRef.current += 1;
             setExpandedGameId(null);
+            setExpandedSide(null);
             setBoxscore(null);
             setOwnershipByPlayerId(new Map());
             return;
         }
 
+        // Same game, other side → swap sides without re-fetching.
+        // The boxscore and ownership map are already loaded for
+        // this game, so reuse them and just flip which team's
+        // panel is shown. The scroll effect below will fire on the
+        // expandedSide change.
+        if (
+            expandedGameId === gameId &&
+            expandedSide !== side &&
+            boxscore
+        ) {
+            pendingScrollToGameIdRef.current = gameId;
+            setExpandedSide(side);
+            return;
+        }
+
+        // Different game (or switching back to a game whose boxscore
+        // was cleared) → fetch fresh.
         const requestId = ++boxscoreRequestIdRef.current;
 
+        pendingScrollToGameIdRef.current = gameId;
         setExpandedGameId(gameId);
+        setExpandedSide(side);
         setBoxscore(null);
         setOwnershipByPlayerId(new Map());
         setBoxscoreLoading(true);
@@ -1000,6 +1330,56 @@ export default function GameDayPage() {
             }
         }
     };
+
+    // --- Scroll the expanded game card to the top of the viewport ---
+    //
+    // Fires whenever the expanded game, the expanded side, or the
+    // boxscore loading state changes.
+    //
+    // The scroll is delayed until boxscoreLoading is false, so the
+    // browser measures the fully-expanded panel instead of the
+    // collapsed card or the short "Chargement..." placeholder.
+    // Without that wait, a game with a small expanded panel (or one
+    // whose fetch hasn't returned yet) ends up positioned lower on
+    // screen than expected, because the card grew after the scroll
+    // was dispatched.
+    //
+    // Two rAFs: one to let React commit the new panel to the DOM,
+    // and one to let the browser paint it so scrollIntoView targets
+    // the final layout height. scroll-mt-[...] on the card pushes it
+    // down by the sticky header's height, so it lands below the
+    // header rather than behind it.
+    useEffect(() => {
+        const targetGameId = pendingScrollToGameIdRef.current;
+
+        // Nothing pending, or the user moved on to a different game.
+        if (targetGameId === null) return;
+
+        if (expandedGameId !== targetGameId) {
+            pendingScrollToGameIdRef.current = null;
+            return;
+        }
+
+        // Wait for the panel to finish loading so we measure the
+        // final layout height.
+        if (boxscoreLoading) return;
+
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                document
+                    .getElementById(`game-card-${targetGameId}`)
+                    ?.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start',
+                    });
+
+                // Clear only after the scroll has been dispatched,
+                // so the effect does not re-fire on unrelated
+                // re-renders.
+                pendingScrollToGameIdRef.current = null;
+            });
+        });
+    }, [expandedGameId, expandedSide, boxscoreLoading, boxscore]);
 
     // --- Games list ---------------------------------------------------
     //
@@ -1170,13 +1550,19 @@ export default function GameDayPage() {
             )}
 
             {games.length > 0 && (
-                <div className='grid grid-cols-1 gap-2 md:grid-cols-2'>
+                <div className='space-y-2'>
                     {games.map((game) => (
                         <GameCard
                             key={game.gameId}
                             game={game}
+                            currentFantasyDate={currentFantasyDate}
                             expanded={
                                 expandedGameId === game.gameId
+                            }
+                            expandedSide={
+                                expandedGameId === game.gameId
+                                    ? expandedSide
+                                    : null
                             }
                             boxscore={
                                 expandedGameId === game.gameId

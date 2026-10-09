@@ -113,12 +113,19 @@ namespace NhlFantasyLeague.api.Services
             _dbContext.RosterEntries.Add(entry);
 
             // Append a history row so the scoring recompute knows
-            // this player became Active/Bench/Prospect on this team
-            // as of today. Without this, any game he plays before the
-            // next trade/swap would be credited to nobody, because
-            // the recompute only credits teams whose last history
-            // row at game time is Active.
-            var effectiveAt = NormalizeEffectiveAt(DateTime.UtcNow);
+            // this player became Active/Bench/Prospect on this team.
+            //
+            // The effective instant is TOMORROW 00:00 UTC, not today.
+            // The recompute credits a game to a team iff the last
+            // history row with EffectiveAt <= game-day 00:00 UTC is
+            // Active. If we used today 00:00 UTC, a game that already
+            // started earlier the same ET day (a matinee) would be
+            // retroactively credited to the new team, even though
+            // the player was still on his old team when the game
+            // started. Tomorrow's day boundary is past every game
+            // that could possibly have already started, so the
+            // assignment can never retroactively steal a game.
+            var effectiveAt = NextUtcDayStart();
 
             AddHistoryRow(
                 player.Id,
@@ -203,6 +210,12 @@ namespace NhlFantasyLeague.api.Services
             // old team and every game from this instant belongs to the
             // new team. That is exactly the mid-month trade semantics
             // the league wants.
+            //
+            // The caller supplies EffectiveAt explicitly here: an
+            // admin-driven trade is expected to choose its own day
+            // boundary (typically the 1st of a month, per league
+            // rules). NormalizeEffectiveAt truncates to day precision
+            // without shifting the day.
             var effectiveAt = NormalizeEffectiveAt(request.EffectiveAt);
 
             var note = string.IsNullOrWhiteSpace(request.Note)
@@ -259,9 +272,14 @@ namespace NhlFantasyLeague.api.Services
             // Append a history row with the terminal Released status
             // BEFORE deleting the RosterEntry, so the recompute stops
             // crediting this player's future games to his old team.
-            // Without this, the last history row stays Active and the
-            // old team keeps earning his FP after the release.
-            var effectiveAt = NormalizeEffectiveAt(DateTime.UtcNow);
+            //
+            // Effective TOMORROW 00:00 UTC, not today. A release is
+            // not retroactive: any game the player plays today (or
+            // that already started today) still belongs to the team
+            // that held him when the puck dropped. Tomorrow's day
+            // boundary guarantees that, without needing to consult
+            // the NHL schedule.
+            var effectiveAt = NextUtcDayStart();
 
             AddHistoryRow(
                 entry.PlayerId,
@@ -313,7 +331,11 @@ namespace NhlFantasyLeague.api.Services
             // RosterEntry, so every player would otherwise keep his
             // last Active row and every old team would keep earning
             // FP for him after the reset.
-            var effectiveAt = NormalizeEffectiveAt(DateTime.UtcNow);
+            //
+            // Effective TOMORROW 00:00 UTC, same rule as the single
+            // release. Today's games still count for the old teams;
+            // tomorrow's do not.
+            var effectiveAt = NextUtcDayStart();
 
             foreach (var entry in entries)
             {
@@ -1937,6 +1959,12 @@ namespace NhlFantasyLeague.api.Services
         /// (00:00:00 UTC of the same calendar day) so the scoring
         /// recompute can compare it directly to PlayerGameLog.GameDate
         /// without needing a per-game start time.
+        ///
+        /// Used only by mutations that accept an explicit EffectiveAt
+        /// from the caller (trade, swap, set-status, history edit).
+        /// The implicit mutations (assign, release, release-all) use
+        /// NextUtcDayStart instead, so a mid-day action can never
+        /// retroactively re-attribute a game that already started.
         /// </summary>
         private static DateTime NormalizeEffectiveAt(DateTime raw)
         {
@@ -1952,6 +1980,43 @@ namespace NhlFantasyLeague.api.Services
             return new DateTime(
                 raw.Year, raw.Month, raw.Day,
                 0, 0, 0, DateTimeKind.Utc);
+        }
+
+        /// <summary>
+        /// Returns 00:00 UTC on the day AFTER the current UTC day.
+        ///
+        /// Used by roster mutations that have no caller-supplied
+        /// effective instant: assign, release, release-all.
+        ///
+        /// WHY TOMORROW, NOT TODAY.
+        ///
+        /// The scoring recompute credits a game to a fantasy team iff
+        /// the last RosterStatusHistory row for the player with
+        /// EffectiveAt &lt;= game-day 00:00 UTC has RosterStatus
+        /// Active. If these mutations wrote "today 00:00 UTC", a game
+        /// that started earlier the same ET day (a matinee, an early
+        /// West Coast game) would be retroactively re-attributed:
+        /// releasing a player at 14:00 ET would strip a game that
+        /// started at 13:00 ET, even though the player was still on
+        /// the team when the puck dropped.
+        ///
+        /// Tomorrow's day boundary sits past every game that could
+        /// possibly have already started, so the mutation can never
+        /// reach backwards. The cost is that the change is
+        /// effective from tomorrow, not from "now": today's games
+        /// still belong to the old state, which is exactly what the
+        /// league wants and is consistent with the day-granularity
+        /// used by PlayerGameLog.GameDate and the recompute.
+        ///
+        /// The trade / swap / set-status endpoints are NOT affected:
+        /// those accept an explicit EffectiveAt from the caller, who
+        /// chooses the day boundary deliberately (typically the 1st
+        /// of a month, per league rules).
+        /// </summary>
+        private static DateTime NextUtcDayStart()
+        {
+            var tomorrow = DateTime.UtcNow.Date.AddDays(1);
+            return DateTime.SpecifyKind(tomorrow, DateTimeKind.Utc);
         }
 
         private void AddHistoryRow(

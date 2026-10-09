@@ -36,30 +36,11 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// watching a late West Coast game that started at 22:30 ET
         /// is not told at 00:01 ET that the still-running game has
         /// become "hier".
-        ///
-        /// The frontend should:
-        ///   - "Aujourd'hui" = games whose ET start date equals this
-        ///   - "Hier"        = games whose ET start date equals this
-        ///                     minus one
-        ///
-        /// Not used for computing PlayerGameLog.GameDate or for job
-        /// scheduling. Those use the real ET calendar day.
         /// </summary>
         public DateOnly CurrentFantasyDate { get; set; }
 
         /// <summary>
         /// Real ET calendar date right now. No 3 AM cutoff applied.
-        ///
-        /// Included so the frontend can:
-        ///   - detect the 3 AM rollover for cache invalidation and
-        ///     forced refetch, and
-        ///   - render the Game Day date picker's "today" reliably,
-        ///     even in the 00:00-03:00 ET window when
-        ///     CurrentFantasyDate is still on the previous day.
-        ///
-        /// It is also useful for debugging: it lets you see at a
-        /// glance whether the current instant is inside the
-        /// fantasy-day cutoff window.
         /// </summary>
         public DateOnly CurrentEtDate { get; set; }
 
@@ -67,8 +48,14 @@ namespace NhlFantasyLeague.api.Models.Dtos
     }
 
     /// <summary>
-    /// One game as shown on the Game Day page's list. Contains just
-    /// enough to render a row.
+    /// One game as shown on the Game Day page's list.
+    ///
+    /// Carries the schedule-level summary (teams, score, state) plus
+    /// the identity and record fields that the banner-style game
+    /// card renders. All the extra fields are enriched at request
+    /// time in GamesController by joining the cached schedule
+    /// against NhlTeams + NhlTeamSeasonStats. The live cache itself
+    /// stays lean and untouched.
     /// </summary>
     public class GameDayGameSummary
     {
@@ -79,10 +66,40 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// <summary>FUT, PRE, LIVE, CRIT, FINAL.</summary>
         public string GameState { get; set; } = string.Empty;
 
+        // ---- Away side ----
+
         public string AwayAbbreviation { get; set; } = string.Empty;
-        public string HomeAbbreviation { get; set; } = string.Empty;
+        public string AwayFullName { get; set; } = string.Empty;
+        public string AwayCommonName { get; set; } = string.Empty;
+        public string AwayPlaceName { get; set; } = string.Empty;
+
+        /// <summary>Record in W-L-OTL format, e.g. "10-5-2". Null
+        /// when the team has no NhlTeamSeasonStat row yet (e.g.
+        /// before the first daily sync has run).</summary>
+        public string? AwayRecord { get; set; }
+
+        public string? AwayArenaName { get; set; }
+
         public int? AwayScore { get; set; }
+
+        // ---- Home side ----
+
+        public string HomeAbbreviation { get; set; } = string.Empty;
+        public string HomeFullName { get; set; } = string.Empty;
+        public string HomeCommonName { get; set; } = string.Empty;
+        public string HomePlaceName { get; set; } = string.Empty;
+
+        /// <summary>Record in W-L-OTL format, e.g. "12-4-1". Null
+        /// when the team has no NhlTeamSeasonStat row yet.</summary>
+        public string? HomeRecord { get; set; }
+
+        /// <summary>The arena the game is played in. Always the
+        /// home team's arena.</summary>
+        public string? HomeArenaName { get; set; }
+
         public int? HomeScore { get; set; }
+
+        // ---- Game state ----
 
         /// <summary>Null before the first period.</summary>
         public int? PeriodNumber { get; set; }

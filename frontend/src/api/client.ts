@@ -1131,10 +1131,25 @@ export interface GameDayGameSummary {
     startTimeUtc: string;
     /** FUT, PRE, LIVE, CRIT, FINAL. */
     gameState: string;
+
     awayAbbreviation: string;
-    homeAbbreviation: string;
+    awayFullName: string;
+    awayCommonName: string;
+    awayPlaceName: string;
+    /** W-L-OTL format, e.g. "10-5-2". Null before the first
+     *  daily team stats sync has run. */
+    awayRecord: string | null;
+    awayArenaName: string | null;
     awayScore: number | null;
+
+    homeAbbreviation: string;
+    homeFullName: string;
+    homeCommonName: string;
+    homePlaceName: string;
+    homeRecord: string | null;
+    homeArenaName: string | null;
     homeScore: number | null;
+
     periodNumber: number | null;
     periodType: string | null;
     hasBoxscore: boolean;

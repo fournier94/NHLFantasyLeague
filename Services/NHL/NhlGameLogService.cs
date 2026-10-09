@@ -1031,9 +1031,64 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// Idempotent: every run resets each team's aggregates to 0
         /// first.
         /// </summary>
+        /// <summary>
+        /// Public entry point. Wraps the actual recompute in a bounded
+        /// retry loop so a concurrency conflict with the live persist
+        /// (see FantasyTeamSeason.xmin concurrency token) does not
+        /// abandon the run.
+        ///
+        /// On each retry the ChangeTracker is cleared and the body of
+        /// RecomputeTeamSeasonTotalsInternalAsync runs from scratch:
+        /// it re-loads the season, the FantasyTeamSeason rows, the
+        /// history and the game logs. Because the recompute is
+        /// idempotent (it zeroes every aggregate before re-adding),
+        /// re-running it after the other writer has committed produces
+        /// the correct final numbers.
+        /// </summary>
         public async Task<RecomputeTeamTotalsResult> RecomputeTeamSeasonTotalsAsync(
             int seasonCode,
             CancellationToken ct = default)
+        {
+            const int maxAttempts = 3;
+
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    return await RecomputeTeamSeasonTotalsInternalAsync(
+                        seasonCode, ct);
+                }
+                catch (DbUpdateConcurrencyException ex) when (attempt < maxAttempts)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "FantasyTeamSeason concurrency conflict during " +
+                        "season recompute (attempt {Attempt}/{Max}). " +
+                        "Clearing the tracker and retrying with a fresh " +
+                        "snapshot.",
+                        attempt,
+                        maxAttempts);
+
+                    // Discard every tracked entity so the next attempt
+                    // re-reads from the DB (including the concurrent
+                    // writer's committed values and the new xmin
+                    // tokens).
+                    _dbContext.ChangeTracker.Clear();
+
+                    // Small courtesy delay: give the other transaction
+                    // a chance to finish before we hammer the same rows.
+                    await Task.Delay(250, ct);
+                }
+            }
+
+            throw new InvalidOperationException(
+                "Season recompute failed after all retry attempts " +
+                "due to recurring concurrency conflicts.");
+        }
+
+        private async Task<RecomputeTeamTotalsResult> RecomputeTeamSeasonTotalsInternalAsync(
+            int seasonCode,
+            CancellationToken ct)
         {
             var result = new RecomputeTeamTotalsResult
             {

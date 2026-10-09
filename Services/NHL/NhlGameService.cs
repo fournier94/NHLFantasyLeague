@@ -1,5 +1,4 @@
-﻿using System.Net.Http;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Models.Dtos;
@@ -847,12 +846,39 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ToList();
 
             // ----- Bulk read 2: NHL teams (abbrev -> NhlTeamId) -------
-            var teamsByAbbrev = await _dbContext.NhlTeams
+            //
+            // Duplicate-safe: if two rows in NhlTeams ever share an
+            // abbreviation (the UTA 59/68 incident from Oct 8 is the
+            // canonical example), a plain ToDictionaryAsync throws
+            // ArgumentException and kills the whole persist for the
+            // tick — every game's stats for every player, not just
+            // the affected team's. Grouping first and picking one
+            // row per abbreviation makes the persist immune to that
+            // class of data anomaly.
+            //
+            // Preference order within a group:
+            //   1. IsActive = true (the current row).
+            //   2. Lowest NhlTeamId, as a deterministic tiebreak.
+            //
+            // An inactive duplicate would only be picked if no active
+            // row exists for that abbreviation, which is itself a
+            // data-integrity problem worth logging, but is not a
+            // reason to fail the entire persist.
+            var teamRows = await _dbContext.NhlTeams
                 .AsNoTracking()
-                .ToDictionaryAsync(
+                .ToListAsync(ct);
+
+            var teamsByAbbrev = teamRows
+                .GroupBy(
                     t => t.Abbreviation,
-                    StringComparer.OrdinalIgnoreCase,
-                    ct);
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .OrderByDescending(t => t.IsActive)
+                        .ThenBy(t => t.NhlTeamId)
+                        .First(),
+                    StringComparer.OrdinalIgnoreCase);
 
             // ----- Bulk read 3: existing PlayerGameLogs ---------------
             var gameIds = snapshots.Select(s => s.GameId).ToList();
@@ -1064,7 +1090,45 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             // ----- Single write ----------------------------------------
-            await _dbContext.SaveChangesAsync(ct);
+            //
+            // FantasyTeamSeason now carries an xmin concurrency token
+            // (see AppDbContext). If the season recompute updated one of
+            // our rows between our load and our save, SaveChangesAsync
+            // throws DbUpdateConcurrencyException instead of silently
+            // overwriting the recompute's changes.
+            //
+            // We do NOT retry here. The exception propagates to the
+            // caller, which reruns the whole persist on its next tick
+            // with fresh deltas computed from the current DB state:
+            //
+            //   - Live refresh: caught by RunLiveRefreshAsync; the
+            //     next tick fires 60 seconds later.
+            //   - Post-game write / reconciliation: caught by their own
+            //     try/catch and rescheduled via ScheduleSettleRetry.
+            //
+            // Retrying inside this method would mean reloading every
+            // pending entity (new PlayerGameLog inserts, new
+            // PlayerSeasonStat inserts, plus the FantasyTeamSeason
+            // updates) which is more fragile than letting the caller
+            // redo the work from scratch.
+            try
+            {
+                await _dbContext.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                await _log.RecordAsync(
+                    source: "NhlGameService",
+                    category: "ConcurrencyConflict",
+                    severity: "Warning",
+                    message:
+                        "FantasyTeamSeason concurrency conflict during " +
+                        "persist. The caller will retry on the next tick.",
+                    details: ex.Message,
+                    ct: ct);
+
+                throw;
+            }
 
             return result;
         }

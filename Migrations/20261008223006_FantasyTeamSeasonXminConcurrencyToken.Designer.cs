@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NhlFantasyLeague.api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NhlFantasyLeague.api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261008223006_FantasyTeamSeasonXminConcurrencyToken")]
+    partial class FantasyTeamSeasonXminConcurrencyToken
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2082,7 +2085,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasOne("NhlFantasyLeague.api.Models.NhlTeam", "NhlTeam")
                         .WithMany()
                         .HasForeignKey("NhlTeamId")
-                        .HasPrincipalKey("NhlTeamId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

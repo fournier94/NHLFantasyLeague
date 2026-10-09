@@ -208,17 +208,63 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .ToDictionary(g => g.Key, g => g.ToList());
 
             var playersByPrevTeam = allPlayers
-                .Where(p => p.PreviousNhlTeamId != null)
-                .GroupBy(p => p.PreviousNhlTeamId!.Value)
-                .ToDictionary(g => g.Key, g => g.ToList());
+     .Where(p => p.PreviousNhlTeamId != null)
+     .GroupBy(p => p.PreviousNhlTeamId!.Value)
+     .ToDictionary(g => g.Key, g => g.ToList());
+
+            // --- Build the set of NHL team IDs that appeared in the payload
+            //
+            // Used by the clear loop below to decide which players are
+            // safe to clear. Without this, a partial ESPN payload
+            // (CDN edge case, upstream truncation, empty response with
+            // a 200 status) would silently wipe the injury flags of
+            // every team that did not make it into the response.
+            //
+            // The existing guards (>= 5 injuries total, >= 60% of the
+            // current DB count) catch the worst truncations but can
+            // let a 5-of-8-teams payload through. This team-set gate
+            // is airtight regardless of ratio.
+            var payloadTeamIds = new HashSet<int>();
+
+            foreach (var team in payload.Teams)
+            {
+                var resolvedId = ResolveTeamId(
+                    team, teamByAbbrev, teamByName);
+
+                if (resolvedId.HasValue)
+                {
+                    payloadTeamIds.Add(resolvedId.Value);
+                }
+            }
 
             // --- Clear current injury fields ------------------------------
+            //
+            // A player is cleared only when we actually have information
+            // about him:
+            //   - his NHL team is in the payload (ESPN reported on his
+            //     team, and he was not on that team's injured list), or
+            //   - he has no NHL team at all (free agent / unsigned, so
+            //     ESPN would never report him anyway).
+            //
+            // A player whose NHL team is missing from the payload keeps
+            // his current injury fields untouched. A partial payload is
+            // then harmless: only the players ESPN actually reported on
+            // are affected.
             var previouslyInjured = allPlayers
                 .Where(p => p.IsInjured)
                 .ToList();
 
             foreach (var p in allPlayers)
             {
+                if (p.NhlTeamId.HasValue &&
+                    !payloadTeamIds.Contains(p.NhlTeamId.Value))
+                {
+                    // ESPN did not report on this player's team in this
+                    // payload, so we have no information about his
+                    // injury status. Leave his fields alone.
+                    continue;
+                }
+
                 p.IsInjured = false;
                 p.InjuryStatus = null;
                 p.InjuryKind = InjuryKind.None;

@@ -74,40 +74,115 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private static readonly TimeSpan LiveWindowEndEt = new(2, 0, 0);
 
         // How often the live-refresh job fires during the live window.
-        // 60 seconds matches the NHL boxscore's natural freshness and
-        // gives users near-real-time goal updates without hammering the
-        // API. If the NHL starts returning 429s, back this off to 2 min.
+        //
+        // 75 seconds is a deliberate trade-off: a 14-game slate (near
+        // the NHL's daily maximum) finishes a full refresh in ~16 s
+        // typical, ~27 s worst case, leaving more than 2x headroom
+        // before the next tick. It also drops the live refresh's own
+        // API rate from ~0.25 req/s to ~0.19 req/s, which frees budget
+        // for the other jobs to run concurrently without tripping the
+        // NHL's 2 req/s ceiling.
+        //
+        // If runs ever take longer than 75 s, the _liveLock.WaitAsync(0)
+        // guarantees the next tick is skipped, not queued — you get a
+        // slower cadence, never two overlapping refreshes.
         private static readonly TimeSpan LiveRefreshInterval = TimeSpan.FromSeconds(60);
+
+        // -----------------------------------------------------------------
+        // Schedule rationale
+        //
+        // The jobs below are spaced using their WORST-CASE runtime, not
+        // their expected runtime. Worst case is roughly 2x expected for
+        // long jobs (weekly, non-NHL) and expected + 5 min for short
+        // jobs. Every gap below leaves at least 20 minutes of margin on
+        // a healthy day, and at least 10 minutes even if the preceding
+        // job runs twice as long as expected.
+        //
+        // The weekly deep refresh is the one exception: it gets a
+        // 2-hour buffer both before and after, because it is the
+        // longest single job of the day (~60 min expected, up to 90 min
+        // worst case) and a missed run means a full week of stale data
+        // for the twice-weekly players.
+        // -----------------------------------------------------------------
+
+        // Post-game write: 02:30 ET. Fires right after the last West
+        // Coast game ends. Worst case ~2 hours because of the settle-
+        // retry loop (15-min retries until the target date is fully
+        // settled). That is why the weekly deep refresh sits at 04:30,
+        // giving it a full 2-hour buffer against a late post-game.
         private static readonly TimeSpan PostGameHourEt = new(2, 30, 0);
-        private static readonly TimeSpan DailyRefreshHourEt = new(8, 0, 0);
-        private static readonly TimeSpan CareerStatsHourEt = new(8, 30, 0);
-        private static readonly TimeSpan WeeklyRefreshHourEt = new(3, 0, 0);
 
-        // Daily landing refresh for non-NHL players. Sits halfway
-        // between the 05:00 reconciliation and the 08:00 daily cleanup
-        // (1h 30m buffer on each side). The frequent refresh (every
-        // 30 min) can be blocked by this job without harm.
-        private static readonly TimeSpan NonNhlRefreshHourEt = new(6, 30, 0);
+        // Weekly deep refresh: Sunday + Wednesday at 04:30 ET.
+        // Longest single job of the day (~60 min expected, 90 min
+        // worst case). Chosen so it never overlaps the post-game write
+        // (2-hour buffer before) and never overlaps the 06:30
+        // reconciliation (2-hour buffer after).
+        private static readonly TimeSpan WeeklyRefreshHourEt = new(4, 30, 0);
 
-        // Season reconciliation: three times a day, re-fetch every
-        // player's current-season game logs and landing page, then
-        // rebuild the team totals. Used as a safety net for late
-        // stat corrections from the NHL.
-        private static readonly TimeSpan Reconciliation5AmHourEt = new(5, 0, 0);
-        private static readonly TimeSpan Reconciliation10AmHourEt = new(10, 0, 0);
+        // Season reconciliation #1: 06:30 ET. Safety net for the
+        // previous night's late West Coast games that settled after
+        // the post-game write ran. ~3 min expected, 10 min worst case.
+        private static readonly TimeSpan Reconciliation5AmHourEt = new(6, 30, 0);
+
+        // Daily team stats refresh: 07:00 ET. Identity + record +
+        // splits + ranks + percentages for every NHL team, written to
+        // NhlTeams and NhlTeamSeasonStats. ~20 s expected. Runs after
+        // the 06:30 reconciliation so the morning's GameDay cards
+        // reflect last night's games.
+        private static readonly TimeSpan NhlTeamStatsRefreshHourEt = new(7, 0, 0);
+
+        // Daily landing refresh for non-NHL players: 07:30 ET.
+        // Refreshes bio, career table, and season-only stat columns
+        // for every player whose RosterLocation is not NhlRoster.
+        // ~1000 players, ~30 min expected, up to 60 min worst case.
+        // The next job (career stats) starts at 09:15, leaving 45 min
+        // of margin even if the non-NHL refresh doubles in runtime.
+        private static readonly TimeSpan NonNhlRefreshHourEt = new(7, 30, 0);
+
+        // Career stats refresh: 09:15 ET. Refreshes landing data for
+        // every player who appeared in a game on the previous ET date.
+        // ~300 players, ~10 min expected, 20 min worst case. Placed
+        // after the non-NHL refresh so the two long morning jobs never
+        // collide.
+        private static readonly TimeSpan CareerStatsHourEt = new(9, 15, 0);
+
+        // Daily cleanup: 09:45 ET. Prunes SystemEventLogs (30-day
+        // retention, 5000-row cap). ~5 seconds.
+        private static readonly TimeSpan DailyRefreshHourEt = new(9, 45, 0);
+
+        // Season reconciliation #2: 10:30 ET. Runs 30 min before the
+        // live window opens at 11:00, so a slow run can never bleed
+        // into the live refresh's HTTP budget.
+        private static readonly TimeSpan Reconciliation10AmHourEt = new(10, 30, 0);
+
+        // The 15:00 ET reconciliation has been REMOVED from the
+        // schedule. Its job (catching late stat corrections from
+        // overnight games) is already covered by the 06:30 and 10:30
+        // reconciliations. Removing it eliminates the only scheduled
+        // HTTP producer inside the live window and stops it from
+        // competing with the live refresh for the NHL API's 2 req/sec
+        // budget.
+        //
+        // The constants below are kept for backward compatibility with
+        // RunSeasonReconciliationAsync, which still branches on the
+        // slotLabel string "15:00" and still calls
+        // HasAfternoonNhlGameAsync. Those branches will never fire
+        // because the tick no longer schedules the 15:00 slot. They
+        // can be safely removed in a future cleanup.
         private static readonly TimeSpan Reconciliation3PmHourEt = new(15, 0, 0);
-
-        // The 15:00 ET reconciliation is skipped when any NHL game
-        // starts before this cutoff. Afternoon matinees overlap with
-        // the run and the live refresh already keeps them current.
         private static readonly TimeSpan AfternoonGameCutoffEt = new(16, 0, 0);
 
-        // Frequent refresh: injuries + roster status. Runs every 30
-        // minutes around the clock. Injuries and callups can change
-        // any time, so we keep this cadence high. ~63 HTTP calls and
-        // ~90 seconds per run.
+        // Frequent refresh: injuries + roster status. Two cadences:
+        //   - off-peak (02:00-11:00 ET): every 30 min
+        //   - live window (11:00-02:00 ET): every 2 hours
+        // The live-window throttle keeps ~63 HTTP calls from stacking
+        // on top of the live refresh's boxscore fetches and pushing the
+        // combined request rate above the NHL's 2 req/sec ceiling.
         private static readonly TimeSpan FrequentRefreshInterval =
             TimeSpan.FromMinutes(30);
+
+        private static readonly TimeSpan FrequentRefreshLiveWindowInterval =
+            TimeSpan.FromHours(2);
 
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly LiveGameCache _cache;
@@ -136,6 +211,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private const string JobReconciliation5Am = "Season reconciliation (05:00 ET)";
         private const string JobReconciliation10Am = "Season reconciliation (10:00 ET)";
         private const string JobReconciliation3Pm = "Season reconciliation (15:00 ET)";
+        private const string JobNhlTeamStatsRefresh = "NHL team stats refresh";
         private const string JobNonNhlRefresh = "Non-NHL landing refresh";
 
         // ---- Shared state (in-memory, lost on restart) ----------------
@@ -520,7 +596,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
             // -----------------------------------------------------------------
 
             // ---- Priority 1: deep refresh (Sunday + Wednesday) --------
-            // Runs twice a week at 03:00 ET. The "completed today" flag
+            // Runs twice a week at 04:30 ET. The "completed today" flag
             // is keyed per ET calendar day, so the job simply fires
             // once on Sunday and once on Wednesday with no extra state.
             var isDeepRefreshDay =
@@ -545,7 +621,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     jobCt => RunPostGameWriteAsync(target, jobCt));
             }
 
-            // ---- Priority 3: season reconciliation (05:00 ET) ---------
+            // ---- Priority 3: season reconciliation (06:30 ET) ---------
             if (timeOfDayEt >= Reconciliation5AmHourEt &&
                 ShouldFireOncePerDayJob(JobReconciliation5Am, todayEt))
             {
@@ -555,7 +631,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                         "05:00", JobReconciliation5Am, todayEt, jobCt));
             }
 
-            // ---- Priority 4: season reconciliation (10:00 ET) ---------
+            // ---- Priority 4: season reconciliation (10:30 ET) ---------
             if (timeOfDayEt >= Reconciliation10AmHourEt &&
                 ShouldFireOncePerDayJob(JobReconciliation10Am, todayEt))
             {
@@ -566,20 +642,34 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
 
             // ---- Priority 5: season reconciliation (15:00 ET) ---------
-            if (timeOfDayEt >= Reconciliation3PmHourEt &&
-                ShouldFireOncePerDayJob(JobReconciliation3Pm, todayEt))
+            // REMOVED. The 15:00 reconciliation was the only scheduled
+            // HTTP producer inside the live window (11:00-02:00 ET) and
+            // competed with the live refresh for the NHL API's 2 req/sec
+            // budget. Its job — catching late stat corrections from
+            // overnight games — is already covered by the 06:30 and
+            // 10:30 reconciliations. Do not re-add a fired job here
+            // without first verifying it will not overlap the live
+            // refresh.
+
+            // ---- Priority 6: NHL team stats refresh (07:00 ET) --------
+            // Refreshes NhlTeams identity fields and upserts one
+            // NhlTeamSeasonStat row per team for the current season
+            // and regular-season game type. Runs once per day so the
+            // previous night's results are always reflected before
+            // anyone opens the GameDay page in the morning.
+            if (timeOfDayEt >= NhlTeamStatsRefreshHourEt &&
+                ShouldFireOncePerDayJob(JobNhlTeamStatsRefresh, todayEt))
             {
                 FireOncePerDayJob(
-                    JobReconciliation3Pm,
-                    jobCt => RunSeasonReconciliationAsync(
-                        "15:00", JobReconciliation3Pm, todayEt, jobCt));
+                    JobNhlTeamStatsRefresh,
+                    RunNhlTeamStatsRefreshAsync);
             }
 
-            // ---- Priority 6: non-NHL landing refresh (06:00 ET) -------
+            // ---- Priority 6: non-NHL landing refresh (07:30 ET) -------
             // Keeps the landing data (bio, career table, season-only
             // stat columns) fresh for players who are not currently
             // on an NHL roster. NHL-rostered players are already
-            // covered by the boxscore path and the 08:30 career
+            // covered by the boxscore path and the 09:15 career
             // refresh; this job exists only for the ones that path
             // does not reach.
             if (timeOfDayEt >= NonNhlRefreshHourEt &&
@@ -590,7 +680,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     RunNonNhlRefreshAsync);
             }
 
-            // ---- Priority 7: career stats refresh ---------------------
+            // ---- Priority 7: career stats refresh (09:15 ET) ----------
             if (timeOfDayEt >= CareerStatsHourEt &&
                 ShouldFireOncePerDayJob(JobCareerStatsRefresh, todayEt))
             {
@@ -601,7 +691,7 @@ namespace NhlFantasyLeague.api.Services.Jobs
                     jobCt => RunCareerStatsRefreshAsync(target, jobCt));
             }
 
-            // ---- Priority 7: daily cleanup ----------------------------
+            // ---- Priority 7: daily cleanup (09:45 ET) -----------------
             if (timeOfDayEt >= DailyRefreshHourEt &&
                 ShouldFireOncePerDayJob(JobDailyCleanup, todayEt))
             {
@@ -625,12 +715,21 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
 
             // ---- Priority 9: frequent refresh -------------------------
+            // Cadence depends on the live window. Off-peak (02:00-11:00
+            // ET) it fires every 30 minutes. During the live window
+            // (11:00-02:00 ET) it drops to every 2 hours, so the ~63
+            // HTTP calls it makes per run never stack on top of the
+            // live refresh's boxscore fetches.
             {
+                var frequentInterval = IsInsideLiveWindow(timeOfDayEt)
+                    ? FrequentRefreshLiveWindowInterval
+                    : FrequentRefreshInterval;
+
                 bool kick;
                 lock (_stateLock)
                 {
                     kick = nowUtc - _lastFrequentRefreshKickUtc
-                        >= FrequentRefreshInterval;
+                        >= frequentInterval;
 
                     if (kick) _lastFrequentRefreshKickUtc = nowUtc;
                 }
@@ -1762,6 +1861,99 @@ namespace NhlFantasyLeague.api.Services.Jobs
                 // player was refreshed. Schedule a retry so a
                 // persistent failure does not hot-loop the scheduler.
                 ScheduleSettleRetry(JobNonNhlRefresh);
+            }
+            finally
+            {
+                ReleaseHeavyLock();
+            }
+        }
+
+        /// <summary>
+        /// Runs the daily NHL team stats refresh: identity fields on
+        /// NhlTeams, plus one NhlTeamSeasonStat row per team for the
+        /// current season and regular-season game type.
+        ///
+        /// Three HTTP calls total (standings, team metadata + team
+        /// summary + franchises). Idempotent: safe to run twice on
+        /// the same day. Uses the heavy lock so it never races the
+        /// post-game write or the season reconciliation for DB
+        /// writes.
+        ///
+        /// Failure behaviour: a thrown exception leaves the
+        /// once-per-day flag unset and schedules a retry, so a
+        /// persistent failure (upstream 5xx, rate limit) does not
+        /// hot-loop the scheduler.
+        /// </summary>
+        public async Task RunNhlTeamStatsRefreshAsync(
+            CancellationToken ct = default)
+        {
+            if (!await TryAcquireHeavyLockAsync(
+                    JobNhlTeamStatsRefresh, ct))
+            {
+                _logger.LogInformation(
+                    "NHL team stats refresh skipped: another heavy " +
+                    "job is running.");
+                return;
+            }
+
+            var completedEtDate = DateOnly.FromDateTime(
+                TimeZoneHelper.ToEastern(DateTime.UtcNow));
+
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+
+                var teamService = scope.ServiceProvider
+                    .GetRequiredService<NhlTeamService>();
+
+                var seasonCode =
+                    NhlFantasyLeague.api.Constants.SeasonCodes.Current;
+
+                var result = await teamService
+                    .SyncTeamSeasonStatsAsync(
+                        seasonCode,
+                        gameTypeId: 2,
+                        ct: ct);
+
+                if (!result.Success)
+                {
+                    _logger.LogWarning(
+                        "NHL team stats refresh did not complete: {Error}",
+                        result.Error);
+
+                    // Partial or refused run: schedule a retry so a
+                    // transient upstream truncation is picked up on
+                    // the next tick.
+                    ScheduleSettleRetry(JobNhlTeamStatsRefresh);
+                    return;
+                }
+
+                _logger.LogInformation(
+                    "NHL team stats refresh done. " +
+                    "Standings={Standings}, Metadata={Metadata}, " +
+                    "Franchises={Franchises}, Summaries={Summaries}. " +
+                    "Teams created={TeamsCreated}, updated={TeamsUpdated}. " +
+                    "Stats created={StatsCreated}, updated={StatsUpdated}.",
+                    result.StandingsRows,
+                    result.MetadataRows,
+                    result.FranchiseRows,
+                    result.SummaryRows,
+                    result.TeamsCreated,
+                    result.TeamsUpdated,
+                    result.StatsCreated,
+                    result.StatsUpdated);
+
+                MarkJobCompleted(JobNhlTeamStatsRefresh, completedEtDate);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex, "NHL team stats refresh failed.");
+
+                // A thrown exception means we cannot know whether
+                // the sync completed. Schedule a retry so a
+                // persistent failure does not hot-loop the scheduler.
+                ScheduleSettleRetry(JobNhlTeamStatsRefresh);
             }
             finally
             {
