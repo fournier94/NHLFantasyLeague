@@ -1366,12 +1366,56 @@ export default function GameDayPage() {
 
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                document
-                    .getElementById(`game-card-${targetGameId}`)
-                    ?.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start',
-                    });
+                const el = document.getElementById(
+                    `game-card-${targetGameId}`,
+                );
+
+                if (!el) {
+                    pendingScrollToGameIdRef.current = null;
+                    return;
+                }
+
+                // Read the sticky-header height from the CSS
+                // variable published by Layout.tsx. Fall back to 64
+                // if it is not set (e.g. during the very first
+                // render), so the card never lands behind the header.
+                const headerHeight =
+                    parseFloat(
+                        getComputedStyle(document.documentElement)
+                            .getPropertyValue('--header-height'),
+                    ) || 64;
+
+                // Absolute Y of the card in the document.
+                const cardTop =
+                    window.scrollY + el.getBoundingClientRect().top;
+
+                // Where we'd like to be: card's top just below the
+                // header.
+                const desiredScroll = Math.max(
+                    0,
+                    cardTop - headerHeight - 8,
+                );
+
+                // The maximum scroll the document actually allows.
+                // This is where the min-h-dvh phantom height would
+                // otherwise let the browser over-scroll into blank
+                // space: clamp the target here and the card simply
+                // stops partway up instead of creating an empty tail.
+                const maxScroll = Math.max(
+                    0,
+                    document.documentElement.scrollHeight -
+                    window.innerHeight,
+                );
+
+                const targetScroll = Math.min(
+                    desiredScroll,
+                    maxScroll,
+                );
+
+                window.scrollTo({
+                    top: targetScroll,
+                    behavior: 'smooth',
+                });
 
                 // Clear only after the scroll has been dispatched,
                 // so the effect does not re-fire on unrelated
