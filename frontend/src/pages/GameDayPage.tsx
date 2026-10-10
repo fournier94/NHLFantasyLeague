@@ -26,6 +26,7 @@ import {
     isAuraOff,
 } from '@/lib/auraConfig';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/lib/AuthContext';
 
 // ---------------------------------------------------------------------
 // Constants
@@ -80,6 +81,26 @@ const FRAME_GLOW =
 // Base dark color for every panel. Kept as a single constant so the
 // whole card stays visually coherent.
 const PANEL_BG = '#050B18';
+
+// ---------------------------------------------------------------------
+// Game-card-only fill color overrides
+//
+// The two panels on a game card use NHL_TEAM_COLORS as their fill.
+// When a team is listed here, its panel uses this color instead.
+//
+// The rest of the app (PlayerCard backgrounds on Mon équipe, roster
+// row tints, admin previews) continues to read NHL_TEAM_COLORS, so
+// overrides here are GameDay-only.
+//
+// UTA is listed because its NHL_TEAM_COLORS entry is almost black
+// (#010101), which produces a panel indistinguishable from the dark
+// card background. #69B3E7 is Utah's official light blue and reads
+// as a clear, distinct panel against PANEL_BG.
+// ---------------------------------------------------------------------
+
+const GAMECARD_FILL_OVERRIDES: Record<string, string> = {
+    UTA: '#69B3E7',
+};
 
 // ---------------------------------------------------------------------
 // Date helpers
@@ -217,11 +238,26 @@ function SkaterRow({
     const hasPoints = skater.points > 0;
     const name = skater.name.default;
 
+    const { user } = useAuth();
+    const myTeamId = user?.fantasyTeamId ?? null;
+
+    const isMine =
+        ownership != null &&
+        myTeamId != null &&
+        ownership.fantasyTeamId === myTeamId;
+
+    const isOtherOwned = ownership != null && !isMine;
+
     return (
         <Link
             to={`/joueurs/${skater.playerId}`}
             onClick={(event) => event.stopPropagation()}
-            className='flex items-center justify-between gap-2 rounded px-1 py-0.5 text-xs transition-colors hover:bg-[#00A8FF]/10'
+            className={cn(
+                'flex items-center justify-between gap-2 rounded px-1 py-0.5 text-xs transition-colors',
+                isMine && 'bg-white/15 hover:bg-white/25',
+                isOtherOwned && 'bg-[#00A8FF]/10 hover:bg-[#00A8FF]/15',
+                !ownership && 'hover:bg-[#00A8FF]/10',
+            )}
         >
             <div className='flex min-w-0 flex-1 items-center gap-1.5'>
                 <span className='truncate text-foreground'>
@@ -234,7 +270,7 @@ function SkaterRow({
                 )}
             </div>
 
-            <div className='flex shrink-0 gap-2 tabular-nums'>
+            <div className='flex shrink-0 gap-1.5 tabular-nums'>
                 <span className='w-6 text-center text-muted-foreground'>
                     {skater.goals}
                 </span>
@@ -248,6 +284,12 @@ function SkaterRow({
                     )}
                 >
                     {skater.points}
+                </span>
+                <span className='w-8 text-center text-muted-foreground'>
+                    {skater.shots}
+                </span>
+                <span className='w-11 text-center text-white'>
+                    {skater.toi ?? '—'}
                 </span>
             </div>
         </Link>
@@ -264,6 +306,16 @@ function GoalieRow({
     const decision = goalieDecisionLabel(goalie.decision);
     const name = goalie.name.default;
 
+    const { user } = useAuth();
+    const myTeamId = user?.fantasyTeamId ?? null;
+
+    const isMine =
+        ownership != null &&
+        myTeamId != null &&
+        ownership.fantasyTeamId === myTeamId;
+
+    const isOtherOwned = ownership != null && !isMine;
+
     // A loss shows in red so it stands out from the wins and OT
     // losses at a glance. Wins and OT losses stay green.
     const decisionColor =
@@ -273,7 +325,12 @@ function GoalieRow({
         <Link
             to={`/joueurs/${goalie.playerId}`}
             onClick={(event) => event.stopPropagation()}
-            className='flex items-center justify-between gap-2 rounded px-1 py-0.5 text-xs transition-colors hover:bg-[#00A8FF]/10'
+            className={cn(
+                'flex items-center justify-between gap-2 rounded px-1 py-0.5 text-xs transition-colors',
+                isMine && 'bg-white/15 hover:bg-white/25',
+                isOtherOwned && 'bg-[#00A8FF]/10 hover:bg-[#00A8FF]/15',
+                !ownership && 'hover:bg-[#00A8FF]/10',
+            )}
         >
             <div className='flex min-w-0 flex-1 items-center gap-1.5'>
                 <span className='truncate text-foreground'>
@@ -342,7 +399,7 @@ function TeamBoxscore({
                 at the top of the team block. */}
             {goalies.length > 0 && (
                 <div>
-                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
+                    <div className='mb-1 flex items-center justify-between gap-2 px-1 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
                         <span className='flex-1'>Gardien</span>
                         <div className='flex shrink-0 gap-2'>
                             <span className='w-6 text-center'>Déc.</span>
@@ -364,12 +421,14 @@ function TeamBoxscore({
             {/* Skaters below the goalie. */}
             {skaters.length > 0 && (
                 <div>
-                    <div className='mb-1 flex items-center justify-between gap-2 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
+                    <div className='mb-1 flex items-center justify-between gap-2 px-1 text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
                         <span className='flex-1'>Joueur</span>
-                        <div className='flex shrink-0 gap-2'>
+                        <div className='flex shrink-0 gap-1.5'>
                             <span className='w-6 text-center'>B</span>
                             <span className='w-6 text-center'>A</span>
                             <span className='w-8 text-center'>PTS</span>
+                            <span className='w-8 text-center'>SOG</span>
+                            <span className='w-11 text-center text-white'>TOI</span>
                         </div>
                     </div>
                     {skaters.map((s) => (
@@ -500,6 +559,7 @@ function TeamSide({
     stripColor,
     side,
     dimmed = false,
+    active = false,
 }: {
     abbreviation: string;
     placeName: string;
@@ -509,6 +569,15 @@ function TeamSide({
     stripColor: string;
     side: 'away' | 'home';
     dimmed?: boolean;
+    /**
+     * True when the card is expanded and this side is the one the
+     * user is currently looking at. Adds a +15% saturation filter
+     * on top of the team-color fill so the active side reads as
+     * slightly richer than its sibling. Mutually exclusive with
+     * `dimmed` — when the card is expanded, exactly one side is
+     * active and the other is dimmed.
+     */
+    active?: boolean;
 }) {
     const isAway = side === 'away';
     const accentSide: 'left' | 'right' = isAway ? 'left' : 'right';
@@ -542,9 +611,17 @@ function TeamSide({
         'rgba(0, 0, 0, 0) 45%, ' +
         'rgba(0, 0, 0, 0.22) 100%)';
 
+    // Saturation boost applied to the currently-viewed side. +15%
+    // is deliberately subtle — enough to make the active team color
+    // read as slightly richer than its sibling, not enough to look
+    // like a different color. Suppressed when the side is dimmed,
+    // because dimming and boosting at the same time is contradictory.
+    const saturationFilter =
+        active && !dimmed ? 'saturate(1.15)' : undefined;
+
     return (
         <div
-            className='relative flex min-w-0 flex-col items-center justify-center overflow-hidden px-3 pt-2 pb-4 text-center'
+            className='relative flex min-w-0 flex-col items-center justify-center overflow-hidden px-3 pt-2 pb-4 text-center transition-[filter] duration-200'
             style={{
                 backgroundColor: PANEL_BG,
                 backgroundImage: [
@@ -555,6 +632,7 @@ function TeamSide({
                     // PANEL_BG and underneath the vertical shade.
                     `linear-gradient(${solidTeamColor}, ${solidTeamColor})`,
                 ].join(', '),
+                filter: saturationFilter,
             }}
         >
             {/* Contained-filament neon accent strip on the outer edge.
@@ -727,10 +805,18 @@ function GameCard({
     //
     // The divider lines under the center column also use stripColor
     // so they stay visible for dark teams.
-    const awayFillColor = getNhlTeamColor(game.awayAbbreviation);
+    //
+    // Fill colors check the GameDay-specific override first, then
+    // fall back to NHL_TEAM_COLORS. Strip colors are untouched by
+    // the override and always come from NHL_TEAM_AURA_COLORS.
+    const awayFillColor =
+        GAMECARD_FILL_OVERRIDES[game.awayAbbreviation.toUpperCase()] ??
+        getNhlTeamColor(game.awayAbbreviation);
     const awayStripColor = getNhlTeamAuraColor(game.awayAbbreviation);
 
-    const homeFillColor = getNhlTeamColor(game.homeAbbreviation);
+    const homeFillColor =
+        GAMECARD_FILL_OVERRIDES[game.homeAbbreviation.toUpperCase()] ??
+        getNhlTeamColor(game.homeAbbreviation);
     const homeStripColor = getNhlTeamAuraColor(game.homeAbbreviation);
 
     // When this card is expanded, whichever side is NOT currently
@@ -1019,6 +1105,7 @@ function GameCard({
                     stripColor={awayStripColor}
                     side='away'
                     dimmed={awayDimmed}
+                    active={expandedSide === 'away'}
                 />
 
                 {/* Center column. Neutral navy with only the cyan
@@ -1139,6 +1226,7 @@ function GameCard({
                     stripColor={homeStripColor}
                     side='home'
                     dimmed={homeDimmed}
+                    active={expandedSide === 'home'}
                 />
             </div>
 

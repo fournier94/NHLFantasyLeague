@@ -247,8 +247,23 @@ namespace NhlFantasyLeague.api.Models.Dtos
         [JsonPropertyName("powerPlayGoals")]
         public int PowerPlayGoals { get; set; }
 
+        /// <summary>
+        /// Shots on goal in this game.
+        ///
+        /// The NHL boxscore endpoint uses "sog" as the JSON key.
+        /// Our own API exposes it as "shots" so the frontend
+        /// interface stays unchanged.
+        ///
+        /// [JsonPropertyName] applies to BOTH directions, so we
+        /// use two properties: `Sog` for reading the NHL payload,
+        /// and a computed `Shots` that System.Text.Json serializes
+        /// under our own name via the default camelCase policy.
+        /// </summary>
+        [JsonPropertyName("sog")]
+        public int Sog { get; set; }
+
         [JsonPropertyName("shots")]
-        public int Shots { get; set; }
+        public int Shots => Sog;
 
         /// <summary>
         /// Time on ice in this game, formatted "MM:SS". Populated for
