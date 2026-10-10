@@ -2,16 +2,22 @@
 import { createPortal } from 'react-dom';
 import { useAuth } from '@/lib/AuthContext';
 import {
+    acceptTradeOfferResponse,
     cancelTradeOffer,
     createTradeOffer,
     getTeamRoster,
+    listReceivedResponses,
+    listSentResponses,
     listTradeOffers,
     markOffersSeen,
+    respondToTradeOffer,
     type CreateTradeOfferSlotRequest,
     type PlayerContractLine,
+    type RespondToTradeOfferPick,
     type RosterEntry,
     type TeamRoster,
     type TradeOffer,
+    type TradeOfferResponse,
     type TradeOfferSlot,
 } from '@/api/client';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
@@ -21,7 +27,7 @@ import { NeonTitle } from '@/components/ui/NeonTitle';
 // Types
 // ---------------------------------------------------------------------
 
-type View = 'add' | 'browse';
+type View = 'add' | 'browse' | 'received' | 'sent';
 
 type PositionGroup = 'F' | 'D' | 'G';
 
@@ -464,6 +470,22 @@ export default function MarketplacePage() {
     const [view, setView] = useState<View>('browse');
     const [browseRefreshTick, setBrowseRefreshTick] = useState(0);
 
+    /**
+     * Sub-view inside the "Offres" tab. Only relevant when
+     * `view === 'browse'`.
+     *
+     *   'view' → other managers' active offers (the default)
+     *   'mine' → only the offers the current user has published
+     *
+     * Deliberately separate from the "Offres envoyées" tab: that one
+     * lists responses the user has sent to other managers' offers.
+     * This sub-toggle lists the offers the user put up for others to
+     * respond to.
+     */
+    const [browseSubView, setBrowseSubView] = useState<'view' | 'mine'>(
+        'view',
+    );
+
     return (
         <section className='mt-1 space-y-4 sm:mt-2'>
             <div className='flex flex-col items-center gap-2'>
@@ -479,10 +501,14 @@ export default function MarketplacePage() {
                                 '0 0 8px rgba(0, 168, 255, 0.7), 0 0 18px rgba(0, 168, 255, 0.45), 0 0 30px rgba(0, 168, 255, 0.2), inset 0 0 8px rgba(0, 168, 255, 0.15)',
                         }}
                     >
+                        {/* Four tabs. Labels are responsive: a short
+                            version on narrow screens so the four fit
+                            in one row, the full label from sm up. */}
+
                         <button
                             type='button'
                             onClick={() => setView('browse')}
-                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-all duration-200 ${view === 'browse'
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'browse'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -497,13 +523,14 @@ export default function MarketplacePage() {
                                     : undefined
                             }
                         >
-                            Regarder les offres
+                            <span className='hidden sm:inline'>Regarder les offres</span>
+                            <span className='sm:hidden'>Offres</span>
                         </button>
 
                         <button
                             type='button'
                             onClick={() => setView('add')}
-                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-all duration-200 ${view === 'add'
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'add'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -518,13 +545,106 @@ export default function MarketplacePage() {
                                     : undefined
                             }
                         >
-                            Ajouter une offre
+                            <span className='hidden sm:inline'>Ajouter une offre</span>
+                            <span className='sm:hidden'>Ajouter</span>
+                        </button>
+
+                        <button
+                            type='button'
+                            onClick={() => setView('received')}
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'received'
+                                ? 'bg-white text-[#1D1B61]'
+                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
+                                }`}
+                            style={
+                                view === 'received'
+                                    ? {
+                                        boxShadow:
+                                            '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                        textShadow:
+                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                    }
+                                    : undefined
+                            }
+                        >
+                            <span className='hidden sm:inline'>Offres reçues</span>
+                            <span className='sm:hidden'>Reçues</span>
+                        </button>
+
+                        <button
+                            type='button'
+                            onClick={() => setView('sent')}
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'sent'
+                                ? 'bg-white text-[#1D1B61]'
+                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
+                                }`}
+                            style={
+                                view === 'sent'
+                                    ? {
+                                        boxShadow:
+                                            '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                        textShadow:
+                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                    }
+                                    : undefined
+                            }
+                        >
+                            <span className='hidden sm:inline'>Offres envoyées</span>
+                            <span className='sm:hidden'>Envoyées</span>
                         </button>
                     </div>
+
+                    {/*
+                     * Sub-toggle, only visible while browsing offers.
+                     *
+                     *   Voir les offres → other managers' active offers
+                     *   Vos offres      → only the offers I published
+                     *
+                     * Deliberately smaller and less glowy than the main
+                     * segmented button so it reads as a subordinate
+                     * filter, not as a fifth top-level tab.
+                     */}
+                    {view === 'browse' && (
+                        <div className='flex items-center justify-center'>
+                            <div
+                                className='flex items-center rounded-full border border-[#00A8FF]/60 bg-[#050A18]/80 p-0.5 text-xs'
+                                style={{
+                                    boxShadow:
+                                        '0 0 6px rgba(0, 168, 255, 0.35), inset 0 0 6px rgba(0, 168, 255, 0.08)',
+                                }}
+                            >
+                                <button
+                                    type='button'
+                                    onClick={() =>
+                                        setBrowseSubView('view')
+                                    }
+                                    className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'view'
+                                        ? 'bg-[#00A8FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#7DD3FC] hover:text-white'
+                                        }`}
+                                >
+                                    Voir les offres
+                                </button>
+
+                                <button
+                                    type='button'
+                                    onClick={() =>
+                                        setBrowseSubView('mine')
+                                    }
+                                    className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'mine'
+                                        ? 'bg-[#00A8FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#7DD3FC] hover:text-white'
+                                        }`}
+                                >
+                                    Vos offres
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {view === 'add' ? (
+            {view === 'add' && (
                 <AddOfferPanel
                     onPublished={() => {
                         setBrowseRefreshTick((t) => t + 1);
@@ -533,10 +653,25 @@ export default function MarketplacePage() {
                     teamId={user?.fantasyTeamId ?? null}
                     teamName={user?.fantasyTeamName ?? null}
                 />
-            ) : (
+            )}
+
+            {view === 'browse' && (
                 <BrowseOffersPanel
                     refreshTick={browseRefreshTick}
                     teamId={user?.fantasyTeamId ?? null}
+                    mode={browseSubView}
+                />
+            )}
+
+            {view === 'received' && (
+                <ReceivedOffersPanel
+                    refreshTick={browseRefreshTick}
+                />
+            )}
+
+            {view === 'sent' && (
+                <SentOffersPanel
+                    refreshTick={browseRefreshTick}
                 />
             )}
         </section>
@@ -1812,9 +1947,21 @@ function FilterForm({
 function BrowseOffersPanel({
     refreshTick,
     teamId,
+    mode,
 }: {
     refreshTick: number;
     teamId: number | null;
+    /**
+     * 'view' → other managers' active offers (the default).
+     * 'mine' → only the offers the current user published.
+     *
+     * The backend already knows how to exclude the user's own
+     * offers and the ones he has responded to; passing
+     * includeMine = (mode === 'mine') lets it do the heavy lifting,
+     * and the client-side filter then narrows the payload to just
+     * the side of the split we want.
+     */
+    mode: 'view' | 'mine';
 }) {
     const [offers, setOffers] = useState<TradeOffer[]>([]);
     const [loading, setLoading] = useState(true);
@@ -1828,14 +1975,24 @@ function BrowseOffersPanel({
         setError(null);
 
         try {
-            const data = await listTradeOffers(true);
-            setOffers(data);
+            // includeMine = true when we want our own offers back.
+            // In 'view' mode, includeMine = false already excludes
+            // our own offers AND the ones we've already responded to,
+            // which is what the browse tab has always shown.
+            const data = await listTradeOffers(mode === 'mine');
+
+            const filtered =
+                mode === 'mine'
+                    ? data.filter((o) => o.isMine)
+                    : data;
+
+            setOffers(filtered);
         } catch {
             setError('Impossible de charger les offres.');
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [mode]);
 
     useEffect(() => {
         void load();
@@ -1919,7 +2076,9 @@ function BrowseOffersPanel({
     if (offers.length === 0) {
         return (
             <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
-                Aucune offre active pour le moment.
+                {mode === 'mine'
+                    ? "Vous n'avez publié aucune offre active pour le moment."
+                    : 'Aucune offre active pour le moment.'}
             </p>
         );
     }
@@ -1940,6 +2099,245 @@ function BrowseOffersPanel({
 }
 
 // ---------------------------------------------------------------------
+// Received offers panel ("Offres reçues")
+// ---------------------------------------------------------------------
+
+/**
+ * Transforms a response into the shape OfferCard renders.
+ *
+ * The OfferCard layout is: left column = "Offre" (what the other
+ * side is offering), right column = "Demande" (position + filters).
+ * Either way the person who is offering players is the responder,
+ * so the slot mapping is the same in both panels:
+ *
+ *   offeringPlayer*  ← the responding player
+ *   positionGroup    ← from the original offer slot
+ *   demand*          ← from the original offer slot
+ *
+ * The only thing that changes between the two panels is which team
+ * name appears as the card header:
+ *
+ *   Received view → the responding team's name (who answered me)
+ *   Sent view     → the original offer creator's name (whom I answered)
+ *
+ * The caller passes the right name in `headerTeamName`.
+ */
+function responseToOfferShape(
+    response: TradeOfferResponse,
+    headerTeamName: string,
+): TradeOffer {
+    return {
+        id: response.id,
+        createdByFantasyTeamId: response.respondingFantasyTeamId,
+        createdByFantasyTeamName: headerTeamName,
+        createdAt: response.createdAt,
+        note: response.tradeOfferNote,
+        status: response.status,
+        isMine: false,
+        isNew: false,
+        slots: response.slots.map((s) => ({
+            slotIndex: s.slotIndex,
+            positionGroup: s.positionGroup,
+            offeringPlayerId: s.respondingPlayerId,
+            offeringPlayerFirstName: s.respondingPlayerFirstName,
+            offeringPlayerLastName: s.respondingPlayerLastName,
+            offeringPlayerNhlTeam: s.respondingPlayerNhlTeam,
+            offeringPlayerPosition: s.respondingPlayerPosition,
+            offeringPlayerCurrentContract:
+                s.respondingPlayerCurrentContract,
+            offeringPlayerSecondContract:
+                s.respondingPlayerSecondContract,
+            demandMinContractYears: s.demandMinContractYears,
+            demandMaxSalary: s.demandMaxSalary,
+            demandMaxAge: s.demandMaxAge,
+            demandMinPointsLastYear: s.demandMinPointsLastYear,
+        })),
+    };
+}
+
+/**
+ * "Offres reçues" panel. Lists every response to a still-active
+ * offer that the current user created. Empty state when there are
+ * none.
+ */
+function ReceivedOffersPanel({
+    refreshTick,
+}: {
+    refreshTick: number;
+}) {
+    const [responses, setResponses] = useState<TradeOfferResponse[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    /**
+     * Id of the response currently being accepted, or null. Used to
+     * disable the "Accepter" button on that card only.
+     */
+    const [acceptBusyId, setAcceptBusyId] = useState<number | null>(null);
+
+    const load = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+
+        try {
+            const data = await listReceivedResponses();
+            setResponses(data);
+        } catch {
+            setError('Impossible de charger les offres reçues.');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        void load();
+    }, [load, refreshTick]);
+
+    async function handleAccept(responseId: number) {
+        setAcceptBusyId(responseId);
+        setError(null);
+
+        try {
+            await acceptTradeOfferResponse(responseId);
+            await load();
+        } catch (err) {
+            setError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setAcceptBusyId(null);
+        }
+    }
+
+    if (loading) {
+        return (
+            <p className='text-center text-muted-foreground'>
+                Chargement...
+            </p>
+        );
+    }
+
+    if (error) {
+        return (
+            <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                {error}
+            </p>
+        );
+    }
+
+    if (responses.length === 0) {
+        return (
+            <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
+                Aucune offre reçue pour le moment.
+            </p>
+        );
+    }
+
+    return (
+        <div className='space-y-3'>
+            {responses.map((response) => (
+                <OfferCard
+                    key={response.id}
+                    offer={responseToOfferShape(
+                        response,
+                        response.respondingFantasyTeamName,
+                    )}
+                    busy={acceptBusyId === response.id}
+                    onCancel={() => {
+                        // Responses cannot be cancelled by the recipient.
+                        // No-op.
+                    }}
+                    userRoster={null}
+                    onAccept={() => void handleAccept(response.id)}
+                />
+            ))}
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------
+// Sent offers panel ("Offres envoyées")
+// ---------------------------------------------------------------------
+
+/**
+ * Lists every response the current user's team has sent to someone
+ * else's active offer. Same OfferCard as the received view, but the
+ * header shows the original offer creator's name so the user knows
+ * whom he answered.
+ */
+function SentOffersPanel({
+    refreshTick,
+}: {
+    refreshTick: number;
+}) {
+    const [responses, setResponses] = useState<TradeOfferResponse[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+
+        try {
+            const data = await listSentResponses();
+            setResponses(data);
+        } catch {
+            setError('Impossible de charger les offres envoyées.');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        void load();
+    }, [load, refreshTick]);
+
+    if (loading) {
+        return (
+            <p className='text-center text-muted-foreground'>
+                Chargement...
+            </p>
+        );
+    }
+
+    if (error) {
+        return (
+            <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                {error}
+            </p>
+        );
+    }
+
+    if (responses.length === 0) {
+        return (
+            <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
+                Aucune offre envoyée pour le moment.
+            </p>
+        );
+    }
+
+    return (
+        <div className='space-y-3'>
+            {responses.map((response) => (
+                <OfferCard
+                    key={response.id}
+                    offer={responseToOfferShape(
+                        response,
+                        response.tradeOfferCreatedByFantasyTeamName,
+                    )}
+                    busy={false}
+                    onCancel={() => {
+                        // Response cancellation is not implemented.
+                        // No-op.
+                    }}
+                    userRoster={null}
+                />
+            ))}
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------
 // Offer card
 // ---------------------------------------------------------------------
 
@@ -1950,6 +2348,7 @@ function OfferCard({
     userRoster,
     hideInternalCancel = false,
     onSlotClick,
+    onAccept,
 }: {
     offer: TradeOffer;
     busy: boolean;
@@ -1968,6 +2367,13 @@ function OfferCard({
      * that specific player.
      */
     onSlotClick?: (slotIndex: number) => void;
+    /**
+     * When provided AND the offer is still Pending, renders the
+     * "Accepter" button. Only the "Offres reçues" panel passes this.
+     * The "Offres envoyées" and "Regarder les offres" panels leave it
+     * undefined, so no button appears there.
+     */
+    onAccept?: () => void;
 }) {
     /**
      * True when the user can respond to this offer: not his own, and
@@ -2031,10 +2437,63 @@ function OfferCard({
         setPicks((current) => ({ ...current, [slotIndex]: playerId }));
     }
 
-    function handleOffer() {
-        // TODO: wire up to the actual trade proposal flow.
-        // For now, log the picks so the button has a visible effect.
-        console.log('Offer to respond with:', picks);
+    /**
+   * Local state for the "Offrir" submit. Resets when the card
+   * unmounts or the user picks a different offer.
+   */
+    const [respondBusy, setRespondBusy] = useState(false);
+    const [respondSuccess, setRespondSuccess] = useState<string | null>(null);
+    const [respondError, setRespondError] = useState<string | null>(null);
+
+    async function handleOffer() {
+        if (!canRespond || !allSlotsFilled || respondBusy) return;
+
+        // Convert the picks-by-slot map into the flat list the API
+        // expects. Every slot in the offer must be present, otherwise
+        // the backend rejects the whole response.
+        const picksArray: RespondToTradeOfferPick[] = [];
+
+        for (const slot of offer.slots) {
+            const pick = picks[slot.slotIndex];
+
+            if (pick == null) {
+                // Should not happen: the button is disabled unless
+                // every slot has a pick.
+                setRespondError(
+                    'Tous les emplacements doivent avoir un joueur.',
+                );
+                return;
+            }
+
+            picksArray.push({
+                slotIndex: slot.slotIndex,
+                respondingPlayerId: pick,
+            });
+        }
+
+        setRespondBusy(true);
+        setRespondError(null);
+        setRespondSuccess(null);
+
+        try {
+            const result = await respondToTradeOffer(offer.id, {
+                picks: picksArray,
+            });
+
+            if (result.success) {
+                setRespondSuccess(result.message);
+            } else {
+                setRespondError(result.message);
+            }
+        } catch (err) {
+            setRespondError(
+                err instanceof Error
+                    ? err.message
+                    : 'Erreur lors de l\'envoi.',
+            );
+        } finally {
+            setRespondBusy(false);
+        }
     }
 
     return (
@@ -2050,7 +2509,22 @@ function OfferCard({
                 ].join(', '),
             }}
         >
-            {offer.isNew && !offer.isMine && (
+            {/* Top-left badge. "Acceptée" wins over "Nouvelle offre"
+                if both conditions ever become true; in practice they
+                are mutually exclusive because response cards (which
+                carry the Accepted status) always set isNew = false. */}
+            {offer.status === 'Accepted' ? (
+                <span
+                    className='absolute left-3 top-3 z-20 rounded px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wider'
+                    style={{
+                        backgroundColor: '#22C55E',
+                        color: '#04160A',
+                        boxShadow: 'inset 0 0 0 1px #86EFAC',
+                    }}
+                >
+                    Acceptée
+                </span>
+            ) : offer.isNew && !offer.isMine ? (
                 <span
                     className='absolute left-3 top-3 z-20 rounded px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wider'
                     style={{
@@ -2061,7 +2535,7 @@ function OfferCard({
                 >
                     Nouvelle offre
                 </span>
-            )}
+            ) : null}
 
             <div
                 className='relative border-b px-3 py-2'
@@ -2392,23 +2866,52 @@ function OfferCard({
                     </p>
                 )}
 
-                {/*
-                 * Response button: only for offers the user does not
-                 * own. Greyed out until every slot has a matching pick,
-                 * green when ready.
-                 */}
+                {/* Response button: only for offers the user does not
+                    own. Greyed out until every slot has a matching pick,
+                    green when ready. Shows an inline success or error
+                    banner after the call. */}
                 {canRespond && (
-                    <div className='flex justify-center pt-1'>
+                    <div className='flex flex-col items-center gap-2 pt-1'>
+                        {respondSuccess && (
+                            <p className='w-full rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-center text-xs text-emerald-400'>
+                                {respondSuccess}
+                            </p>
+                        )}
+
+                        {respondError && (
+                            <p className='w-full rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-center text-xs text-destructive'>
+                                {respondError}
+                            </p>
+                        )}
+
                         <button
                             type='button'
-                            disabled={!allSlotsFilled}
+                            disabled={!allSlotsFilled || respondBusy}
                             onClick={handleOffer}
-                            className={`w-40 rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider transition-colors ${allSlotsFilled
+                            className={`w-40 rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider transition-colors ${allSlotsFilled && !respondBusy
                                 ? 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
                                 : 'cursor-not-allowed bg-zinc-800 text-zinc-500'
                                 }`}
                         >
-                            Offrir
+                            {respondBusy ? 'Envoi...' : 'Offrir'}
+                        </button>
+                    </div>
+                )}
+
+                {/* Accept button: only shown when the parent wires
+                    onAccept (i.e. the "Offres reçues" panel) AND the
+                    response is still Pending. Once accepted, the
+                    top-left green badge takes over and the button is
+                    gone. */}
+                {onAccept && offer.status === 'Pending' && (
+                    <div className='flex justify-center pt-1'>
+                        <button
+                            type='button'
+                            onClick={onAccept}
+                            disabled={busy}
+                            className='w-40 cursor-pointer rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold uppercase tracking-wider text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50'
+                        >
+                            {busy ? 'Envoi...' : 'Accepter'}
                         </button>
                     </div>
                 )}

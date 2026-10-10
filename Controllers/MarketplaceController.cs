@@ -118,5 +118,107 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(new { message = result.Message });
         }
+
+        /// <summary>
+        /// Responds to another manager's offer. Every slot of the
+        /// offer must be filled with a player from the responding
+        /// manager's roster, matching the slot's demanded position
+        /// group.
+        /// </summary>
+        [HttpPost("offers/{id:int}/respond")]
+        public async Task<IActionResult> RespondToOffer(
+            int id,
+            [FromBody] RespondToTradeOfferRequest request,
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var result = await _marketplaceService
+                .RespondToOfferAsync(uid, id, request, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(new { message = result.Message });
+            }
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Lists every Pending response to a still-active offer that
+        /// the calling user created. This is the "Offres reçues"
+        /// section.
+        /// </summary>
+        [HttpGet("responses")]
+        public async Task<IActionResult> ListReceivedResponses(
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var responses = await _marketplaceService
+                .ListReceivedResponsesAsync(uid, ct);
+
+            return Ok(responses);
+        }
+
+        /// <summary>
+        /// Lists every Pending response the calling user's team has
+        /// sent to someone else's still-active offer. This is the
+        /// "Offres envoyées" section.
+        /// </summary>
+        [HttpGet("responses/sent")]
+        public async Task<IActionResult> ListSentResponses(
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var responses = await _marketplaceService
+                .ListSentResponsesAsync(uid, ct);
+
+            return Ok(responses);
+        }
+
+        /// <summary>
+        /// Accepts a Pending response to one of the calling user's own
+        /// offers. Pure state change: no player is moved, no roster
+        /// row is touched.
+        /// </summary>
+        [HttpPost("responses/{id:int}/accept")]
+        public async Task<IActionResult> AcceptResponse(
+            int id,
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var result = await _marketplaceService
+                .AcceptOfferResponseAsync(uid, id, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(new { message = result.Message });
+            }
+
+            return Ok(new { message = result.Message });
+        }
     }
 }

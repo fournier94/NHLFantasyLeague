@@ -7,13 +7,8 @@ namespace NhlFantasyLeague.api.Services
 {
     /// <summary>
     /// Business logic for the Marketplace page: create, list and
-    /// cancel trade offers between fantasy managers.
-    ///
-    /// The list endpoint no longer records "seen" markers. That
-    /// happens on a separate, delayed call from the frontend so that
-    /// a first mount of the browse tab shows the green "Nouvelle
-    /// offre" badges without immediately flipping them off on a
-    /// StrictMode double-mount.
+    /// cancel trade offers, plus respond to another manager's offer
+    /// and read the responses the current manager has received.
     /// </summary>
     public class MarketplaceService
     {
@@ -25,7 +20,7 @@ namespace NhlFantasyLeague.api.Services
         }
 
         // -----------------------------------------------------------------
-        // Create
+        // Create offer
         // -----------------------------------------------------------------
 
         public async Task<TradeOfferActionResultDto> CreateOfferAsync(
@@ -64,8 +59,7 @@ namespace NhlFantasyLeague.api.Services
 
             if (request.Slots.Count > 10)
             {
-                return Failure(
-                    "Maximum 10 joueurs par offre.");
+                return Failure("Maximum 10 joueurs par offre.");
             }
 
             var rosterEntries = await _dbContext.RosterEntries
@@ -160,9 +154,6 @@ namespace NhlFantasyLeague.api.Services
             _dbContext.TradeOffers.Add(offer);
             await _dbContext.SaveChangesAsync(ct);
 
-            // Mark the offer as already seen by its own creator. He
-            // obviously knows about it, so he should never see a
-            // "Nouvelle offre" badge on his own offer.
             _dbContext.TradeOfferViews.Add(new TradeOfferView
             {
                 UserId = userId,
@@ -188,14 +179,15 @@ namespace NhlFantasyLeague.api.Services
         }
 
         // -----------------------------------------------------------------
-        // List
+        // List offers
         // -----------------------------------------------------------------
 
         /// <summary>
-        /// Lists active offers visible to the given user. Read-only:
-        /// does NOT record anything. The frontend is responsible for
-        /// calling MarkOffersSeenAsync after the list has been shown
-        /// for a short grace period.
+        /// Lists active offers visible to the given user. Read-only.
+        ///
+        /// When includeMine is false, offers the user has already
+        /// responded to (with a Pending response) are also excluded, so
+        /// he cannot respond twice to the same offer.
         /// </summary>
         public async Task<List<TradeOfferDto>> ListActiveOffersAsync(
             int userId,
@@ -223,11 +215,26 @@ namespace NhlFantasyLeague.api.Services
                 offers = offers
                     .Where(o => o.CreatedByFantasyTeamId != userTeamId.Value)
                     .ToList();
+
+                var respondedOfferIds = (await _dbContext.TradeOfferResponses
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.RespondingFantasyTeamId == userTeamId.Value &&
+                        r.Status == TradeOfferResponseStatus.Pending)
+                    .Select(r => r.TradeOfferId)
+                    .ToListAsync(ct))
+                    .ToHashSet();
+
+                if (respondedOfferIds.Count > 0)
+                {
+                    offers = offers
+                        .Where(o => !respondedOfferIds.Contains(o.Id))
+                        .ToList();
+                }
             }
 
             var offerIds = offers.Select(o => o.Id).ToList();
 
-            // Which of these offers has this user already seen?
             var seenIds = (await _dbContext.TradeOfferViews
                 .AsNoTracking()
                 .Where(v =>
@@ -260,10 +267,6 @@ namespace NhlFantasyLeague.api.Services
         // Mark seen
         // -----------------------------------------------------------------
 
-        /// <summary>
-        /// Marks the given active offers as seen by the given user.
-        /// Idempotent: an already-existing view row is left untouched.
-        /// </summary>
         public async Task<int> MarkOffersSeenAsync(
             int userId,
             IReadOnlyCollection<int> rawOfferIds,
@@ -274,9 +277,6 @@ namespace NhlFantasyLeague.api.Services
                 return 0;
             }
 
-            // Only keep ids that actually refer to existing active
-            // offers. Filters out typos, stale ids, and any attempt
-            // to grow the TradeOfferViews table with unused rows.
             var validOfferIds = await _dbContext.TradeOffers
                 .AsNoTracking()
                 .Where(o =>
@@ -327,7 +327,7 @@ namespace NhlFantasyLeague.api.Services
         }
 
         // -----------------------------------------------------------------
-        // Cancel
+        // Cancel offer
         // -----------------------------------------------------------------
 
         public async Task<TradeOfferActionResultDto> CancelOfferAsync(
@@ -374,6 +374,386 @@ namespace NhlFantasyLeague.api.Services
         }
 
         // -----------------------------------------------------------------
+        // Respond to offer
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Records a response to someone else's offer. The responding
+        /// manager must supply one player for every slot of the offer,
+        /// each belonging to his own roster and matching the slot's
+        /// demanded position group.
+        ///
+        /// Rejects:
+        ///   - responding to your own offer,
+        ///   - responding to a non-active offer,
+        ///   - responding twice to the same offer while a Pending
+        ///     response already exists,
+        ///   - a slot without a matching pick,
+        ///   - a pick that is not on the responder's roster,
+        ///   - a pick whose position group does not match the slot.
+        /// </summary>
+        public async Task<TradeOfferActionResultDto> RespondToOfferAsync(
+            int userId,
+            int offerId,
+            RespondToTradeOfferRequest request,
+            CancellationToken ct = default)
+        {
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return Failure(
+                    "Vous devez avoir une equipe pour repondre a une offre.");
+            }
+
+            var respondingTeamId = user.FantasyTeamId.Value;
+
+            var offer = await _dbContext.TradeOffers
+                .AsNoTracking()
+                .Include(o => o.Slots)
+                .FirstOrDefaultAsync(o => o.Id == offerId, ct);
+
+            if (offer == null)
+            {
+                return Failure("Offre introuvable.");
+            }
+
+            if (offer.Status != TradeOfferStatus.Active)
+            {
+                return Failure("Cette offre n'est plus active.");
+            }
+
+            if (offer.CreatedByFantasyTeamId == respondingTeamId)
+            {
+                return Failure(
+                    "Vous ne pouvez pas repondre a votre propre offre.");
+            }
+
+            var alreadyResponded = await _dbContext.TradeOfferResponses
+                .AnyAsync(r =>
+                    r.TradeOfferId == offerId &&
+                    r.RespondingFantasyTeamId == respondingTeamId &&
+                    r.Status == TradeOfferResponseStatus.Pending,
+                    ct);
+
+            if (alreadyResponded)
+            {
+                return Failure(
+                    "Vous avez deja repondu a cette offre.");
+            }
+
+            if (request.Picks == null || request.Picks.Count == 0)
+            {
+                return Failure(
+                    "Fournissez un joueur pour chaque demande de l'offre.");
+            }
+
+            var offerSlotsByIndex = offer.Slots
+                .ToDictionary(s => s.SlotIndex);
+
+            if (request.Picks.Count != offerSlotsByIndex.Count)
+            {
+                return Failure(
+                    $"Vous devez offrir un joueur pour chacun des " +
+                    $"{offerSlotsByIndex.Count} emplacement(s).");
+            }
+
+            var season = await _dbContext.Seasons
+                .AsNoTracking()
+                .OrderByDescending(s => s.StartDate)
+                .FirstOrDefaultAsync(ct);
+
+            if (season == null)
+            {
+                return Failure(
+                    "Aucune saison active. Lancez POST /api/League/setup.");
+            }
+
+            var respondingRoster = await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Include(e => e.Player)
+                .Where(e =>
+                    e.FantasyTeamId == respondingTeamId &&
+                    e.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            var rosterByPlayerId = respondingRoster
+                .GroupBy(e => e.PlayerId)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var seenRespondingPlayerIds = new HashSet<int>();
+
+            foreach (var pick in request.Picks)
+            {
+                if (!offerSlotsByIndex.TryGetValue(
+                        pick.SlotIndex, out var offerSlot))
+                {
+                    return Failure(
+                        $"L'emplacement {pick.SlotIndex + 1} n'existe " +
+                        "pas dans cette offre.");
+                }
+
+                if (!seenRespondingPlayerIds.Add(pick.RespondingPlayerId))
+                {
+                    return Failure(
+                        "Le meme joueur ne peut pas repondre a deux " +
+                        "emplacements de la meme offre.");
+                }
+
+                if (!rosterByPlayerId.TryGetValue(
+                        pick.RespondingPlayerId, out var entry))
+                {
+                    return Failure(
+                        $"Le joueur {pick.RespondingPlayerId} " +
+                        "n'est pas sur votre equipe pour la saison en cours.");
+                }
+
+                var playerGroup = PositionGroupHelper.Classify(
+                    entry.Player?.Position);
+
+                if (!PositionMatchesGroup(
+                        playerGroup, offerSlot.PositionGroup))
+                {
+                    return Failure(
+                        $"La position du joueur " +
+                        $"{entry.Player?.FirstName} {entry.Player?.LastName} " +
+                        $"ne correspond pas a l'emplacement " +
+                        $"{pick.SlotIndex + 1} de l'offre.");
+                }
+            }
+
+            var response = new TradeOfferResponse
+            {
+                TradeOfferId = offerId,
+                RespondingFantasyTeamId = respondingTeamId,
+                CreatedAt = DateTime.UtcNow,
+                Status = TradeOfferResponseStatus.Pending,
+            };
+
+            foreach (var pick in request.Picks)
+            {
+                response.Slots.Add(new TradeOfferResponseSlot
+                {
+                    SlotIndex = pick.SlotIndex,
+                    RespondingPlayerId = pick.RespondingPlayerId,
+                });
+            }
+
+            _dbContext.TradeOfferResponses.Add(response);
+            await _dbContext.SaveChangesAsync(ct);
+
+            var dto = await LoadResponseDtoAsync(response.Id, ct);
+
+            return new TradeOfferActionResultDto
+            {
+                Success = true,
+                Message = "Offre envoyee.",
+                Response = dto,
+            };
+        }
+
+        // -----------------------------------------------------------------
+        // List received responses
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Lists every Pending response to a still-active offer that the
+        /// given user created. This is exactly what the "Offres reçues"
+        /// section shows.
+        /// </summary>
+        public async Task<List<TradeOfferResponseDto>> ListReceivedResponsesAsync(
+            int userId,
+            CancellationToken ct = default)
+        {
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return new List<TradeOfferResponseDto>();
+            }
+
+            var myTeamId = user.FantasyTeamId.Value;
+
+            var responses = await _dbContext.TradeOfferResponses
+     .AsNoTracking()
+     .Include(r => r.TradeOffer)
+         .ThenInclude(o => o.Slots)
+     .Include(r => r.TradeOffer)
+         .ThenInclude(o => o.CreatedByFantasyTeam)
+     .Include(r => r.RespondingFantasyTeam)
+     .Include(r => r.Slots)
+         .ThenInclude(s => s.RespondingPlayer)
+             .ThenInclude(p => p!.NhlTeam)
+                // Include Accepted responses so the creator still sees
+                // them in his inbox after accepting. Rejected / Cancelled
+                // responses stay hidden.
+                .Where(r =>
+                    r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
+                    r.TradeOffer.Status == TradeOfferStatus.Active &&
+                    (r.Status == TradeOfferResponseStatus.Pending ||
+                     r.Status == TradeOfferResponseStatus.Accepted))
+                .OrderByDescending(r => r.CreatedAt)
+                .ToListAsync(ct);
+
+            if (responses.Count == 0)
+            {
+                return new List<TradeOfferResponseDto>();
+            }
+
+            var respondingPlayerIds = responses
+                .SelectMany(r => r.Slots)
+                .Select(s => s.RespondingPlayerId)
+                .Distinct()
+                .ToList();
+
+            var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
+                respondingPlayerIds, ct);
+
+            return responses
+     .Select(r => ToResponseDto(r, contractsByPlayerId))
+     .ToList();
+        }
+
+        // -----------------------------------------------------------------
+        // List sent responses
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Lists every Pending response the calling user's team has
+        /// submitted to someone else's still-active offer. This is
+        /// exactly what the "Offres envoyées" section shows.
+        ///
+        /// Same shape as ListReceivedResponsesAsync — the DTO carries
+        /// both teams' names, so the frontend can pick which name goes
+        /// in the header based on the section it is rendering.
+        /// </summary>
+        public async Task<List<TradeOfferResponseDto>> ListSentResponsesAsync(
+            int userId,
+            CancellationToken ct = default)
+        {
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return new List<TradeOfferResponseDto>();
+            }
+
+            var myTeamId = user.FantasyTeamId.Value;
+
+            var responses = await _dbContext.TradeOfferResponses
+                .AsNoTracking()
+                .Include(r => r.TradeOffer)
+                    .ThenInclude(o => o.Slots)
+                .Include(r => r.TradeOffer)
+                    .ThenInclude(o => o.CreatedByFantasyTeam)
+                .Include(r => r.RespondingFantasyTeam)
+                .Include(r => r.Slots)
+                    .ThenInclude(s => s.RespondingPlayer)
+                        .ThenInclude(p => p!.NhlTeam)
+                // Include Accepted responses so the sender still sees
+                // them in his outbox after the other manager accepts.
+                .Where(r =>
+                    r.RespondingFantasyTeamId == myTeamId &&
+                    r.TradeOffer.Status == TradeOfferStatus.Active &&
+                    (r.Status == TradeOfferResponseStatus.Pending ||
+                     r.Status == TradeOfferResponseStatus.Accepted))
+                .OrderByDescending(r => r.CreatedAt)
+                .ToListAsync(ct);
+
+            if (responses.Count == 0)
+            {
+                return new List<TradeOfferResponseDto>();
+            }
+
+            var respondingPlayerIds = responses
+                .SelectMany(r => r.Slots)
+                .Select(s => s.RespondingPlayerId)
+                .Distinct()
+                .ToList();
+
+            var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
+                respondingPlayerIds, ct);
+
+            return responses
+     .Select(r => ToResponseDto(r, contractsByPlayerId))
+     .ToList();
+        }
+
+        // -----------------------------------------------------------------
+        // Accept a response
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Flips a Pending response to Accepted. Only the offer creator
+        /// can accept a response to his own offer. No player movement,
+        /// no roster write, no recompute: this is purely a state change
+        /// on the response, so both sides see the "ACCEPTÉE" badge on
+        /// their respective panels.
+        ///
+        /// Other Pending responses on the same offer are left alone.
+        /// The creator decides whether to accept more than one; the
+        /// system does not auto-reject them.
+        /// </summary>
+        public async Task<TradeOfferActionResultDto> AcceptOfferResponseAsync(
+            int userId,
+            int responseId,
+            CancellationToken ct = default)
+        {
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return Failure(
+                    "Vous devez avoir une equipe pour accepter une reponse.");
+            }
+
+            var response = await _dbContext.TradeOfferResponses
+                .Include(r => r.TradeOffer)
+                .FirstOrDefaultAsync(r => r.Id == responseId, ct);
+
+            if (response == null)
+            {
+                return Failure("Reponse introuvable.");
+            }
+
+            if (response.TradeOffer.CreatedByFantasyTeamId !=
+                user.FantasyTeamId.Value)
+            {
+                return Failure(
+                    "Vous ne pouvez accepter que les reponses a vos " +
+                    "propres offres.");
+            }
+
+            if (response.Status != TradeOfferResponseStatus.Pending)
+            {
+                return Failure(
+                    "Cette reponse a deja ete traitee.");
+            }
+
+            if (response.TradeOffer.Status != TradeOfferStatus.Active)
+            {
+                return Failure("Cette offre n'est plus active.");
+            }
+
+            response.Status = TradeOfferResponseStatus.Accepted;
+            await _dbContext.SaveChangesAsync(ct);
+
+            return new TradeOfferActionResultDto
+            {
+                Success = true,
+                Message = "Reponse acceptee.",
+            };
+        }
+
+        // -----------------------------------------------------------------
         // Helpers
         // -----------------------------------------------------------------
 
@@ -415,6 +795,38 @@ namespace NhlFantasyLeague.api.Services
                 seenOfferIds: null);
         }
 
+        private async Task<TradeOfferResponseDto?> LoadResponseDtoAsync(
+            int responseId,
+            CancellationToken ct)
+        {
+            var response = await _dbContext.TradeOfferResponses
+      .AsNoTracking()
+      .Include(r => r.TradeOffer)
+          .ThenInclude(o => o.Slots)
+      .Include(r => r.TradeOffer)
+          .ThenInclude(o => o.CreatedByFantasyTeam)
+      .Include(r => r.RespondingFantasyTeam)
+      .Include(r => r.Slots)
+          .ThenInclude(s => s.RespondingPlayer)
+              .ThenInclude(p => p!.NhlTeam)
+      .FirstOrDefaultAsync(r => r.Id == responseId, ct);
+
+            if (response == null)
+            {
+                return null;
+            }
+
+            var respondingPlayerIds = response.Slots
+                .Select(s => s.RespondingPlayerId)
+                .Distinct()
+                .ToList();
+
+            var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
+                respondingPlayerIds, ct);
+
+            return ToResponseDto(response, contractsByPlayerId);
+        }
+
         private async Task<Dictionary<int, List<PlayerContract>>>
             LoadContractsByPlayerIdAsync(
                 IReadOnlyCollection<int> playerIds,
@@ -439,19 +851,28 @@ namespace NhlFantasyLeague.api.Services
             PlayerContractLineDto? Current,
             PlayerContractLineDto? Second)
             ResolveContractLinesForSlot(
-                TradeOfferSlot slot,
+                int? offeringPlayerId,
                 IReadOnlyDictionary<int, List<PlayerContract>>?
                     contractsByPlayerId)
         {
-            if (!slot.OfferingPlayerId.HasValue ||
+            if (!offeringPlayerId.HasValue ||
                 contractsByPlayerId == null ||
                 !contractsByPlayerId.TryGetValue(
-                    slot.OfferingPlayerId.Value, out var contracts) ||
+                    offeringPlayerId.Value, out var contracts) ||
                 contracts.Count == 0)
             {
                 return (null, null);
             }
 
+            return ResolveContractLines(contracts);
+        }
+
+        private static (
+            PlayerContractLineDto? Current,
+            PlayerContractLineDto? Second)
+            ResolveContractLines(
+                IReadOnlyList<PlayerContract> contracts)
+        {
             var seasonCode =
                 NhlFantasyLeague.api.Constants.SeasonCodes.Current;
 
@@ -530,7 +951,8 @@ namespace NhlFantasyLeague.api.Services
                     {
                         var (current, second) =
                             ResolveContractLinesForSlot(
-                                s, contractsByPlayerId);
+                                s.OfferingPlayerId,
+                                contractsByPlayerId);
 
                         return new TradeOfferSlotDto
                         {
@@ -553,6 +975,72 @@ namespace NhlFantasyLeague.api.Services
                             DemandMaxAge = s.DemandMaxAge,
                             DemandMinPointsLastYear =
                                 s.DemandMinPointsLastYear,
+                        };
+                    })
+                    .ToList(),
+            };
+        }
+
+        private static TradeOfferResponseDto ToResponseDto(
+            TradeOfferResponse response,
+            IReadOnlyDictionary<int, List<PlayerContract>> contractsByPlayerId)
+        {
+            // Index the original offer's slots by SlotIndex so each
+            // response slot can pull its demanded position group and
+            // filters without re-querying.
+            var offerSlotsByIndex = response.TradeOffer.Slots
+                .ToDictionary(s => s.SlotIndex);
+
+            return new TradeOfferResponseDto
+            {
+                Id = response.Id,
+                TradeOfferId = response.TradeOfferId,
+                TradeOfferNote = response.TradeOffer.Note,
+                TradeOfferCreatedByFantasyTeamId =
+         response.TradeOffer.CreatedByFantasyTeamId,
+                TradeOfferCreatedByFantasyTeamName =
+         response.TradeOffer.CreatedByFantasyTeam?.Name
+             ?? string.Empty,
+                RespondingFantasyTeamId = response.RespondingFantasyTeamId,
+                RespondingFantasyTeamName =
+         response.RespondingFantasyTeam?.Name ?? string.Empty,
+                CreatedAt = response.CreatedAt,
+                Status = response.Status.ToString(),
+                Slots = response.Slots
+                    .OrderBy(s => s.SlotIndex)
+                    .Select(s =>
+                    {
+                        offerSlotsByIndex.TryGetValue(
+                            s.SlotIndex,
+                            out var offerSlot);
+
+                        var (current, second) =
+                            ResolveContractLinesForSlot(
+                                s.RespondingPlayerId,
+                                contractsByPlayerId);
+
+                        return new TradeOfferResponseSlotDto
+                        {
+                            SlotIndex = s.SlotIndex,
+                            PositionGroup =
+                                offerSlot?.PositionGroup ?? string.Empty,
+                            RespondingPlayerId = s.RespondingPlayerId,
+                            RespondingPlayerFirstName =
+                                s.RespondingPlayer?.FirstName,
+                            RespondingPlayerLastName =
+                                s.RespondingPlayer?.LastName,
+                            RespondingPlayerNhlTeam =
+                                s.RespondingPlayer?.NhlTeam?.Abbreviation,
+                            RespondingPlayerPosition =
+                                s.RespondingPlayer?.Position,
+                            RespondingPlayerCurrentContract = current,
+                            RespondingPlayerSecondContract = second,
+                            DemandMinContractYears =
+                                offerSlot?.DemandMinContractYears,
+                            DemandMaxSalary = offerSlot?.DemandMaxSalary,
+                            DemandMaxAge = offerSlot?.DemandMaxAge,
+                            DemandMinPointsLastYear =
+                                offerSlot?.DemandMinPointsLastYear,
                         };
                     })
                     .ToList(),

@@ -1549,6 +1549,121 @@ export function cancelTradeOffer(
 }
 
 // ---------------------------------------------------------------------
+// Marketplace responses ("Offres reçues")
+// ---------------------------------------------------------------------
+
+/** One pick in a response: for the offer slot at slotIndex, the
+ *  responding team offers respondingPlayerId. */
+export interface RespondToTradeOfferPick {
+    slotIndex: number;
+    respondingPlayerId: number;
+}
+
+export interface RespondToTradeOfferRequest {
+    picks: RespondToTradeOfferPick[];
+}
+
+/** One slot of a received response. Mirrors TradeOfferResponseSlotDto. */
+export interface TradeOfferResponseSlot {
+    slotIndex: number;
+    positionGroup: string;
+
+    respondingPlayerId: number;
+    respondingPlayerFirstName: string | null;
+    respondingPlayerLastName: string | null;
+    respondingPlayerNhlTeam: string | null;
+    respondingPlayerPosition: string | null;
+    respondingPlayerCurrentContract: PlayerContractLine | null;
+    respondingPlayerSecondContract: PlayerContractLine | null;
+
+    demandMinContractYears: number | null;
+    demandMaxSalary: number | null;
+    demandMaxAge: number | null;
+    demandMinPointsLastYear: number | null;
+}
+
+/**
+ * A response to a TradeOffer. Serves both sides of the exchange:
+ *
+ *   - "Offres reçues"   uses `respondingFantasyTeamName` as the
+ *                       card header (who answered my offer).
+ *   - "Offres envoyées" uses `tradeOfferCreatedByFantasyTeamName`
+ *                       as the card header (whose offer I answered).
+ */
+export interface TradeOfferResponse {
+    id: number;
+    tradeOfferId: number;
+    tradeOfferNote: string | null;
+    tradeOfferCreatedByFantasyTeamId: number;
+    tradeOfferCreatedByFantasyTeamName: string;
+    respondingFantasyTeamId: number;
+    respondingFantasyTeamName: string;
+    createdAt: string;
+    status: string;
+    slots: TradeOfferResponseSlot[];
+}
+
+/** Result of POST /Marketplace/offers/{id}/respond. */
+export interface RespondToTradeOfferResult {
+    success: boolean;
+    message: string;
+    response: TradeOfferResponse | null;
+}
+
+/**
+ * Records a response to another manager's offer. Every slot of the
+ * offer must be filled with a player from the calling user's roster
+ * matching the slot's demanded position group.
+ */
+export function respondToTradeOffer(
+    offerId: number,
+    request: RespondToTradeOfferRequest,
+): Promise<RespondToTradeOfferResult> {
+    return apiPost<RespondToTradeOfferResult>(
+        `/Marketplace/offers/${offerId}/respond`,
+        request,
+    );
+}
+
+/**
+ * Lists every Pending response to a still-active offer that the
+ * calling user created. This is the "Offres reçues" section.
+ */
+export function listReceivedResponses(): Promise<TradeOfferResponse[]> {
+    return apiGet<TradeOfferResponse[]>(
+        '/Marketplace/responses',
+        { cacheTtlMs: 0 },
+    );
+}
+
+/**
+ * Lists every Pending response the calling user's team has sent to
+ * someone else's still-active offer. This is the "Offres envoyées"
+ * section.
+ */
+export function listSentResponses(): Promise<TradeOfferResponse[]> {
+    return apiGet<TradeOfferResponse[]>(
+        '/Marketplace/responses/sent',
+        { cacheTtlMs: 0 },
+    );
+}
+
+/**
+ * Accepts a Pending response to one of the calling user's own offers.
+ * Pure state change on the response row: no player movement, no
+ * roster mutation. Both sides of the exchange see the "ACCEPTÉE"
+ * badge on their panel.
+ */
+export function acceptTradeOfferResponse(
+    responseId: number,
+): Promise<{ message: string }> {
+    return apiPost<{ message: string }>(
+        `/Marketplace/responses/${responseId}/accept`,
+        {},
+    );
+}
+
+// ---------------------------------------------------------------------
 // Background jobs (commissioner only)
 // ---------------------------------------------------------------------
 

@@ -91,6 +91,20 @@ namespace NhlFantasyLeague.api.Data
         /// </summary>
         public DbSet<TradeOfferView> TradeOfferViews { get; set; }
 
+        /// <summary>
+        /// Marketplace responses. One row per (TradeOffer, RespondingTeam)
+        /// while the offer is active. What the offer creator sees in
+        /// his "Offres reçues" section.
+        /// </summary>
+        public DbSet<TradeOfferResponse> TradeOfferResponses { get; set; }
+
+        /// <summary>
+        /// One row per pick inside a TradeOfferResponse: the player
+        /// the responding team is offering for the corresponding slot
+        /// of the original offer.
+        /// </summary>
+        public DbSet<TradeOfferResponseSlot> TradeOfferResponseSlots { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Identity first, so all its table config is registered.
@@ -625,6 +639,53 @@ namespace NhlFantasyLeague.api.Data
             // is idempotent even if a user double-taps the browse tab.
             modelBuilder.Entity<TradeOfferView>()
                 .HasIndex(v => new { v.UserId, v.TradeOfferId })
+                .IsUnique();
+
+            // -----------------------------------------------------------------
+            // TradeOfferResponse / TradeOfferResponseSlot
+            // -----------------------------------------------------------------
+
+            // Cascade from the offer: if an offer is ever hard-deleted,
+            // its responses go with it.
+            modelBuilder.Entity<TradeOfferResponse>()
+                .HasOne(r => r.TradeOffer)
+                .WithMany()
+                .HasForeignKey(r => r.TradeOfferId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict on the responding team: a FantasyTeam that has
+            // ever answered an offer cannot be silently deleted.
+            modelBuilder.Entity<TradeOfferResponse>()
+                .HasOne(r => r.RespondingFantasyTeam)
+                .WithMany()
+                .HasForeignKey(r => r.RespondingFantasyTeamId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Status is stored as its string name so the DB is readable.
+            modelBuilder.Entity<TradeOfferResponse>()
+                .Property(r => r.Status)
+                .HasConversion<string>();
+
+            // Lookup: "every response on offer X" is the hot path for
+            // the "Offres reçues" list. One index is enough.
+            modelBuilder.Entity<TradeOfferResponse>()
+                .HasIndex(r => new { r.TradeOfferId, r.CreatedAt });
+
+            modelBuilder.Entity<TradeOfferResponseSlot>()
+                .HasOne(s => s.TradeOfferResponse)
+                .WithMany(r => r.Slots)
+                .HasForeignKey(s => s.TradeOfferResponseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferResponseSlot>()
+                .HasOne(s => s.RespondingPlayer)
+                .WithMany()
+                .HasForeignKey(s => s.RespondingPlayerId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // One pick per slot per response.
+            modelBuilder.Entity<TradeOfferResponseSlot>()
+                .HasIndex(s => new { s.TradeOfferResponseId, s.SlotIndex })
                 .IsUnique();
         }
     }
