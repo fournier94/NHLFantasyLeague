@@ -117,5 +117,22 @@ namespace NhlFantasyLeague.api.Models
         /// RosterLocation. Null when never set.
         /// </summary>
         public DateTime? RosterLocationUpdatedAt { get; set; }
+
+        /// <summary>
+        /// When true, the CapFreeze contract sync skips this player
+        /// entirely: no page fetch, no contract write, no status
+        /// change, no name/slug update. The commissioner manages
+        /// this player's contracts by hand through the "Contrats
+        /// manuels" admin section.
+        ///
+        /// Used for the two Elias Pettersson records, whose CapFreeze
+        /// pages cannot be reliably told apart by the matching
+        /// service. Any player whose contract is not derivable from
+        /// CapFreeze can be flagged this way.
+        ///
+        /// Removing the flag re-enables the sync on the next run,
+        /// which will overwrite the manual values.
+        /// </summary>
+        public bool SkipCapFreezeSync { get; set; }
     }
 }

@@ -1655,8 +1655,8 @@ namespace NhlFantasyLeague.api.Services
         }
 
         private static decimal ResolveSalaryFromContracts(
-            IReadOnlyList<PlayerContract> contracts,
-            int nhlSeasonCode)
+          IReadOnlyList<PlayerContract> contracts,
+          int nhlSeasonCode)
         {
             if (contracts.Count == 0)
             {
@@ -1665,25 +1665,25 @@ namespace NhlFantasyLeague.api.Services
 
             if (contracts.Count == 1)
             {
-                return contracts[0].Salary;
+                return contracts[0].EffectiveSalary;
             }
 
             var coveringContract = contracts.FirstOrDefault(c =>
                 c.StartSeason <= nhlSeasonCode &&
                 c.EndSeason >= nhlSeasonCode);
 
-            return coveringContract?.Salary ?? 0m;
+            return coveringContract?.EffectiveSalary ?? 0m;
         }
 
         private static decimal ResolveSalaryForSeason(
-            IReadOnlyList<PlayerContract> contracts,
-            int nhlSeasonCode)
+      IReadOnlyList<PlayerContract> contracts,
+      int nhlSeasonCode)
         {
             var covering = contracts.FirstOrDefault(c =>
                 c.StartSeason <= nhlSeasonCode &&
                 c.EndSeason >= nhlSeasonCode);
 
-            return covering?.Salary ?? 0m;
+            return covering?.EffectiveSalary ?? 0m;
         }
 
         private static int AddSeasons(int seasonCode, int count)
@@ -1735,8 +1735,8 @@ namespace NhlFantasyLeague.api.Services
         }
 
         private static PlayerContractLineDto ToContractLineDto(
-            PlayerContract contract,
-            int nhlSeasonCode)
+      PlayerContract contract,
+      int nhlSeasonCode)
         {
             var seasonYear = nhlSeasonCode / 10000;
             var startYear = contract.StartSeason / 10000;
@@ -1747,7 +1747,7 @@ namespace NhlFantasyLeague.api.Services
 
             return new PlayerContractLineDto
             {
-                Salary = contract.Salary,
+                Salary = contract.EffectiveSalary,
                 YearsRemaining = yearsRemaining,
                 StartSeason = contract.StartSeason,
                 EndSeason = contract.EndSeason

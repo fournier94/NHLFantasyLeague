@@ -19,10 +19,6 @@ namespace NhlFantasyLeague.api.Services
             _dbContext = dbContext;
         }
 
-        // -----------------------------------------------------------------
-        // Create offer
-        // -----------------------------------------------------------------
-
         public async Task<TradeOfferActionResultDto> CreateOfferAsync(
             int userId,
             CreateTradeOfferRequest request,
@@ -178,17 +174,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        // -----------------------------------------------------------------
-        // List offers
-        // -----------------------------------------------------------------
-
-        /// <summary>
-        /// Lists active offers visible to the given user. Read-only.
-        ///
-        /// When includeMine is false, offers the user has already
-        /// responded to (with a Pending response) are also excluded, so
-        /// he cannot respond twice to the same offer.
-        /// </summary>
         public async Task<List<TradeOfferDto>> ListActiveOffersAsync(
             int userId,
             bool includeMine,
@@ -263,10 +248,6 @@ namespace NhlFantasyLeague.api.Services
                 .ToList();
         }
 
-        // -----------------------------------------------------------------
-        // Mark seen
-        // -----------------------------------------------------------------
-
         public async Task<int> MarkOffersSeenAsync(
             int userId,
             IReadOnlyCollection<int> rawOfferIds,
@@ -326,10 +307,6 @@ namespace NhlFantasyLeague.api.Services
             return inserted;
         }
 
-        // -----------------------------------------------------------------
-        // Cancel offer
-        // -----------------------------------------------------------------
-
         public async Task<TradeOfferActionResultDto> CancelOfferAsync(
             int userId,
             int offerId,
@@ -373,25 +350,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        // -----------------------------------------------------------------
-        // Respond to offer
-        // -----------------------------------------------------------------
-
-        /// <summary>
-        /// Records a response to someone else's offer. The responding
-        /// manager must supply one player for every slot of the offer,
-        /// each belonging to his own roster and matching the slot's
-        /// demanded position group.
-        ///
-        /// Rejects:
-        ///   - responding to your own offer,
-        ///   - responding to a non-active offer,
-        ///   - responding twice to the same offer while a Pending
-        ///     response already exists,
-        ///   - a slot without a matching pick,
-        ///   - a pick that is not on the responder's roster,
-        ///   - a pick whose position group does not match the slot.
-        /// </summary>
         public async Task<TradeOfferActionResultDto> RespondToOfferAsync(
             int userId,
             int offerId,
@@ -554,15 +512,6 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
-        // -----------------------------------------------------------------
-        // List received responses
-        // -----------------------------------------------------------------
-
-        /// <summary>
-        /// Lists every Pending response to a still-active offer that the
-        /// given user created. This is exactly what the "Offres reçues"
-        /// section shows.
-        /// </summary>
         public async Task<List<TradeOfferResponseDto>> ListReceivedResponsesAsync(
             int userId,
             CancellationToken ct = default)
@@ -588,9 +537,6 @@ namespace NhlFantasyLeague.api.Services
      .Include(r => r.Slots)
          .ThenInclude(s => s.RespondingPlayer)
              .ThenInclude(p => p!.NhlTeam)
-                // Include Accepted responses so the creator still sees
-                // them in his inbox after accepting. Rejected / Cancelled
-                // responses stay hidden.
                 .Where(r =>
                     r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
                     r.TradeOffer.Status == TradeOfferStatus.Active &&
@@ -618,19 +564,6 @@ namespace NhlFantasyLeague.api.Services
      .ToList();
         }
 
-        // -----------------------------------------------------------------
-        // List sent responses
-        // -----------------------------------------------------------------
-
-        /// <summary>
-        /// Lists every Pending response the calling user's team has
-        /// submitted to someone else's still-active offer. This is
-        /// exactly what the "Offres envoyées" section shows.
-        ///
-        /// Same shape as ListReceivedResponsesAsync — the DTO carries
-        /// both teams' names, so the frontend can pick which name goes
-        /// in the header based on the section it is rendering.
-        /// </summary>
         public async Task<List<TradeOfferResponseDto>> ListSentResponsesAsync(
             int userId,
             CancellationToken ct = default)
@@ -656,8 +589,6 @@ namespace NhlFantasyLeague.api.Services
                 .Include(r => r.Slots)
                     .ThenInclude(s => s.RespondingPlayer)
                         .ThenInclude(p => p!.NhlTeam)
-                // Include Accepted responses so the sender still sees
-                // them in his outbox after the other manager accepts.
                 .Where(r =>
                     r.RespondingFantasyTeamId == myTeamId &&
                     r.TradeOffer.Status == TradeOfferStatus.Active &&
@@ -685,21 +616,6 @@ namespace NhlFantasyLeague.api.Services
      .ToList();
         }
 
-        // -----------------------------------------------------------------
-        // Accept a response
-        // -----------------------------------------------------------------
-
-        /// <summary>
-        /// Flips a Pending response to Accepted. Only the offer creator
-        /// can accept a response to his own offer. No player movement,
-        /// no roster write, no recompute: this is purely a state change
-        /// on the response, so both sides see the "ACCEPTÉE" badge on
-        /// their respective panels.
-        ///
-        /// Other Pending responses on the same offer are left alone.
-        /// The creator decides whether to accept more than one; the
-        /// system does not auto-reject them.
-        /// </summary>
         public async Task<TradeOfferActionResultDto> AcceptOfferResponseAsync(
             int userId,
             int responseId,
@@ -752,10 +668,6 @@ namespace NhlFantasyLeague.api.Services
                 Message = "Reponse acceptee.",
             };
         }
-
-        // -----------------------------------------------------------------
-        // Helpers
-        // -----------------------------------------------------------------
 
         private async Task<TradeOfferDto?> LoadOfferDtoAsync(
             int offerId,
@@ -918,7 +830,7 @@ namespace NhlFantasyLeague.api.Services
 
             return new PlayerContractLineDto
             {
-                Salary = contract.Salary,
+                Salary = contract.EffectiveSalary,
                 YearsRemaining = yearsRemaining,
                 StartSeason = contract.StartSeason,
                 EndSeason = contract.EndSeason,
@@ -985,9 +897,6 @@ namespace NhlFantasyLeague.api.Services
             TradeOfferResponse response,
             IReadOnlyDictionary<int, List<PlayerContract>> contractsByPlayerId)
         {
-            // Index the original offer's slots by SlotIndex so each
-            // response slot can pull its demanded position group and
-            // filters without re-querying.
             var offerSlotsByIndex = response.TradeOffer.Slots
                 .ToDictionary(s => s.SlotIndex);
 

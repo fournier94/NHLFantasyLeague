@@ -126,6 +126,33 @@ const INSTALL_BUTTON_STYLE: React.CSSProperties = {
 };
 
 /**
+ * Search popup frame, matching the marketplace offer card exactly
+ * (MarketplacePage.tsx OFFER_* constants):
+ *
+ *   - thick cyan tube      : 2px solid #00C8FF
+ *   - thin near-white core : inset 1px rgba(255, 253, 240, 0.95)
+ *   - soft cyan bloom      : inset 10px rgba(0, 200, 255, 0.55)
+ *   - wider cyan halo      : inset 28px rgba(0, 200, 255, 0.15)
+ *
+ * All inset. No outer glow, no drop-shadow — everything stays inside
+ * the popup's own bounding box, matching the contained-filament
+ * technique used everywhere else in the app.
+ */
+const SEARCH_POPUP_STYLE: React.CSSProperties = {
+    backgroundColor: '#080D1A',
+    border: '2px solid #00C8FF',
+    boxShadow: [
+        // Filament: a pale cyan, not white. Bright enough to read as
+        // the inner core of the neon tube, but tinted toward the
+        // tube's own #00C8FF so the whole frame reads as one cyan
+        // material rather than cyan-with-a-white-line-through-it.
+        'inset 0 0 0 1px rgba(200, 245, 255, 0.9)',
+        'inset 0 0 10px rgba(0, 200, 255, 0.55)',
+        'inset 0 0 28px rgba(0, 200, 255, 0.15)',
+    ].join(', '),
+};
+
+/**
  * Crossed hockey sticks with a puck, drawn as a small inline SVG.
  * Cyan neon look to match the reference image.
  */
@@ -745,14 +772,9 @@ export function TopBar() {
                         aria-label='Rechercher un joueur'
                     >
                         <div
-                            className='w-full max-w-md overflow-hidden rounded-lg border'
+                            className='w-full max-w-md overflow-hidden rounded-lg'
                             onClick={(event) => event.stopPropagation()}
-                            style={{
-                                borderColor: 'rgba(0, 168, 255, 0.6)',
-                                backgroundColor: '#080D1A',
-                                boxShadow:
-                                    '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)',
-                            }}
+                            style={SEARCH_POPUP_STYLE}
                         >
                             <div
                                 className='flex items-center gap-2 border-b px-3 py-2.5'

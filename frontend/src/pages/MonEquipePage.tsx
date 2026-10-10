@@ -952,7 +952,13 @@ export default function MonEquipePage() {
                 that padding entirely, so the picker touches the
                 navbar. If main's top padding is ever changed, update
                 these values to match. */}
-            <div className='flex flex-col items-center gap-3'>
+            {/* Small top margin so the picker and its aura are not
+                flush against the sticky nav bar. The section above
+                already pulls up into main's top padding (-mt-4 /
+                sm:-mt-6); this mt-2 is what restores a little
+                breathing room without affecting the rest of the
+                page. */}
+            <div className='mt-2 flex flex-col items-center gap-3'>
                 <div className='flex w-full flex-col items-center gap-2'>
                     <div
                         ref={teamPickerRef}
@@ -976,7 +982,7 @@ export default function MonEquipePage() {
                             aria-expanded={isTeamPickerOpen}
                             aria-label='Choisir une equipe'
                             onClick={() => setIsTeamPickerOpen((v) => !v)}
-                            className='relative z-[60] mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
+                            className='relative z-40 mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
                         >
                             {/* Label is the only flex child, so it
                                 centers on the button width. The caret
@@ -1057,7 +1063,7 @@ export default function MonEquipePage() {
                         {isTeamPickerOpen && (
                             <ul
                                 role='listbox'
-                                className='absolute left-0 right-0 z-50 mt-1 max-h-72 overflow-y-auto rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+                                className='absolute left-0 right-0 z-40 mt-1 max-h-72 overflow-y-auto rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
                             >
                                 {user?.fantasyTeamId != null && (
                                     <li>

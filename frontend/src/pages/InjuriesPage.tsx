@@ -429,8 +429,8 @@ export default function InjuriesPage() {
         'rounded-md border bg-[#080D1A] px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#00E5FF] focus:outline-none focus:ring-1 focus:ring-[#00E5FF]';
 
     return (
-        <section className='w-full space-y-4'>
-            <h2 className='text-center'>
+        <section className='-mt-4 w-full space-y-4 sm:-mt-6'>
+            <h2 className='mt-2 text-center'>
                 <NeonTitle keepPulseOnMobile>Blessures</NeonTitle>
             </h2>
 

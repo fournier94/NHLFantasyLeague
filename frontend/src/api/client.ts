@@ -1042,33 +1042,164 @@ export function getExternalSourceHealth(): Promise<ExternalSourceHealthResponse>
     );
 }
 
+// (Protected contracts section removed — replaced by the
+//  per-contract protected salaries below.)
+
 // ---------------------------------------------------------------------
-// Protected contracts (commissioner only view)
+// Protected salaries (commissioner only)
+//
+// Per-contract salary locks. Used for contracts with salary
+// retention: CapFreeze shows the post-retention amount, but the
+// fantasy league wants the player's full contract value.
+//
+// The protection is stored on the PlayerContract row itself and
+// disappears automatically when CapFreeze removes that row as
+// stale (i.e. when the contract ends and a new one is signed).
 // ---------------------------------------------------------------------
 
-export interface ProtectedContractLine {
+/** One contract row of a specific player, with its protection state. */
+export interface PlayerContractRow {
+    playerContractId: number;
+    startSeason: number;
+    endSeason: number;
+    salary: number;
+    protectedSalary: number | null;
+    protectionNote: string | null;
+}
+
+/** A protected contract, joined with the player's identity. */
+export interface ProtectedSalaryRow {
+    playerContractId: number;
+    nhlPlayerId: number;
+    playerName: string;
+    teamAbbreviation: string | null;
+    startSeason: number;
+    endSeason: number;
+    salary: number;
+    protectedSalary: number | null;
+    protectionNote: string | null;
+}
+
+export function getProtectedSalaries(): Promise<ProtectedSalaryRow[]> {
+    return apiGet<ProtectedSalaryRow[]>(
+        '/CapFreezeContract/capfreeze/protected-salaries',
+    );
+}
+
+export function getPlayerContracts(
+    nhlPlayerId: number,
+): Promise<PlayerContractRow[]> {
+    return apiGet<PlayerContractRow[]>(
+        `/CapFreezeContract/capfreeze/player-contracts/${nhlPlayerId}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
+export function upsertProtectedSalary(
+    playerContractId: number,
+    protectedSalary: number,
+    protectionNote?: string | null,
+): Promise<PlayerContractRow> {
+    return apiPost<PlayerContractRow>(
+        '/CapFreezeContract/capfreeze/protected-salaries',
+        {
+            playerContractId,
+            protectedSalary,
+            protectionNote: protectionNote ?? null,
+        },
+    );
+}
+
+export function deleteProtectedSalary(
+    playerContractId: number,
+): Promise<{ message: string }> {
+    return apiDelete<{ message: string }>(
+        `/CapFreezeContract/capfreeze/protected-salaries/${playerContractId}`,
+    );
+}
+
+// ---------------------------------------------------------------------
+// Manual contracts (commissioner only)
+//
+// A player flagged with skipCapFreezeSync=true is never touched by
+// the CapFreeze sync. His contract rows are managed entirely by the
+// commissioner through the admin page. Used for players whose
+// CapFreeze data cannot be trusted (the two Elias Pettersson
+// records are the canonical case).
+// ---------------------------------------------------------------------
+
+export interface ManualContractRow {
+    playerContractId: number;
+    startSeason: number;
+    endSeason: number;
+    salary: number;
+    protectedSalary: number | null;
+    protectionNote: string | null;
+}
+
+export interface ManualContractPlayerRow {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    teamAbbreviation: string | null;
+    contracts: ManualContractRow[];
+}
+
+export function getManualContractPlayers(): Promise<ManualContractPlayerRow[]> {
+    return apiGet<ManualContractPlayerRow[]>(
+        '/CapFreezeContract/capfreeze/manual-contracts/players',
+        { cacheTtlMs: 0 },
+    );
+}
+
+export function setPlayerSkipCapFreeze(
+    nhlPlayerId: number,
+    skip: boolean,
+): Promise<{ nhlPlayerId: number; skipCapFreezeSync: boolean }> {
+    return apiPost<{ nhlPlayerId: number; skipCapFreezeSync: boolean }>(
+        '/CapFreezeContract/capfreeze/manual-contracts/set-skip',
+        { nhlPlayerId, skip },
+    );
+}
+
+export interface CreateManualContractRequest {
+    nhlPlayerId: number;
     startSeason: number;
     endSeason: number;
     salary: number;
 }
 
-export interface ProtectedPlayerContract {
-    nhlPlayerId: number;
-    playerName: string;
-    teamAbbreviation: string | null;
-    contracts: ProtectedContractLine[];
-    expiresAfterSeason: number;
-    isActive: boolean;
+export function createManualContract(
+    request: CreateManualContractRequest,
+): Promise<ManualContractRow> {
+    return apiPost<ManualContractRow>(
+        '/CapFreezeContract/capfreeze/manual-contracts/contract',
+        request,
+    );
 }
 
-export interface ProtectedContractsResponse {
-    currentSeasonNhlCode: number;
-    protectedContracts: ProtectedPlayerContract[];
+export interface UpdateManualContractRequest {
+    startSeason: number;
+    endSeason: number;
+    salary: number;
 }
 
-export function getProtectedContracts(): Promise<ProtectedContractsResponse> {
-    return apiGet<ProtectedContractsResponse>(
-        '/CapFreezeContract/capfreeze/protected-contracts',
+export function updateManualContract(
+    playerContractId: number,
+    request: UpdateManualContractRequest,
+): Promise<ManualContractRow> {
+    return apiPatch<ManualContractRow>(
+        `/CapFreezeContract/capfreeze/manual-contracts/contract/${playerContractId}`,
+        request,
+    );
+}
+
+export function deleteManualContract(
+    playerContractId: number,
+): Promise<{ message: string }> {
+    return apiDelete<{ message: string }>(
+        `/CapFreezeContract/capfreeze/manual-contracts/contract/${playerContractId}`,
     );
 }
 

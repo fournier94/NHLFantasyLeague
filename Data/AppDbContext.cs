@@ -442,8 +442,17 @@ namespace NhlFantasyLeague.api.Data
                 .IsUnique();
 
             modelBuilder.Entity<PlayerContract>()
-                .Property(c => c.Salary)
+      .Property(c => c.Salary)
+      .HasPrecision(18, 2);
+
+            // Per-contract protection columns.
+            modelBuilder.Entity<PlayerContract>()
+                .Property(c => c.ProtectedSalary)
                 .HasPrecision(18, 2);
+
+            modelBuilder.Entity<PlayerContract>()
+                .Property(c => c.ProtectionNote)
+                .HasMaxLength(500);
 
             modelBuilder.Entity<Player>()
                 .Property(p => p.Status)

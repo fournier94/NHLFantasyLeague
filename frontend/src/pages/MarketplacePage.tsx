@@ -420,12 +420,19 @@ const HEADER_GRADIENT =
 /**
  * Offer card neon frame (contained filament technique).
  *
- * Thick cyan tube + thin near-white filament + inward bloom. Nothing
+ * Thick cyan tube + thin pale-cyan filament + inward bloom. Nothing
  * extends outside the card's own bounding box.
+ *
+ * Filament color note: this used to be a warm near-white
+ * (rgba(255, 253, 240, 0.95)) which read as a pure-white line
+ * sitting inside the cyan tube. It is now a pale cyan so the whole
+ * frame reads as a single cyan material — a bright core inside a
+ * thicker cyan tube — rather than cyan-with-a-white-line-through-it.
+ * Matches the search popup frame in TopBar.tsx.
  */
 const OFFER_TUBE_COLOR = '#00C8FF';
 const OFFER_TUBE_PX = 2;
-const OFFER_FILAMENT = 'rgba(255, 253, 240, 0.95)';
+const OFFER_FILAMENT = 'rgba(200, 245, 255, 0.9)';
 const OFFER_BLOOM_NEAR = 'rgba(0, 200, 255, 0.55)';
 const OFFER_BLOOM_FAR = 'rgba(0, 200, 255, 0.15)';
 
@@ -434,13 +441,18 @@ const OFFER_BLOOM_FAR = 'rgba(0, 200, 255, 0.15)';
  * offer card, applied to the button's own bounding box:
  *
  *   Layer 1 (outer)   : thick cyan border -- the tube.
- *   Layer 2 (middle)  : thin near-white inset ring -- the filament.
+ *   Layer 2 (middle)  : thin pale-cyan inset ring -- the filament.
  *   Layer 3 (inner)   : soft cyan inset bloom -- light spilling in.
  *
  * All contained. Nothing extends past the button's own box.
+ *
+ * Filament color note: previously #FFFDF0 (a warm near-white) which
+ * read as a pure-white line inside the cyan tube. Now a pale cyan so
+ * the button reads as one continuous cyan material, matching the
+ * offer card and the search popup frame.
  */
 const PUBLISH_TUBE_COLOR = '#00C8FF';
-const PUBLISH_FILAMENT = '#FFFDF0';
+const PUBLISH_FILAMENT = 'rgba(200, 245, 255, 0.9)';
 const PUBLISH_BLOOM_NEAR = 'rgba(0, 200, 255, 0.55)';
 const PUBLISH_BLOOM_FAR = 'rgba(0, 200, 255, 0.2)';
 
@@ -471,29 +483,34 @@ export default function MarketplacePage() {
     const [browseRefreshTick, setBrowseRefreshTick] = useState(0);
 
     /**
-     * Sub-view inside the "Offres" tab. Only relevant when
-     * `view === 'browse'`.
-     *
-     *   'view' → other managers' active offers (the default)
-     *   'mine' → only the offers the current user has published
-     *
-     * Deliberately separate from the "Offres envoyées" tab: that one
-     * lists responses the user has sent to other managers' offers.
-     * This sub-toggle lists the offers the user put up for others to
-     * respond to.
-     */
-    const [browseSubView, setBrowseSubView] = useState<'view' | 'mine'>(
-        'view',
-    );
+  * Sub-view inside the "Marché" tab. Only relevant when
+  * `view === 'browse'`.
+  *
+  *   'view'    → other managers' active offers (the default)
+  *   'mine'    → only the offers the current user has published
+  *   'publish' → the create-a-public-offer panel. Moved here from
+  *               the old "Créer" sub-toggle so every action that
+  *               targets the public marketplace lives under one
+  *               tab: look at the market, see your listings, or
+  *               add one.
+  */
+    const [browseSubView, setBrowseSubView] = useState<
+        'view' | 'mine' | 'publish'
+    >('view');
+
+    // The "Créer" tab no longer has a sub-toggle. Its only remaining
+    // option ("Envoyer une offre", not built yet) renders directly.
+    // The old "Publier une annonce" sub-view now lives in the Marché
+    // tab.
 
     return (
-        <section className='mt-1 space-y-4 sm:mt-2'>
-            <div className='flex flex-col items-center gap-2'>
+        <section className='-mt-4 space-y-4 sm:-mt-6'>
+            <div className='mt-2 flex flex-col items-center gap-2'>
                 <h2 className='text-center'>
                     <NeonTitle keepPulseOnMobile>Marketplace</NeonTitle>
                 </h2>
 
-                <div className='flex w-full flex-col items-center gap-2'>
+                <div className='flex w-full flex-col items-center gap-3'>
                     <div
                         className='flex w-full items-center rounded-full border border-[#00A8FF] bg-[#050A18] p-0.5'
                         style={{
@@ -523,8 +540,7 @@ export default function MarketplacePage() {
                                     : undefined
                             }
                         >
-                            <span className='hidden sm:inline'>Regarder les offres</span>
-                            <span className='sm:hidden'>Offres</span>
+                            Marché
                         </button>
 
                         <button
@@ -545,8 +561,8 @@ export default function MarketplacePage() {
                                     : undefined
                             }
                         >
-                            <span className='hidden sm:inline'>Ajouter une offre</span>
-                            <span className='sm:hidden'>Ajouter</span>
+                            <span className='hidden sm:inline'>Créer une offre</span>
+                            <span className='sm:hidden'>Créer</span>
                         </button>
 
                         <button
@@ -607,10 +623,10 @@ export default function MarketplacePage() {
                     {view === 'browse' && (
                         <div className='flex items-center justify-center'>
                             <div
-                                className='flex items-center rounded-full border border-[#00A8FF]/60 bg-[#050A18]/80 p-0.5 text-xs'
+                                className='flex items-center rounded-full border border-[#00E5FF]/60 bg-[#050A18]/80 p-0.5 text-xs'
                                 style={{
                                     boxShadow:
-                                        '0 0 6px rgba(0, 168, 255, 0.35), inset 0 0 6px rgba(0, 168, 255, 0.08)',
+                                        '0 0 6px rgba(0, 229, 255, 0.35), inset 0 0 6px rgba(0, 229, 255, 0.08)',
                                 }}
                             >
                                 <button
@@ -619,8 +635,8 @@ export default function MarketplacePage() {
                                         setBrowseSubView('view')
                                     }
                                     className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'view'
-                                        ? 'bg-[#00A8FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#7DD3FC] hover:text-white'
+                                        ? 'bg-[#00E5FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
                                     Voir les offres
@@ -632,34 +648,57 @@ export default function MarketplacePage() {
                                         setBrowseSubView('mine')
                                     }
                                     className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'mine'
-                                        ? 'bg-[#00A8FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#7DD3FC] hover:text-white'
+                                        ? 'bg-[#00E5FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
-                                    Vos offres
+                                    Vos offres actives
+                                </button>
+
+                                <button
+                                    type='button'
+                                    onClick={() =>
+                                        setBrowseSubView('publish')
+                                    }
+                                    className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'publish'
+                                        ? 'bg-[#00E5FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                        }`}
+                                >
+                                    Publier une annonce
                                 </button>
                             </div>
                         </div>
                     )}
+
                 </div>
             </div>
 
             {view === 'add' && (
-                <AddOfferPanel
-                    onPublished={() => {
-                        setBrowseRefreshTick((t) => t + 1);
-                        setView('browse');
-                    }}
-                    teamId={user?.fantasyTeamId ?? null}
-                    teamName={user?.fantasyTeamName ?? null}
-                />
+                <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
+                    Envoyer une offre — à venir.
+                </p>
             )}
 
-            {view === 'browse' && (
+            {view === 'browse' && browseSubView !== 'publish' && (
                 <BrowseOffersPanel
                     refreshTick={browseRefreshTick}
                     teamId={user?.fantasyTeamId ?? null}
                     mode={browseSubView}
+                />
+            )}
+
+            {view === 'browse' && browseSubView === 'publish' && (
+                <AddOfferPanel
+                    onPublished={() => {
+                        // We're already on the Marché tab; just refresh
+                        // the lists and drop the user on "Vos offres" so
+                        // he sees the offer he just published.
+                        setBrowseRefreshTick((t) => t + 1);
+                        setBrowseSubView('mine');
+                    }}
+                    teamId={user?.fantasyTeamId ?? null}
+                    teamName={user?.fantasyTeamName ?? null}
                 />
             )}
 

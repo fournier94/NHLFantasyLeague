@@ -24,76 +24,6 @@ namespace NhlFantasyLeague.api.Services.CapFreeze
             _capFreezePageService = capFreezePageService;
         }
 
-        /// <summary>
-        /// One locked contract shape. Any existing row with the same
-        /// StartSeason is forced to these values; missing rows are
-        /// created; any other row for the player is removed.
-        /// </summary>
-        private sealed record LockedContract(
-            int StartSeason,
-            int EndSeason,
-            decimal Salary);
-
-        /// <summary>
-        /// Public projection of one locked contract. Used by the
-        /// admin page to display which players have manually locked
-        /// contracts without exposing the private record type.
-        /// </summary>
-        public sealed record ProtectedContractInfo(
-            int NhlPlayerId,
-            int StartSeason,
-            int EndSeason,
-            decimal Salary);
-
-        /// <summary>
-        /// Flattens the protected-contracts table into one row per
-        /// locked contract. Safe to call from the controller; no DB
-        /// access.
-        /// </summary>
-        public static IEnumerable<ProtectedContractInfo>
-            GetProtectedContracts()
-        {
-            foreach (var kvp in ProtectedPlayerContracts)
-            {
-                foreach (var c in kvp.Value)
-                {
-                    yield return new ProtectedContractInfo(
-                        kvp.Key,
-                        c.StartSeason,
-                        c.EndSeason,
-                        c.Salary);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Contracts that are manually locked and must never be
-        /// overwritten by the CapFreeze sync. Keyed by NhlPlayerId.
-        ///
-        /// When a player is listed here, SyncPlayerContractsAsync
-        /// skips the CapFreeze fetch entirely and forces the contract
-        /// rows to the locked shape. The CapFreeze contract timestamp
-        /// is NOT updated, so the sync summary accurately reflects
-        /// that this player's contract was not re-fetched.
-        ///
-        /// The fantasy salary is derived from the contract in
-        /// RosterAdminService, so locking the contract is enough to
-        /// lock the salary used for the cap.
-        /// </summary>
-        private static readonly Dictionary<int, List<LockedContract>>
-            ProtectedPlayerContracts = new()
-            {
-                // NhlPlayerId 8478450: locked to a single-season
-                // 1 000 000 $ contract for the 2026-2027 season.
-                [8478450] = new List<LockedContract>
-                {
-                    new LockedContract(
-                        StartSeason: 20262027,
-                        EndSeason: 20262027,
-                        Salary: 1000000m),
-                },
-            };
-
         private int? ExtractContractYears(
 string html)
         {
@@ -149,11 +79,6 @@ string playerName)
 
             document.LoadHtml(html);
 
-            // ---------------------------------------------------------
-            // STEP 1:
-            // Find the Contract by Season table.
-            // ---------------------------------------------------------
-
             var heading =
                 document.DocumentNode
                     .SelectSingleNode(
@@ -168,14 +93,6 @@ string playerName)
 
             if (contractTable == null)
                 return null;
-
-            // ---------------------------------------------------------
-            // STEP 2:
-            // Read the first season from the table header.
-            //
-            // Example:
-            // 2026-27
-            // ---------------------------------------------------------
 
             var firstHeader =
                 contractTable
@@ -203,24 +120,12 @@ string playerName)
                 startYear * 10000 +
                 (startYear + 1);
 
-            // ---------------------------------------------------------
-            // STEP 3:
-            // Extract the contract length.
-            //
-            // We already tested ExtractContractYears().
-            // ---------------------------------------------------------
-
             var termYears =
                 ExtractContractYears(
                     html);
 
             if (!termYears.HasValue)
                 return null;
-
-            // ---------------------------------------------------------
-            // STEP 4:
-            // Get the first contract row.
-            // ---------------------------------------------------------
 
             var firstRow =
                 contractTable.SelectSingleNode(
@@ -238,11 +143,6 @@ string playerName)
                 return null;
             }
 
-            // ---------------------------------------------------------
-            // STEP 5:
-            // First salary.
-            // ---------------------------------------------------------
-
             var firstSalaryValue =
                 salaryCells[0].GetAttributeValue(
                     "data-v",
@@ -256,14 +156,6 @@ string playerName)
             {
                 return null;
             }
-
-            // ---------------------------------------------------------
-            // STEP 6:
-            // Second salary.
-            //
-            // If the player becomes UFA/RFA immediately after
-            // the first contract, data-v may be 0.
-            // ---------------------------------------------------------
 
             decimal? secondSalary = null;
 
@@ -300,8 +192,6 @@ CapFreezeContractData contractData)
             var startSeason =
                 contractData.StartSeason;
 
-            // 1 year remaining:
-            // Create exactly one contract for that season.
             if (contractData.TermYears == 1)
             {
                 contracts.Add(
@@ -316,8 +206,6 @@ CapFreezeContractData contractData)
                 return contracts;
             }
 
-            // Every contract longer than 1 year must have
-            // a second-year salary available.
             if (!contractData.SecondSalary.HasValue)
             {
                 throw new InvalidOperationException(
@@ -326,8 +214,6 @@ CapFreezeContractData contractData)
                     $"but no second-year salary was found.");
             }
 
-            // More than 1 year remaining and same salary:
-            // Create one contract covering the entire remaining term.
             if (
                 contractData.FirstSalary ==
                 contractData.SecondSalary.Value)
@@ -349,8 +235,6 @@ CapFreezeContractData contractData)
                 return contracts;
             }
 
-            // More than 1 year remaining and different salaries:
-            // First year gets its own contract.
             contracts.Add(
                 new PlayerContract
                 {
@@ -368,7 +252,6 @@ CapFreezeContractData contractData)
                     startSeason,
                     contractData.TermYears);
 
-            // Remaining years get the second contract.
             contracts.Add(
                 new PlayerContract
                 {
@@ -379,89 +262,6 @@ CapFreezeContractData contractData)
                 });
 
             return contracts;
-        }
-
-        /// <summary>
-        /// Forces the player's contract rows to the locked shape:
-        /// upserts by StartSeason, and removes any row not covered by
-        /// the lock. Returns the resulting list of contracts for the
-        /// player. Respects the caller's preloaded-contracts cache and
-        /// saveChanges flag.
-        /// </summary>
-        private async Task<List<PlayerContract>> ApplyLockedContractsAsync(
-            int playerId,
-            List<LockedContract> lockedContracts,
-            bool saveChanges,
-            Dictionary<int, List<PlayerContract>>? preloadedContracts)
-        {
-            List<PlayerContract> existing;
-
-            if (preloadedContracts != null &&
-                preloadedContracts.TryGetValue(playerId, out var cached))
-            {
-                existing = cached;
-            }
-            else
-            {
-                existing = await _dbContext.PlayerContracts
-                    .Where(c => c.PlayerId == playerId)
-                    .ToListAsync();
-            }
-
-            var byStartSeason = existing
-                .GroupBy(c => c.StartSeason)
-                .ToDictionary(g => g.Key, g => g.First());
-
-            var lockedStarts = lockedContracts
-                .Select(l => l.StartSeason)
-                .ToHashSet();
-
-            foreach (var locked in lockedContracts)
-            {
-                if (byStartSeason.TryGetValue(
-                        locked.StartSeason,
-                        out var existingRow))
-                {
-                    existingRow.EndSeason = locked.EndSeason;
-                    existingRow.Salary = locked.Salary;
-                }
-                else
-                {
-                    var newRow = new PlayerContract
-                    {
-                        PlayerId = playerId,
-                        StartSeason = locked.StartSeason,
-                        EndSeason = locked.EndSeason,
-                        Salary = locked.Salary
-                    };
-
-                    _dbContext.PlayerContracts.Add(newRow);
-
-                    existing.Add(newRow);
-                    byStartSeason[locked.StartSeason] = newRow;
-                }
-            }
-
-            foreach (var row in byStartSeason.Values.ToList())
-            {
-                if (!lockedStarts.Contains(row.StartSeason))
-                {
-                    _dbContext.PlayerContracts.Remove(row);
-                    existing.Remove(row);
-                }
-            }
-
-            if (preloadedContracts != null)
-            {
-                preloadedContracts[playerId] = existing;
-            }
-
-            if (saveChanges)
-            {
-                await _dbContext.SaveChangesAsync();
-            }
-
-            return existing;
         }
 
         private int GetNextSeason(int season)
@@ -502,53 +302,32 @@ CapFreezeContractData contractData)
             }
 
             // ---------------------------------------------------------
-            // PROTECTED CONTRACTS
+            // SKIP MANUAL PLAYERS
             //
-            // Some players have their contract values manually locked
-            // so CapFreeze can never overwrite them. When the player
-            // is in ProtectedPlayerContracts, we skip the fetch
-            // entirely and force the contract rows to the locked
-            // shape. The CapFreeze contract timestamp is NOT updated,
-            // matching the Elias Pettersson behavior.
+            // When the commissioner has flagged a player as manually
+            // managed, we do not touch his contract rows at all: no
+            // CapFreeze fetch, no extract, no upsert, no prune. The
+            // admin's contract rows for this player are authoritative.
+            //
+            // The caller (CapFreezeSyncService) also skips updating
+            // the player's status and slug for flagged players, so
+            // nothing about this player changes during a sync.
             // ---------------------------------------------------------
 
-            if (ProtectedPlayerContracts.TryGetValue(
-                    player.NhlPlayerId,
-                    out var lockedContracts))
+            if (player.SkipCapFreezeSync)
             {
-                return await ApplyLockedContractsAsync(
-                    playerId,
-                    lockedContracts,
-                    saveChanges,
-                    preloadedContracts);
-            }
+                if (preloadedContracts != null &&
+                    preloadedContracts.TryGetValue(
+                        playerId,
+                        out var cachedContracts))
+                {
+                    return cachedContracts;
+                }
 
-            // ---------------------------------------------------------
-            // SPECIAL CASE:
-            // Elias Pettersson records are manually protected.
-            //
-            // We do not fetch or modify their contracts automatically.
-            // Since no CapFreeze contract page is successfully
-            // synchronized here, the contract timestamp is NOT updated.
-            //
-            // Matched by NhlPlayerId, NOT by name: there is a second
-            // Elias Pettersson (goalie, SHL draft class) whose record
-            // must not be caught by this rule. Only the Vancouver
-            // forward (NhlPlayerId 8480012) is protected.
-            // ---------------------------------------------------------
-
-            const int EliasPetterssonNhlPlayerId = 8480012;
-
-            if (player.NhlPlayerId == EliasPetterssonNhlPlayerId)
-            {
                 return await _dbContext.PlayerContracts
                     .Where(c => c.PlayerId == playerId)
                     .ToListAsync();
             }
-
-            // ---------------------------------------------------------
-            // FETCH CAPFREEZE PLAYER PAGE
-            // ---------------------------------------------------------
 
             var html =
                 await _capFreezePageService.GetCapFreezePlayerPageAsync(
@@ -556,13 +335,6 @@ CapFreezeContractData contractData)
 
             var playerName =
                 $"{player.FirstName} {player.LastName}";
-
-            // ---------------------------------------------------------
-            // EXTRACT CONTRACT DATA
-            //
-            // If extraction fails, an exception is thrown and the
-            // CapFreezeContractLastUpdated timestamp is NOT changed.
-            // ---------------------------------------------------------
 
             var contractData =
                 ExtractCapFreezeContractData(
@@ -576,28 +348,20 @@ CapFreezeContractData contractData)
                     $"for PlayerId={playerId}, Slug='{playerSlug}'.");
             }
 
-            // ---------------------------------------------------------
-            // BUILD EXPECTED CONTRACTS
-            // ---------------------------------------------------------
-
             var expectedContracts =
                 BuildPlayerContracts(
                     player.Id,
                     contractData);
-
-            // ---------------------------------------------------------
-            // LOAD EXISTING CONTRACTS
-            // ---------------------------------------------------------
 
             List<PlayerContract> existingContractsList;
 
             if (preloadedContracts != null &&
                 preloadedContracts.TryGetValue(
                     playerId,
-                    out var cachedContracts))
+                    out var cachedContracts2))
             {
                 existingContractsList =
-                    cachedContracts;
+                    cachedContracts2;
             }
             else
             {
@@ -620,10 +384,6 @@ CapFreezeContractData contractData)
                     .Select(c => c.StartSeason)
                     .ToHashSet();
 
-            // ---------------------------------------------------------
-            // UPDATE EXISTING / ADD NEW CONTRACTS
-            // ---------------------------------------------------------
-
             foreach (var expectedContract in expectedContracts)
             {
                 if (existingContracts.TryGetValue(
@@ -634,7 +394,8 @@ CapFreezeContractData contractData)
                         expectedContract.EndSeason;
 
                     existingContract.Salary =
-                        expectedContract.Salary;
+                        existingContract.ProtectedSalary
+                        ?? expectedContract.Salary;
                 }
                 else
                 {
@@ -650,10 +411,6 @@ CapFreezeContractData contractData)
                 }
             }
 
-            // ---------------------------------------------------------
-            // REMOVE STALE CONTRACTS
-            // ---------------------------------------------------------
-
             foreach (var existingContract in existingContracts.Values.ToList())
             {
                 if (!expectedStartSeasons.Contains(
@@ -667,34 +424,14 @@ CapFreezeContractData contractData)
                 }
             }
 
-            // ---------------------------------------------------------
-            // CONTRACT SYNCHRONIZATION SUCCEEDED
-            //
-            // Only now do we update the timestamp.
-            //
-            // If SaveChangesAsync() is used here, the timestamp and
-            // contract changes are saved together.
-            //
-            // If saveChanges == false, the timestamp remains tracked
-            // on the Player entity and will be saved by the caller.
-            // ---------------------------------------------------------
-
             player.CapFreezeContractLastUpdated =
                 DateTime.UtcNow;
-
-            // ---------------------------------------------------------
-            // UPDATE PRELOADED CACHE
-            // ---------------------------------------------------------
 
             if (preloadedContracts != null)
             {
                 preloadedContracts[playerId] =
                     existingContractsList;
             }
-
-            // ---------------------------------------------------------
-            // SAVE IF REQUESTED
-            // ---------------------------------------------------------
 
             if (saveChanges)
             {

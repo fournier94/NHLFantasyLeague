@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NhlFantasyLeague.api.Data;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NhlFantasyLeague.api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261010155244_AddProtectedPlayerContracts")]
+    partial class AddProtectedPlayerContracts
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1064,9 +1067,6 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<string>("ShootsCatches")
                         .HasColumnType("text");
 
-                    b.Property<bool>("SkipCapFreezeSync")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1216,14 +1216,6 @@ namespace NhlFantasyLeague.api.Migrations
 
                     b.Property<int>("PlayerId")
                         .HasColumnType("integer");
-
-                    b.Property<decimal?>("ProtectedSalary")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<string>("ProtectionNote")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
 
                     b.Property<decimal>("Salary")
                         .HasPrecision(18, 2)
@@ -1462,6 +1454,39 @@ namespace NhlFantasyLeague.api.Migrations
                         .IsUnique();
 
                     b.ToTable("PlayerSeasonStats");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.ProtectedPlayerContract", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("NhlPlayerId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<decimal>("Salary")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NhlPlayerId")
+                        .IsUnique();
+
+                    b.ToTable("ProtectedPlayerContracts");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.RosterEntry", b =>

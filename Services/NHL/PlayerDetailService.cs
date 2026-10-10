@@ -322,14 +322,14 @@ namespace NhlFantasyLeague.api.Services.NHL
                 Contracts = contracts
                     .Select(c => new ContractDto
                     {
-                        Salary = c.Salary,
+                        Salary = c.EffectiveSalary,
                         StartSeason = c.StartSeason,
                         EndSeason = c.EndSeason,
                         YearsRemaining = CalculateYearsRemaining(c)
                     })
                     .ToList(),
 
-                CurrentCapHit = currentContract?.Salary,
+                CurrentCapHit = currentContract?.EffectiveSalary,
 
                 FantasyTeamId = entry?.FantasyTeamId,
                 FantasyTeamName = entry?.FantasyTeam?.Name,
@@ -706,8 +706,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                     r.GameTypeId == gameType &&
                     Classify(r.LeagueAbbreviation) == category)
                 .OrderByDescending(r => r.Season)
-                // Within the same season, put NHL rows on top, then the
-                // remaining leagues alphabetically.
                 .ThenByDescending(r => r.LeagueAbbreviation == "NHL")
                 .ThenBy(r => r.LeagueAbbreviation)
                 .Select(r => new CareerRowDto

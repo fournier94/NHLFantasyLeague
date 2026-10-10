@@ -35,6 +35,25 @@ const POLL_LIVE_MS = 2 * 60_000;
 const POLL_IDLE_MS = 10 * 60_000;
 
 /**
+ * Minimum horizontal distance, in CSS pixels, for a touch drag to
+ * count as a swipe on a game card. Below this, the drag is ignored
+ * and the normal click-on-tap behavior applies.
+ */
+const GAMECARD_SWIPE_MIN_PX = 60;
+
+/**
+ * Safety timeout for the "next click is suppressed" flag.
+ *
+ * After a swipe, exactly ONE click is suppressed — the synthetic
+ * click the browser fires at the end of the touch sequence. The
+ * flag is normally cleared by that click itself. If the browser
+ * decides not to fire one (e.g. it interpreted the gesture as a
+ * scroll and cancelled the click), this timeout is what clears
+ * the flag so the next real tap is not eaten.
+ */
+const GAMECARD_SWIPE_CLICK_SUPPRESS_MS = 300;
+
+/**
  * Mount-time fetch retry schedule.
  *
  * The first attempt runs immediately. Each subsequent attempt waits
@@ -741,6 +760,164 @@ function GameCard({
         onToggle(game.gameId, side);
     };
 
+    // -----------------------------------------------------------------
+    // Swipe support
+    //
+    // When the card is expanded and showing a team's boxscore, a
+    // horizontal swipe switches to the other team. Both directions
+    // work because there are only two sides; the mapping is:
+    //
+    //   swipe left  (dx < 0) → go to the home side
+    //   swipe right (dx > 0) → go to the away side
+    //
+    // Vertical drags are ignored so the user can still scroll the
+    // page normally, and short drags are ignored so a normal tap
+    // still works.
+    //
+    // The browser synthesizes a click after every touchend. If we
+    // let that click through, a swipe over a player row would also
+    // navigate to that player's page, and a swipe anywhere else
+    // would also expand the side the finger happened to lift on.
+    // The onClickCapture handler below suppresses that click for a
+    // short window after a swipe ends.
+    // -----------------------------------------------------------------
+
+    const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+
+    /**
+     * Where and when the last swipe ended. Used by
+     * handleClickCapture to tell the browser's synthetic click
+     * (which fires at exactly the touch lift-off position) apart
+     * from the user's next real tap (which fires wherever the
+     * finger actually lands, almost always somewhere else).
+     *
+     * This replaces the old "suppress the next click" flag, which
+     * could not distinguish the two cases: after a swipe on mobile
+     * the flag stayed armed, so the user's next tap got eaten and
+     * they had to tap twice.
+     */
+    const lastSwipeEndRef = useRef<
+        { x: number; y: number; t: number } | null
+    >(null);
+
+    const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+        // A new touch is beginning on this card. Any swipe-end
+        // record from a previous gesture is now stale — that
+        // gesture's synthetic click (if the browser fired one) has
+        // already been suppressed. Clearing it here means that any
+        // click following this new touch is treated as a real click
+        // and goes through on the first try, instead of being
+        // compared against an old swipe-end coordinate and possibly
+        // swallowed by the 20 px proximity check.
+        //
+        // Without this reset, the user's first tap after a swipe
+        // can land within 20 px of where the swipe ended and get
+        // eaten, forcing them to tap twice. That is the exact bug
+        // this line fixes.
+        lastSwipeEndRef.current = null;
+
+        // Only track a single-finger gesture. Multi-finger touches
+        // (pinch, etc.) are left to the browser.
+        if (e.touches.length !== 1) {
+            swipeStartRef.current = null;
+            return;
+        }
+
+        const t = e.touches[0];
+        swipeStartRef.current = { x: t.clientX, y: t.clientY };
+    };
+
+    const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+        const start = swipeStartRef.current;
+        swipeStartRef.current = null;
+
+        if (!start) return;
+        if (e.changedTouches.length === 0) return;
+
+        const t = e.changedTouches[0];
+        const dx = t.clientX - start.x;
+        const dy = t.clientY - start.y;
+
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+
+        // Too short to be a swipe.
+        if (absDx < GAMECARD_SWIPE_MIN_PX) return;
+
+        // Too vertical to be a horizontal swipe. The ratio is
+        // deliberately generous (roughly 56°) so a slightly
+        // diagonal drag still counts.
+        if (absDx < absDy * 1.5) return;
+
+        // Record where and when the swipe ended. handleClickCapture
+        // uses this to identify the synthetic click the browser
+        // fires at the touch lift-off position, so a real tap
+        // somewhere else on the card still goes through on the
+        // first try.
+        lastSwipeEndRef.current = {
+            x: t.clientX,
+            y: t.clientY,
+            t: Date.now(),
+        };
+
+        // Ask the browser not to fire the synthetic click at the
+        // end of this touch sequence. This is the primary defense;
+        // the coordinate check in handleClickCapture is the
+        // fallback for browsers that ignore preventDefault here.
+        e.preventDefault();
+
+        // Swipes only switch teams when the card is expanded. A
+        // swipe on a collapsed card just scrolls the page.
+        if (!expanded) return;
+        if (expandedSide == null) return;
+
+        // Always switch to the OTHER side, whichever direction the
+        // finger travelled. With two panels there is only one
+        // "other side", so direction carries no meaning: any swipe
+        // toggles. Doing it this way also sidesteps the collapse
+        // that used to happen when the mapped side happened to
+        // equal the currently-expanded one (onToggle treats
+        // same-game / same-side as a collapse).
+        const nextSide: 'away' | 'home' =
+            expandedSide === 'away' ? 'home' : 'away';
+
+        onToggle(game.gameId, nextSide);
+    };
+
+    const handleClickCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+        const lastSwipe = lastSwipeEndRef.current;
+
+        // No recent swipe → normal click.
+        if (!lastSwipe) return;
+
+        // Outside the suppression window → treat as a real click
+        // and clear the reference so we stop looking at it.
+        if (Date.now() - lastSwipe.t > GAMECARD_SWIPE_CLICK_SUPPRESS_MS) {
+            lastSwipeEndRef.current = null;
+            return;
+        }
+
+        // Inside the window. Compare the click position to where
+        // the swipe ended. If they match, this is the synthetic
+        // click the browser fires at the touch lift-off position,
+        // so suppress it. If they differ, this is the user's next
+        // real tap and must go through.
+        //
+        // The 20 px radius is generous enough for a little finger
+        // drift, and still far smaller than any real distance a
+        // user would move to tap a different team or a player row.
+        const dx = e.clientX - lastSwipe.x;
+        const dy = e.clientY - lastSwipe.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        lastSwipeEndRef.current = null;
+
+        if (distance < 20) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    };
+
     // Header label depends on game state.
     //
     // For live games, replace the generic "EN DIRECT" with the
@@ -804,12 +981,20 @@ function GameCard({
                 clickable && 'cursor-pointer hover:brightness-110',
             )}
             onClick={handleClick}
+            onClickCapture={handleClickCapture}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
             style={{
                 borderColor: FRAME_BORDER,
                 backgroundColor: FRAME_BG,
                 boxShadow: live
                     ? '0 0 22px rgba(34, 197, 94, 0.35), inset 0 0 18px rgba(34, 197, 94, 0.08)'
                     : FRAME_GLOW,
+                // Tell the browser we handle horizontal gestures
+                // ourselves, it can keep handling vertical scroll.
+                // Prevents iOS Safari's back/forward swipe gesture
+                // from hijacking a horizontal swipe on the card.
+                touchAction: 'pan-y',
             }}
         >
             <div
@@ -847,11 +1032,12 @@ function GameCard({
                             'radial-gradient(ellipse at 50% 42%, rgba(0, 168, 255, 0.10) 0%, rgba(0, 168, 255, 0.03) 40%, transparent 75%)',
                     }}
                 >
-                    <div className='text-[0.55rem] font-bold uppercase tracking-widest text-[#7DD3FC]'>
-                        {headerLabel}
-                    </div>
-
-                    <div className='mt-2 flex w-full items-center justify-center gap-2'>
+                    {/* Day label pinned to the very top of the
+                        middle square. Absolute positioning lifts
+                        it out of the centered flex flow, so the
+                        period label and score/shots block below
+                        stay exactly where they were. */}
+                    <div className='absolute left-0 right-0 top-3 flex items-center justify-center gap-2 px-3'>
                         <span
                             aria-hidden='true'
                             className='h-px flex-1'
@@ -871,6 +1057,13 @@ function GameCard({
                                 background: homeStripColor,
                             }}
                         />
+                    </div>
+
+                    {/* Period label under the day: "2e · 10:32" for
+                        live games, "MATCH À VENIR" for scheduled,
+                        "TERMINÉ" for final. */}
+                    <div className='mt-1 text-[0.55rem] font-bold uppercase tracking-widest text-[#7DD3FC]'>
+                        {headerLabel}
                     </div>
 
                     {startLabel !== null ? (
@@ -1364,14 +1557,23 @@ export default function GameDayPage() {
         // Same game, other side → swap sides without re-fetching.
         // The boxscore and ownership map are already loaded for
         // this game, so reuse them and just flip which team's
-        // panel is shown. The scroll effect below will fire on the
-        // expandedSide change.
+        // panel is shown.
+        //
+        // No scroll here on purpose. The card is already positioned
+        // where it needs to be — a side-switch only replaces the
+        // panel content below it, it does not move the card.
+        // Triggering the smooth-scroll effect from this branch was
+        // the cause of the "second click needed after a swipe" bug:
+        // the browser treats a tap during an in-flight smooth scroll
+        // as a command to stop the scroll, so the user's next tap
+        // got swallowed instead of firing a click. With no scroll,
+        // the next tap lands on a settled page and goes through on
+        // the first try.
         if (
             expandedGameId === gameId &&
             expandedSide !== side &&
             boxscore
         ) {
-            pendingScrollToGameIdRef.current = gameId;
             setExpandedSide(side);
             return;
         }
@@ -1575,9 +1777,9 @@ export default function GameDayPage() {
     }
 
     return (
-        <section className='w-full space-y-4'>
+        <section className='-mt-4 w-full space-y-4 sm:-mt-6'>
             {/* ---- Date picker (mimics MonEquipePage team picker) ---- */}
-            <div className='flex flex-col items-center gap-2'>
+            <div className='mt-2 flex flex-col items-center gap-2'>
                 <div
                     ref={datePickerRef}
                     className='relative w-full'
@@ -1590,7 +1792,7 @@ export default function GameDayPage() {
                         onClick={() =>
                             setIsDatePickerOpen((v) => !v)
                         }
-                        className='relative z-[60] mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
+                        className='relative z-40 mx-auto flex cursor-pointer items-center justify-center px-3 py-0.5 focus:outline-none focus-visible:outline-none'
                     >
                         <span className='relative inline-block'>
                             <span
@@ -1647,7 +1849,7 @@ export default function GameDayPage() {
                     {isDatePickerOpen && (
                         <ul
                             role='listbox'
-                            className='absolute left-0 right-0 z-50 mt-1 max-h-72 overflow-y-auto rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+                            className='absolute left-0 right-0 z-40 mt-1 max-h-72 overflow-y-auto rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
                         >
                             {dateOptions.map((opt) => {
                                 const isSelected =

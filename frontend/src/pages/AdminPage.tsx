@@ -19,11 +19,21 @@ import {
     getRosterStatusHistory,
     recomputeTeamTotals,
     updateStatusHistory,
-    getProtectedContracts,
+    getProtectedSalaries,
+    getPlayerContracts,
+    upsertProtectedSalary,
+    deleteProtectedSalary,
+    getManualContractPlayers,
+    setPlayerSkipCapFreeze,
+    createManualContract,
+    updateManualContract,
+    deleteManualContract,
     startRefreshAllGameLogs,
     getJobStatus,
     type RosterStatusHistoryRow,
-    type ProtectedPlayerContract,
+    type ProtectedSalaryRow,
+    type PlayerContractRow,
+    type ManualContractPlayerRow,
     type AdminUserRow,
     type BackgroundJobStatus,
     type FantasyTeam,
@@ -160,16 +170,6 @@ function statusLabel(status: string): string {
 }
 
 /**
- * Formats a season code like 20262027 as "2026-27".
- * Used by the protected-contracts section.
- */
-function formatSeasonCode(code: number): string {
-    const startYear = Math.floor(code / 10000);
-    const endYear = code % 100;
-    return `${startYear}-${String(endYear).padStart(2, '0')}`;
-}
-
-/**
  * Formats a UTC ISO timestamp as a short, human-readable "time
  * since" string: "À l'instant", "Il y a 5 min", "Il y a 2 h",
  * "Il y a 3 j". Falls back to a full date when the value is more
@@ -297,12 +297,92 @@ export default function AdminPage() {
     const [exportingRosters, setExportingRosters] = useState(false);
     const [exportRostersError, setExportRostersError] = useState<string | null>(null);
 
-    // Protected contracts section state.
-    const [protectedContracts, setProtectedContracts] = useState<
-        ProtectedPlayerContract[]
+    // --- Protected salaries section state (per-contract locks) ---
+
+    const [protectedSalaries, setProtectedSalaries] = useState<
+        ProtectedSalaryRow[]
     >([]);
-    const [protectedLoading, setProtectedLoading] = useState(false);
-    const [protectedError, setProtectedError] = useState<string | null>(null);
+    const [protectedSalariesLoading, setProtectedSalariesLoading] =
+        useState(false);
+    const [protectedSalariesError, setProtectedSalariesError] =
+        useState<string | null>(null);
+    const [protectedSalariesSuccess, setProtectedSalariesSuccess] =
+        useState<string | null>(null);
+    const [protectedSalariesBusy, setProtectedSalariesBusy] =
+        useState(false);
+
+    // Search + contracts form for adding a new protected salary.
+    const [newProtectedSearch, setNewProtectedSearch] = useState('');
+    const [newProtectedSearchResults, setNewProtectedSearchResults] =
+        useState<PlayerSearchResult[]>([]);
+    const [newProtectedSearching, setNewProtectedSearching] = useState(false);
+    const [newProtectedSelectedPlayer, setNewProtectedSelectedPlayer] =
+        useState<PlayerSearchResult | null>(null);
+    const [newProtectedContracts, setNewProtectedContracts] = useState<
+        PlayerContractRow[]
+    >([]);
+    const [newProtectedContractsLoading, setNewProtectedContractsLoading] =
+        useState(false);
+    const [newProtectedSelectedContractId, setNewProtectedSelectedContractId] =
+        useState<number | null>(null);
+    const [newProtectedSalaryInput, setNewProtectedSalaryInput] =
+        useState('');
+    const [newProtectedNoteInput, setNewProtectedNoteInput] = useState('');
+
+    // Inline edit state for the list: which contract row is being
+    // edited and what the current draft values are.
+    const [editingProtectedContractId, setEditingProtectedContractId] =
+        useState<number | null>(null);
+    const [editingProtectedSalaryValue, setEditingProtectedSalaryValue] =
+        useState('');
+    const [editingProtectedNoteValue, setEditingProtectedNoteValue] =
+        useState('');
+
+    // --- Manual contracts section state ---
+
+    const [manualPlayers, setManualPlayers] = useState<
+        ManualContractPlayerRow[]
+    >([]);
+    const [manualPlayersLoading, setManualPlayersLoading] = useState(false);
+
+    const [manualError, setManualError] = useState<string | null>(null);
+    const [manualSuccess, setManualSuccess] = useState<string | null>(null);
+    const [manualBusy, setManualBusy] = useState(false);
+
+    // Search for a player to manage manually.
+    const [manualSearch, setManualSearch] = useState('');
+    const [manualSearchResults, setManualSearchResults] = useState<
+        PlayerSearchResult[]
+    >([]);
+    const [manualSearching, setManualSearching] = useState(false);
+
+    // Currently selected player (either from search or from the list).
+    const [manualSelectedPlayer, setManualSelectedPlayer] = useState<{
+        nhlPlayerId: number;
+        firstName: string;
+        lastName: string;
+        teamAbbreviation: string | null;
+        skipCapFreezeSync: boolean;
+    } | null>(null);
+
+    // The selected player's contracts.
+    const [manualContracts, setManualContracts] = useState<
+        PlayerContractRow[]
+    >([]);
+    const [manualContractsLoading, setManualContractsLoading] =
+        useState(false);
+
+    // "Add new contract" form state.
+    const [manualNewStartYear, setManualNewStartYear] = useState('');
+    const [manualNewEndYear, setManualNewEndYear] = useState('');
+    const [manualNewSalary, setManualNewSalary] = useState('');
+
+    // Which existing contract row is being edited inline.
+    const [manualEditingContractId, setManualEditingContractId] =
+        useState<number | null>(null);
+    const [manualEditingStartYear, setManualEditingStartYear] = useState('');
+    const [manualEditingEndYear, setManualEditingEndYear] = useState('');
+    const [manualEditingSalary, setManualEditingSalary] = useState('');
 
     // System event logs section state.
     const [eventLogs, setEventLogs] = useState<SystemEventLog[]>([]);
@@ -439,10 +519,94 @@ export default function AdminPage() {
         void loadUsers();
     }, []);
 
-    // Load protected contracts once on mount.
+    // Load protected salaries once on mount.
     useEffect(() => {
-        void loadProtectedContracts();
+        void loadProtectedSalaries();
     }, []);
+
+    // Load manual-contract players once on mount.
+    useEffect(() => {
+        void loadManualPlayers();
+    }, []);
+
+    // Debounced player search for the manual-contracts section.
+    useEffect(() => {
+        const text = manualSearch.trim();
+
+        if (text.length < MIN_SEARCH_LENGTH) {
+            setManualSearchResults([]);
+            setManualSearching(false);
+            return;
+        }
+
+        setManualSearching(true);
+
+        let cancelled = false;
+
+        const timer = setTimeout(() => {
+            searchPlayers(text)
+                .then((data) => {
+                    if (!cancelled) {
+                        setManualSearchResults(data);
+                    }
+                })
+                .catch(() => {
+                    if (!cancelled) {
+                        setManualSearchResults([]);
+                    }
+                })
+                .finally(() => {
+                    if (!cancelled) {
+                        setManualSearching(false);
+                    }
+                });
+        }, SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [manualSearch]);
+
+    // Debounced player search for the "add protected salary" form.
+    // Same 300 ms cadence used by the main roster search above.
+    useEffect(() => {
+        const text = newProtectedSearch.trim();
+
+        if (text.length < MIN_SEARCH_LENGTH || newProtectedSelectedPlayer) {
+            setNewProtectedSearchResults([]);
+            setNewProtectedSearching(false);
+            return;
+        }
+
+        setNewProtectedSearching(true);
+
+        let cancelled = false;
+
+        const timer = setTimeout(() => {
+            searchPlayers(text)
+                .then((data) => {
+                    if (!cancelled) {
+                        setNewProtectedSearchResults(data);
+                    }
+                })
+                .catch(() => {
+                    if (!cancelled) {
+                        setNewProtectedSearchResults([]);
+                    }
+                })
+                .finally(() => {
+                    if (!cancelled) {
+                        setNewProtectedSearching(false);
+                    }
+                });
+        }, SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [newProtectedSearch, newProtectedSelectedPlayer]);
 
     // Load system event logs once on mount.
     useEffect(() => {
@@ -962,25 +1126,510 @@ export default function AdminPage() {
         }
     }
 
-    async function loadProtectedContracts() {
-        setProtectedLoading(true);
-        setProtectedError(null);
+    async function loadProtectedSalaries() {
+        setProtectedSalariesLoading(true);
+        setProtectedSalariesError(null);
 
         try {
-            const data = await getProtectedContracts();
-
-            // Only keep the still-active locks. A lock whose last
-            // season is behind the current one is historical and
-            // would only confuse the commissioner.
-            setProtectedContracts(
-                data.protectedContracts.filter((c) => c.isActive),
-            );
+            const data = await getProtectedSalaries();
+            setProtectedSalaries(data);
         } catch (err) {
-            setProtectedError(
+            setProtectedSalariesError(
                 err instanceof Error ? err.message : 'Erreur inconnue.',
             );
         } finally {
-            setProtectedLoading(false);
+            setProtectedSalariesLoading(false);
+        }
+    }
+
+    function resetProtectedSalaryForm() {
+        setNewProtectedSearch('');
+        setNewProtectedSearchResults([]);
+        setNewProtectedSelectedPlayer(null);
+        setNewProtectedContracts([]);
+        setNewProtectedSelectedContractId(null);
+        setNewProtectedSalaryInput('');
+        setNewProtectedNoteInput('');
+    }
+
+    /**
+     * Parses the salary input the same way the marketplace's criteria
+     * parser does: a value under 1000 is treated as millions and
+     * multiplied by 1 000 000; anything larger is treated as raw
+     * dollars. So "8.5" -> 8 500 000 and "8500000" -> 8 500 000.
+     */
+    function parseProtectedSalaryInput(raw: string): number | null {
+        const trimmed = raw.trim();
+        if (trimmed === '') return null;
+
+        const n = Number(trimmed);
+        if (!Number.isFinite(n) || n < 0) return null;
+
+        return n < 1000 ? Math.round(n * 1_000_000) : Math.round(n);
+    }
+
+    function formatSeasonRange(
+        startSeason: number,
+        endSeason: number,
+    ): string {
+        const startYear = Math.floor(startSeason / 10000);
+        const endYear = endSeason % 100;
+        return `${startYear}-${String(endYear).padStart(2, '0')}`;
+    }
+
+    async function loadPlayerContractsForAdmin(
+        nhlPlayerId: number,
+    ): Promise<void> {
+        setNewProtectedContractsLoading(true);
+        setNewProtectedContracts([]);
+        setNewProtectedSelectedContractId(null);
+
+        try {
+            const contracts = await getPlayerContracts(nhlPlayerId);
+            setNewProtectedContracts(contracts);
+        } catch (err) {
+            setProtectedSalariesError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setNewProtectedContractsLoading(false);
+        }
+    }
+
+    async function handleAddProtectedSalary() {
+        if (newProtectedSelectedContractId == null) {
+            setProtectedSalariesError('Choisissez un contrat à protéger.');
+            return;
+        }
+
+        const salary = parseProtectedSalaryInput(newProtectedSalaryInput);
+
+        if (salary == null) {
+            setProtectedSalariesError(
+                'Salaire invalide. Entrez un nombre, ex: 10 ou 10000000.',
+            );
+            return;
+        }
+
+        setProtectedSalariesBusy(true);
+        setProtectedSalariesError(null);
+        setProtectedSalariesSuccess(null);
+
+        try {
+            await upsertProtectedSalary(
+                newProtectedSelectedContractId,
+                salary,
+                newProtectedNoteInput.trim() || null,
+            );
+
+            setProtectedSalariesSuccess('Salaire protégé.');
+
+            resetProtectedSalaryForm();
+            await loadProtectedSalaries();
+        } catch (err) {
+            setProtectedSalariesError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setProtectedSalariesBusy(false);
+        }
+    }
+
+    async function handleSaveProtectedSalary(playerContractId: number) {
+        const salary = parseProtectedSalaryInput(
+            editingProtectedSalaryValue,
+        );
+
+        if (salary == null) {
+            setProtectedSalariesError('Salaire invalide.');
+            return;
+        }
+
+        setProtectedSalariesBusy(true);
+        setProtectedSalariesError(null);
+        setProtectedSalariesSuccess(null);
+
+        try {
+            await upsertProtectedSalary(
+                playerContractId,
+                salary,
+                editingProtectedNoteValue.trim() || null,
+            );
+
+            setProtectedSalariesSuccess('Salaire mis à jour.');
+            setEditingProtectedContractId(null);
+            setEditingProtectedSalaryValue('');
+            setEditingProtectedNoteValue('');
+            await loadProtectedSalaries();
+        } catch (err) {
+            setProtectedSalariesError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setProtectedSalariesBusy(false);
+        }
+    }
+
+    async function handleDeleteProtectedSalary(
+        playerContractId: number,
+        playerName: string,
+        startSeason: number,
+        endSeason: number,
+    ) {
+        if (
+            !window.confirm(
+                `Retirer la protection du contrat de ${playerName} ` +
+                `(${formatSeasonRange(startSeason, endSeason)}) ? ` +
+                'Le prochain sync CapFreeze écrasera la valeur actuelle.',
+            )
+        ) {
+            return;
+        }
+
+        setProtectedSalariesBusy(true);
+        setProtectedSalariesError(null);
+        setProtectedSalariesSuccess(null);
+
+        try {
+            await deleteProtectedSalary(playerContractId);
+            setProtectedSalariesSuccess('Protection retirée.');
+            await loadProtectedSalaries();
+        } catch (err) {
+            setProtectedSalariesError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setProtectedSalariesBusy(false);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Manual contracts section
+    // ---------------------------------------------------------------
+
+    async function loadManualPlayers() {
+        setManualPlayersLoading(true);
+
+        try {
+            const data = await getManualContractPlayers();
+            setManualPlayers(data);
+        } catch {
+            // Non-fatal: the section will just show an empty list.
+        } finally {
+            setManualPlayersLoading(false);
+        }
+    }
+
+    /**
+     * Parses a 4-digit year input like "2026" into a season code like
+     * 20262027. Also accepts a full 8-digit code like "20262027" as
+     * an alternative. Returns null when the value is not recognized.
+     */
+    function parseYearToSeason(raw: string): number | null {
+        const t = raw.trim();
+        if (t === '') return null;
+
+        const n = Number(t);
+        if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
+
+        // Full 8-digit season code, e.g. 20262027. Sanity-check the
+        // second half: it must equal startYear + 1.
+        if (n >= 10000000) {
+            const startYear = Math.floor(n / 10000);
+            const endYear = n % 10000;
+            if (endYear !== startYear + 1) return null;
+            return n;
+        }
+
+        // 4-digit year, e.g. 2026 -> 20262027.
+        if (n >= 1900 && n <= 2200) {
+            return n * 10000 + (n + 1);
+        }
+
+        return null;
+    }
+
+    async function selectManualPlayer(nhlPlayerId: number) {
+        setManualError(null);
+        setManualSuccess(null);
+        setManualSearch('');
+        setManualSearchResults([]);
+
+        // Find the player's identity from the current list of manual
+        // players, or from the search results if not already flagged.
+        const fromList = manualPlayers.find(
+            (p) => p.nhlPlayerId === nhlPlayerId,
+        );
+
+        if (fromList) {
+            setManualSelectedPlayer({
+                nhlPlayerId: fromList.nhlPlayerId,
+                firstName: fromList.firstName,
+                lastName: fromList.lastName,
+                teamAbbreviation: fromList.teamAbbreviation,
+                skipCapFreezeSync: true,
+            });
+        }
+
+        setManualContractsLoading(true);
+        setManualEditingContractId(null);
+
+        try {
+            const contracts = await getPlayerContracts(nhlPlayerId);
+            setManualContracts(contracts);
+        } catch (err) {
+            setManualError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+            setManualContracts([]);
+        } finally {
+            setManualContractsLoading(false);
+        }
+    }
+
+    function selectManualPlayerFromSearch(player: PlayerSearchResult) {
+        setManualSelectedPlayer({
+            nhlPlayerId: player.nhlPlayerId,
+            firstName: player.firstName,
+            lastName: player.lastName,
+            teamAbbreviation: player.nhlTeamAbbreviation,
+            skipCapFreezeSync: manualPlayers.some(
+                (p) => p.nhlPlayerId === player.nhlPlayerId,
+            ),
+        });
+
+        setManualSearch('');
+        setManualSearchResults([]);
+        setManualError(null);
+        setManualSuccess(null);
+        setManualEditingContractId(null);
+
+        setManualContractsLoading(true);
+
+        getPlayerContracts(player.nhlPlayerId)
+            .then((data) => {
+                setManualContracts(data);
+            })
+            .catch((err) => {
+                setManualError(
+                    err instanceof Error ? err.message : 'Erreur inconnue.',
+                );
+                setManualContracts([]);
+            })
+            .finally(() => {
+                setManualContractsLoading(false);
+            });
+    }
+
+    async function handleToggleManualSkip() {
+        if (!manualSelectedPlayer) return;
+
+        const next = !manualSelectedPlayer.skipCapFreezeSync;
+
+        setManualBusy(true);
+        setManualError(null);
+        setManualSuccess(null);
+
+        try {
+            await setPlayerSkipCapFreeze(
+                manualSelectedPlayer.nhlPlayerId,
+                next,
+            );
+
+            setManualSelectedPlayer({
+                ...manualSelectedPlayer,
+                skipCapFreezeSync: next,
+            });
+
+            setManualSuccess(
+                next
+                    ? 'Synchronisation CapFreeze désactivée pour ce joueur.'
+                    : 'Synchronisation CapFreeze réactivée. Le prochain sync écrasera les valeurs manuelles.',
+            );
+
+            await loadManualPlayers();
+        } catch (err) {
+            setManualError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setManualBusy(false);
+        }
+    }
+
+    function resetManualAddForm() {
+        setManualNewStartYear('');
+        setManualNewEndYear('');
+        setManualNewSalary('');
+    }
+
+    async function handleAddManualContract() {
+        if (!manualSelectedPlayer) return;
+
+        const startSeason = parseYearToSeason(manualNewStartYear);
+        const endSeason = parseYearToSeason(manualNewEndYear);
+        const salary = parseProtectedSalaryInput(manualNewSalary);
+
+        if (startSeason == null) {
+            setManualError(
+                "Saison de début invalide. Exemple : 2026.",
+            );
+            return;
+        }
+
+        if (endSeason == null) {
+            setManualError(
+                "Saison de fin invalide. Exemple : 2031.",
+            );
+            return;
+        }
+
+        if (endSeason < startSeason) {
+            setManualError(
+                'La saison de fin doit être après la saison de début.',
+            );
+            return;
+        }
+
+        if (salary == null) {
+            setManualError(
+                'Salaire invalide. Entrez un nombre, ex: 11.6 ou 11600000.',
+            );
+            return;
+        }
+
+        setManualBusy(true);
+        setManualError(null);
+        setManualSuccess(null);
+
+        try {
+            await createManualContract({
+                nhlPlayerId: manualSelectedPlayer.nhlPlayerId,
+                startSeason,
+                endSeason,
+                salary,
+            });
+
+            setManualSuccess('Contrat créé.');
+            resetManualAddForm();
+
+            const contracts = await getPlayerContracts(
+                manualSelectedPlayer.nhlPlayerId,
+            );
+            setManualContracts(contracts);
+            await loadManualPlayers();
+        } catch (err) {
+            setManualError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setManualBusy(false);
+        }
+    }
+
+    function beginEditManualContract(row: PlayerContractRow) {
+        setManualEditingContractId(row.playerContractId);
+        setManualEditingStartYear(
+            String(Math.floor(row.startSeason / 10000)),
+        );
+        setManualEditingEndYear(
+            String(Math.floor(row.endSeason / 10000)),
+        );
+        setManualEditingSalary(
+            (row.salary / 1_000_000)
+                .toFixed(2)
+                .replace(/\.?0+$/, ''),
+        );
+    }
+
+    async function handleSaveManualContract() {
+        if (manualEditingContractId == null) return;
+
+        const startSeason = parseYearToSeason(manualEditingStartYear);
+        const endSeason = parseYearToSeason(manualEditingEndYear);
+        const salary = parseProtectedSalaryInput(manualEditingSalary);
+
+        if (startSeason == null || endSeason == null) {
+            setManualError('Saisons invalides.');
+            return;
+        }
+
+        if (endSeason < startSeason) {
+            setManualError(
+                'La saison de fin doit être après la saison de début.',
+            );
+            return;
+        }
+
+        if (salary == null) {
+            setManualError('Salaire invalide.');
+            return;
+        }
+
+        setManualBusy(true);
+        setManualError(null);
+        setManualSuccess(null);
+
+        try {
+            await updateManualContract(manualEditingContractId, {
+                startSeason,
+                endSeason,
+                salary,
+            });
+
+            setManualSuccess('Contrat mis à jour.');
+            setManualEditingContractId(null);
+
+            if (manualSelectedPlayer) {
+                const contracts = await getPlayerContracts(
+                    manualSelectedPlayer.nhlPlayerId,
+                );
+                setManualContracts(contracts);
+                await loadManualPlayers();
+            }
+        } catch (err) {
+            setManualError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setManualBusy(false);
+        }
+    }
+
+    async function handleDeleteManualContract(
+        playerContractId: number,
+        startSeason: number,
+        endSeason: number,
+    ) {
+        if (
+            !window.confirm(
+                `Supprimer le contrat ${formatSeasonRange(startSeason, endSeason)} ?`,
+            )
+        ) {
+            return;
+        }
+
+        setManualBusy(true);
+        setManualError(null);
+        setManualSuccess(null);
+
+        try {
+            await deleteManualContract(playerContractId);
+            setManualSuccess('Contrat supprimé.');
+
+            if (manualSelectedPlayer) {
+                const contracts = await getPlayerContracts(
+                    manualSelectedPlayer.nhlPlayerId,
+                );
+                setManualContracts(contracts);
+                await loadManualPlayers();
+            }
+        } catch (err) {
+            setManualError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setManualBusy(false);
         }
     }
 
@@ -2637,81 +3286,820 @@ export default function AdminPage() {
             </div>
 
             {/* ============================================================
-                Contrats verrouillés
+                Salaires protégés (per-contract)
                 ============================================================ */}
-            <div className='max-w-2xl space-y-3'>
+            <div className='max-w-3xl space-y-3'>
                 <h3 className='text-lg font-semibold text-foreground'>
-                    Contrats verrouillés
+                    Salaires protégés
                 </h3>
 
                 <p className='text-sm text-muted-foreground'>
-                    Joueurs dont le contrat est manuellement figé et ne
-                    sera jamais écrasé par la synchronisation CapFreeze.
-                    Les contrats dont la dernière saison est passée
-                    disparaissent automatiquement de cette liste.
+                    Salaires réels (avant rétention) qui ne seront jamais
+                    écrasés par CapFreeze. Utile quand un joueur a été
+                    échangé avec une retenue salariale : CapFreeze affiche
+                    le montant après retenue, mais pour notre ligue on
+                    veut la valeur totale du contrat.{' '}
+                    <span className='font-semibold text-foreground'>
+                        Seul le salaire du contrat sélectionné est verrouillé
+                    </span>
+                    ; les années et les autres contrats continuent d'être
+                    mis à jour normalement. La protection disparaît
+                    automatiquement quand le contrat se termine et que
+                    CapFreeze retourne un nouveau contrat.
                 </p>
 
-                {protectedError && (
+                {protectedSalariesError && (
                     <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
-                        {protectedError}
+                        {protectedSalariesError}
                     </p>
                 )}
 
-                {protectedLoading && (
+                {protectedSalariesSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {protectedSalariesSuccess}
+                    </p>
+                )}
+
+                {/* Add form */}
+                <div className='space-y-3 rounded-lg border border-border bg-card p-3'>
+                    <h4 className='text-sm font-semibold uppercase tracking-wide text-muted-foreground'>
+                        Ajouter un salaire protégé
+                    </h4>
+
+                    {/* Player search */}
+                    <div className='relative'>
+                        <input
+                            type='text'
+                            value={newProtectedSearch}
+                            autoComplete='off'
+                            disabled={newProtectedSelectedPlayer != null}
+                            onChange={(event) => {
+                                setNewProtectedSearch(event.target.value);
+                                setNewProtectedSelectedPlayer(null);
+                                setNewProtectedContracts([]);
+                                setNewProtectedSelectedContractId(null);
+                            }}
+                            placeholder='Rechercher un joueur (min. 2 lettres)'
+                            className={selectClass}
+                        />
+
+                        {newProtectedSearchResults.length > 0 && (
+                            <div className='absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg'>
+                                {newProtectedSearchResults.map((player) => (
+                                    <button
+                                        key={player.playerId}
+                                        type='button'
+                                        onClick={() => {
+                                            setNewProtectedSelectedPlayer(
+                                                player,
+                                            );
+                                            setNewProtectedSearchResults([]);
+                                            void loadPlayerContractsForAdmin(
+                                                player.nhlPlayerId,
+                                            );
+                                        }}
+                                        className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                    >
+                                        <span className='text-foreground'>
+                                            {player.firstName}{' '}
+                                            {player.lastName}
+                                        </span>
+                                        <span className='text-xs text-muted-foreground'>
+                                            {player.nhlTeamAbbreviation} ·{' '}
+                                            {player.position}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {newProtectedSearching &&
+                        !newProtectedSelectedPlayer && (
+                            <p className='text-xs text-muted-foreground'>
+                                Recherche...
+                            </p>
+                        )}
+
+                    {newProtectedSelectedPlayer && (
+                        <div className='flex items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm'>
+                            <span className='text-foreground'>
+                                {newProtectedSelectedPlayer.firstName}{' '}
+                                {newProtectedSelectedPlayer.lastName} ·{' '}
+                                {newProtectedSelectedPlayer.nhlTeamAbbreviation} ·{' '}
+                                {newProtectedSelectedPlayer.position}
+                            </span>
+                            <button
+                                type='button'
+                                onClick={resetProtectedSalaryForm}
+                                className='cursor-pointer rounded px-2 py-0.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground'
+                            >
+                                Changer
+                            </button>
+                        </div>
+                    )}
+
+                    {newProtectedSelectedPlayer &&
+                        newProtectedContractsLoading && (
+                            <p className='text-xs text-muted-foreground'>
+                                Chargement des contrats...
+                            </p>
+                        )}
+
+                    {newProtectedSelectedPlayer &&
+                        !newProtectedContractsLoading &&
+                        newProtectedContracts.length === 0 && (
+                            <p className='text-xs text-muted-foreground'>
+                                Aucun contrat en base pour ce joueur.
+                            </p>
+                        )}
+
+                    {newProtectedContracts.length > 0 && (
+                        <div className='space-y-1'>
+                            <p className='text-xs font-medium text-muted-foreground'>
+                                Choisir le contrat à protéger :
+                            </p>
+                            <ul className='space-y-1'>
+                                {newProtectedContracts.map((c) => {
+                                    const selected =
+                                        newProtectedSelectedContractId ===
+                                        c.playerContractId;
+
+                                    return (
+                                        <li key={c.playerContractId}>
+                                            <button
+                                                type='button'
+                                                onClick={() => {
+                                                    setNewProtectedSelectedContractId(
+                                                        c.playerContractId,
+                                                    );
+                                                    setNewProtectedSalaryInput(
+                                                        c.protectedSalary != null
+                                                            ? (c.protectedSalary / 1_000_000)
+                                                                .toFixed(2)
+                                                                .replace(/\.?0+$/, '')
+                                                            : (c.salary / 1_000_000)
+                                                                .toFixed(2)
+                                                                .replace(/\.?0+$/, ''),
+                                                    );
+                                                    setNewProtectedNoteInput(
+                                                        c.protectionNote ?? '',
+                                                    );
+                                                }}
+                                                className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-left text-sm ${selected
+                                                        ? 'border-[#00A8FF] bg-[#00A8FF]/10'
+                                                        : 'border-border hover:bg-secondary'
+                                                    }`}
+                                            >
+                                                <span className='text-foreground'>
+                                                    {formatSeasonRange(
+                                                        c.startSeason,
+                                                        c.endSeason,
+                                                    )}
+                                                </span>
+                                                <span className='text-xs text-muted-foreground'>
+                                                    CapFreeze :{' '}
+                                                    {(c.salary / 1_000_000)
+                                                        .toFixed(2)
+                                                        .replace(/\.?0+$/, '')}
+                                                    M
+                                                    {c.protectedSalary !=
+                                                        null && (
+                                                            <span className='ml-2 font-semibold text-emerald-400'>
+                                                                · Protégé :{' '}
+                                                                {(
+                                                                    c.protectedSalary /
+                                                                    1_000_000
+                                                                )
+                                                                    .toFixed(2)
+                                                                    .replace(
+                                                                        /\.?0+$/,
+                                                                        '',
+                                                                    )}
+                                                                M
+                                                            </span>
+                                                        )}
+                                                </span>
+                                            </button>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        </div>
+                    )}
+
+                    {newProtectedSelectedContractId != null && (
+                        <>
+                            <div>
+                                <label className='text-xs font-medium text-muted-foreground'>
+                                    Salaire réel (ex: 10 ou 10000000)
+                                </label>
+                                <input
+                                    type='text'
+                                    inputMode='decimal'
+                                    value={newProtectedSalaryInput}
+                                    onChange={(event) =>
+                                        setNewProtectedSalaryInput(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className={`mt-1 ${selectClass}`}
+                                />
+                            </div>
+
+                            <div>
+                                <label className='text-xs font-medium text-muted-foreground'>
+                                    Note (optionnel, ex: 25% retenu)
+                                </label>
+                                <input
+                                    type='text'
+                                    value={newProtectedNoteInput}
+                                    maxLength={500}
+                                    onChange={(event) =>
+                                        setNewProtectedNoteInput(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className={`mt-1 ${selectClass}`}
+                                />
+                            </div>
+
+                            <div className='flex justify-end'>
+                                <button
+                                    type='button'
+                                    onClick={() =>
+                                        void handleAddProtectedSalary()
+                                    }
+                                    disabled={
+                                        protectedSalariesBusy ||
+                                        newProtectedSalaryInput.trim() === ''
+                                    }
+                                    className={primaryButtonClass}
+                                >
+                                    {protectedSalariesBusy
+                                        ? 'Traitement...'
+                                        : 'Protéger ce contrat'}
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                {/* List */}
+                {protectedSalariesLoading && (
                     <p className='text-sm text-muted-foreground'>
                         Chargement...
                     </p>
                 )}
 
-                {!protectedLoading &&
-                    protectedContracts.length === 0 &&
-                    !protectedError && (
+                {!protectedSalariesLoading &&
+                    protectedSalaries.length === 0 &&
+                    !protectedSalariesError && (
                         <p className='text-sm text-muted-foreground'>
-                            Aucun contrat verrouillé actif.
+                            Aucun salaire protégé pour le moment.
                         </p>
                     )}
 
-                {!protectedLoading && protectedContracts.length > 0 && (
-                    <ul className='space-y-2'>
-                        {protectedContracts.map((pc) => (
-                            <li
-                                key={pc.nhlPlayerId}
-                                className='rounded-lg border border-border bg-card px-3 py-2 text-sm'
-                            >
-                                <div className='flex items-baseline justify-between gap-2'>
-                                    <span className='font-medium text-foreground'>
-                                        {pc.playerName}
+                {!protectedSalariesLoading &&
+                    protectedSalaries.length > 0 && (
+                        <ul className='space-y-2'>
+                            {protectedSalaries.map((row) => {
+                                const isEditing =
+                                    editingProtectedContractId ===
+                                    row.playerContractId;
+
+                                return (
+                                    <li
+                                        key={row.playerContractId}
+                                        className='rounded-lg border border-border bg-card px-3 py-2 text-sm'
+                                    >
+                                        <div className='flex items-center justify-between gap-2'>
+                                            <div className='min-w-0 flex-1'>
+                                                <div className='flex items-baseline gap-2'>
+                                                    <span className='truncate font-medium text-foreground'>
+                                                        {row.playerName}
+                                                    </span>
+                                                    {row.teamAbbreviation && (
+                                                        <span className='shrink-0 text-xs text-muted-foreground'>
+                                                            {row.teamAbbreviation}
+                                                        </span>
+                                                    )}
+                                                    <span className='shrink-0 text-xs text-muted-foreground'>
+                                                        {formatSeasonRange(
+                                                            row.startSeason,
+                                                            row.endSeason,
+                                                        )}
+                                                    </span>
+                                                </div>
+                                                {row.protectionNote && (
+                                                    <p className='mt-0.5 text-xs italic text-muted-foreground'>
+                                                        {row.protectionNote}
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            {isEditing ? (
+                                                <div className='flex shrink-0 flex-col items-end gap-1'>
+                                                    <input
+                                                        type='text'
+                                                        inputMode='decimal'
+                                                        value={editingProtectedSalaryValue}
+                                                        onChange={(event) =>
+                                                            setEditingProtectedSalaryValue(
+                                                                event.target.value,
+                                                            )
+                                                        }
+                                                        className='w-32 rounded border border-border bg-background px-2 py-1 text-xs'
+                                                    />
+                                                    <input
+                                                        type='text'
+                                                        value={editingProtectedNoteValue}
+                                                        maxLength={500}
+                                                        placeholder='Note (optionnel)'
+                                                        onChange={(event) =>
+                                                            setEditingProtectedNoteValue(
+                                                                event.target.value,
+                                                            )
+                                                        }
+                                                        className='w-48 rounded border border-border bg-background px-2 py-1 text-xs'
+                                                    />
+                                                    <div className='flex gap-2'>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() =>
+                                                                void handleSaveProtectedSalary(
+                                                                    row.playerContractId,
+                                                                )
+                                                            }
+                                                            disabled={protectedSalariesBusy}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            Enregistrer
+                                                        </button>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() => {
+                                                                setEditingProtectedContractId(
+                                                                    null,
+                                                                );
+                                                                setEditingProtectedSalaryValue(
+                                                                    '',
+                                                                );
+                                                                setEditingProtectedNoteValue(
+                                                                    '',
+                                                                );
+                                                            }}
+                                                            disabled={protectedSalariesBusy}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            Annuler
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className='flex shrink-0 items-center gap-2'>
+                                                    <span className='text-sm font-semibold text-emerald-400'>
+                                                        {(
+                                                            (row.protectedSalary ??
+                                                                row.salary) /
+                                                            1_000_000
+                                                        )
+                                                            .toFixed(2)
+                                                            .replace(/\.?0+$/, '')}
+                                                        M
+                                                    </span>
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            setEditingProtectedContractId(
+                                                                row.playerContractId,
+                                                            );
+                                                            setEditingProtectedSalaryValue(
+                                                                (
+                                                                    (row.protectedSalary ??
+                                                                        row.salary) /
+                                                                    1_000_000
+                                                                )
+                                                                    .toFixed(2)
+                                                                    .replace(
+                                                                        /\.?0+$/,
+                                                                        '',
+                                                                    ),
+                                                            );
+                                                            setEditingProtectedNoteValue(
+                                                                row.protectionNote ??
+                                                                '',
+                                                            );
+                                                        }}
+                                                        disabled={protectedSalariesBusy}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                    >
+                                                        Modifier
+                                                    </button>
+                                                    <button
+                                                        type='button'
+                                                        onClick={() =>
+                                                            void handleDeleteProtectedSalary(
+                                                                row.playerContractId,
+                                                                row.playerName,
+                                                                row.startSeason,
+                                                                row.endSeason,
+                                                            )
+                                                        }
+                                                        disabled={protectedSalariesBusy}
+                                                        className='cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50'
+                                                    >
+                                                        Retirer
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+            </div>
+
+            {/* ============================================================
+                Contrats manuels
+                ============================================================ */}
+            <div className='max-w-3xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Contrats manuels
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Joueurs dont le contrat est géré manuellement et
+                    qui sont complètement ignorés par la synchronisation
+                    CapFreeze (contrats, années, statut). Utile quand
+                    CapFreeze ne peut pas distinguer deux joueurs du
+                    même nom — par exemple les deux Elias Pettersson.{' '}
+                    <span className='font-semibold text-foreground'>
+                        Tant que la synchronisation est désactivée pour
+                        un joueur, ses contrats ne seront jamais écrasés.
+                    </span>{' '}
+                    Réactivez la synchronisation si vous voulez que
+                    CapFreeze reprenne le contrôle.
+                </p>
+
+                {manualError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {manualError}
+                    </p>
+                )}
+
+                {manualSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {manualSuccess}
+                    </p>
+                )}
+
+                {/* Player search */}
+                <div className='relative'>
+                    <input
+                        type='text'
+                        value={manualSearch}
+                        autoComplete='off'
+                        onChange={(event) =>
+                            setManualSearch(event.target.value)
+                        }
+                        placeholder='Rechercher un joueur (min. 2 lettres)'
+                        className={selectClass}
+                    />
+
+                    {manualSearchResults.length > 0 && (
+                        <div className='absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg'>
+                            {manualSearchResults.map((player) => (
+                                <button
+                                    key={player.playerId}
+                                    type='button'
+                                    onClick={() =>
+                                        selectManualPlayerFromSearch(player)
+                                    }
+                                    className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                >
+                                    <span className='text-foreground'>
+                                        {player.firstName}{' '}
+                                        {player.lastName}
                                     </span>
+                                    <span className='text-xs text-muted-foreground'>
+                                        {player.nhlTeamAbbreviation} ·{' '}
+                                        {player.position}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
 
-                                    {pc.teamAbbreviation && (
-                                        <span className='text-xs text-muted-foreground'>
-                                            {pc.teamAbbreviation}
-                                        </span>
-                                    )}
-                                </div>
+                {manualSearching && (
+                    <p className='text-xs text-muted-foreground'>
+                        Recherche...
+                    </p>
+                )}
 
-                                <ul className='mt-1 space-y-0.5 text-xs text-muted-foreground'>
-                                    {pc.contracts.map((c) => (
-                                        <li
-                                            key={`${pc.nhlPlayerId}-${c.startSeason}`}
-                                        >
-                                            {formatSeasonCode(c.startSeason)}{' '}
-                                            → {formatSeasonCode(c.endSeason)}
-                                            {' · '}
-                                            {(c.salary / 1_000_000)
-                                                .toFixed(2)
-                                                .replace(/\.?0+$/, '')}
-                                            M
-                                        </li>
-                                    ))}
-                                </ul>
+                {/* List of currently manual players (click to select) */}
+                {manualPlayers.length > 0 && (
+                    <div className='rounded-lg border border-border bg-card p-3'>
+                        <p className='mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+                            Joueurs gérés manuellement
+                        </p>
+                        <div className='flex flex-wrap gap-1'>
+                            {manualPlayers.map((p) => {
+                                const isSelected =
+                                    manualSelectedPlayer?.nhlPlayerId ===
+                                    p.nhlPlayerId;
 
-                                <p className='mt-1 text-[0.65rem] text-muted-foreground'>
-                                    Expire après {formatSeasonCode(pc.expiresAfterSeason)}
+                                return (
+                                    <button
+                                        key={p.nhlPlayerId}
+                                        type='button'
+                                        onClick={() =>
+                                            void selectManualPlayer(
+                                                p.nhlPlayerId,
+                                            )
+                                        }
+                                        className={`cursor-pointer rounded-full border px-2 py-0.5 text-xs transition-colors ${isSelected
+                                                ? 'border-[#00A8FF] bg-[#00A8FF]/15 text-white'
+                                                : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
+                                            }`}
+                                    >
+                                        {p.firstName} {p.lastName}
+                                        {p.teamAbbreviation && (
+                                            <span className='ml-1 opacity-70'>
+                                                · {p.teamAbbreviation}
+                                            </span>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {manualPlayersLoading && manualPlayers.length === 0 && (
+                    <p className='text-xs text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {/* Selected player panel */}
+                {manualSelectedPlayer && (
+                    <div className='space-y-3 rounded-lg border border-border bg-card p-3'>
+                        <div className='flex flex-wrap items-center justify-between gap-2'>
+                            <div>
+                                <p className='font-medium text-foreground'>
+                                    {manualSelectedPlayer.firstName}{' '}
+                                    {manualSelectedPlayer.lastName}
                                 </p>
-                            </li>
-                        ))}
-                    </ul>
+                                <p className='text-xs text-muted-foreground'>
+                                    {manualSelectedPlayer.teamAbbreviation ??
+                                        '—'}
+                                    {' · NhlPlayerId '}
+                                    {manualSelectedPlayer.nhlPlayerId}
+                                </p>
+                            </div>
+
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    void handleToggleManualSkip()
+                                }
+                                disabled={manualBusy}
+                                className={
+                                    manualSelectedPlayer.skipCapFreezeSync
+                                        ? 'cursor-pointer rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/20 disabled:opacity-50'
+                                        : 'cursor-pointer rounded-lg border border-border bg-transparent px-3 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary disabled:opacity-50'
+                                }
+                            >
+                                {manualSelectedPlayer.skipCapFreezeSync
+                                    ? '✓ Synchronisation désactivée'
+                                    : 'Synchronisation activée'}
+                            </button>
+                        </div>
+
+                        {/* Contracts list */}
+                        <div className='space-y-1'>
+                            <p className='text-xs font-medium text-muted-foreground'>
+                                Contrats :
+                            </p>
+
+                            {manualContractsLoading && (
+                                <p className='text-xs text-muted-foreground'>
+                                    Chargement des contrats...
+                                </p>
+                            )}
+
+                            {!manualContractsLoading &&
+                                manualContracts.length === 0 && (
+                                    <p className='text-xs text-muted-foreground'>
+                                        Aucun contrat en base pour ce joueur.
+                                    </p>
+                                )}
+
+                            {!manualContractsLoading &&
+                                manualContracts.map((row) => {
+                                    const isEditing =
+                                        manualEditingContractId ===
+                                        row.playerContractId;
+
+                                    return (
+                                        <div
+                                            key={row.playerContractId}
+                                            className='rounded-lg border border-border bg-background px-3 py-2 text-sm'
+                                        >
+                                            {isEditing ? (
+                                                <div className='space-y-2'>
+                                                    <div className='flex items-center gap-2'>
+                                                        <label className='text-xs text-muted-foreground'>
+                                                            Début
+                                                        </label>
+                                                        <input
+                                                            type='text'
+                                                            inputMode='numeric'
+                                                            value={manualEditingStartYear}
+                                                            onChange={(e) =>
+                                                                setManualEditingStartYear(
+                                                                    e.target
+                                                                        .value,
+                                                                )
+                                                            }
+                                                            className='w-20 rounded border border-border bg-card px-2 py-1 text-xs'
+                                                        />
+                                                        <label className='text-xs text-muted-foreground'>
+                                                            Fin
+                                                        </label>
+                                                        <input
+                                                            type='text'
+                                                            inputMode='numeric'
+                                                            value={manualEditingEndYear}
+                                                            onChange={(e) =>
+                                                                setManualEditingEndYear(
+                                                                    e.target
+                                                                        .value,
+                                                                )
+                                                            }
+                                                            className='w-20 rounded border border-border bg-card px-2 py-1 text-xs'
+                                                        />
+                                                        <label className='text-xs text-muted-foreground'>
+                                                            Salaire (M)
+                                                        </label>
+                                                        <input
+                                                            type='text'
+                                                            inputMode='decimal'
+                                                            value={manualEditingSalary}
+                                                            onChange={(e) =>
+                                                                setManualEditingSalary(
+                                                                    e.target
+                                                                        .value,
+                                                                )
+                                                            }
+                                                            className='w-24 rounded border border-border bg-card px-2 py-1 text-xs'
+                                                        />
+                                                    </div>
+                                                    <div className='flex gap-2'>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() =>
+                                                                void handleSaveManualContract()
+                                                            }
+                                                            disabled={manualBusy}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            Enregistrer
+                                                        </button>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() =>
+                                                                setManualEditingContractId(
+                                                                    null,
+                                                                )
+                                                            }
+                                                            disabled={manualBusy}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            Annuler
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className='flex flex-wrap items-center justify-between gap-2'>
+                                                    <span className='text-foreground'>
+                                                        {formatSeasonRange(
+                                                            row.startSeason,
+                                                            row.endSeason,
+                                                        )}
+                                                        {' · '}
+                                                        <span className='font-semibold text-emerald-400'>
+                                                            {(row.salary /
+                                                                1_000_000)
+                                                                .toFixed(2)
+                                                                .replace(
+                                                                    /\.?0+$/,
+                                                                    '',
+                                                                )}
+                                                            M
+                                                        </span>
+                                                    </span>
+                                                    <div className='flex gap-2'>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() =>
+                                                                beginEditManualContract(
+                                                                    row,
+                                                                )
+                                                            }
+                                                            disabled={manualBusy}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            Modifier
+                                                        </button>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() =>
+                                                                void handleDeleteManualContract(
+                                                                    row.playerContractId,
+                                                                    row.startSeason,
+                                                                    row.endSeason,
+                                                                )
+                                                            }
+                                                            disabled={manualBusy}
+                                                            className='cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50'
+                                                        >
+                                                            Supprimer
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                        </div>
+
+                        {/* Add new contract */}
+                        <div className='space-y-2 rounded-lg border border-dashed border-border bg-background/50 p-3'>
+                            <p className='text-xs font-medium text-muted-foreground'>
+                                Ajouter un contrat :
+                            </p>
+                            <div className='flex flex-wrap items-center gap-2'>
+                                <label className='text-xs text-muted-foreground'>
+                                    Début
+                                </label>
+                                <input
+                                    type='text'
+                                    inputMode='numeric'
+                                    value={manualNewStartYear}
+                                    onChange={(e) =>
+                                        setManualNewStartYear(e.target.value)
+                                    }
+                                    placeholder='2026'
+                                    className='w-20 rounded border border-border bg-card px-2 py-1 text-xs'
+                                />
+                                <label className='text-xs text-muted-foreground'>
+                                    Fin
+                                </label>
+                                <input
+                                    type='text'
+                                    inputMode='numeric'
+                                    value={manualNewEndYear}
+                                    onChange={(e) =>
+                                        setManualNewEndYear(e.target.value)
+                                    }
+                                    placeholder='2031'
+                                    className='w-20 rounded border border-border bg-card px-2 py-1 text-xs'
+                                />
+                                <label className='text-xs text-muted-foreground'>
+                                    Salaire (M)
+                                </label>
+                                <input
+                                    type='text'
+                                    inputMode='decimal'
+                                    value={manualNewSalary}
+                                    onChange={(e) =>
+                                        setManualNewSalary(e.target.value)
+                                    }
+                                    placeholder='11.6'
+                                    className='w-24 rounded border border-border bg-card px-2 py-1 text-xs'
+                                />
+                                <button
+                                    type='button'
+                                    onClick={() =>
+                                        void handleAddManualContract()
+                                    }
+                                    disabled={
+                                        manualBusy ||
+                                        manualNewStartYear.trim() === '' ||
+                                        manualNewEndYear.trim() === '' ||
+                                        manualNewSalary.trim() === ''
+                                    }
+                                    className='cursor-pointer rounded-lg bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50'
+                                >
+                                    {manualBusy ? '...' : 'Créer'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 )}
             </div>
 
