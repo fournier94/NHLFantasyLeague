@@ -128,7 +128,21 @@ namespace NhlFantasyLeague.api.Controllers
                                 s.Boxscore?.Clock?.TimeRemaining,
                             IsIntermission =
                                 s.Boxscore?.Clock?.InIntermission,
-                            HasBoxscore = s.Boxscore != null,
+                            // Same rule as GetByDate: any game that is
+                            // not FUT/PRE can be expanded. The
+                            // /{gameId}/boxscore endpoint falls back
+                            // to fetching from the NHL API if the
+                            // in-memory cache does not have one, so
+                            // a finished game is always clickable
+                            // regardless of whether the cache still
+                            // holds its boxscore.
+                            HasBoxscore =
+                                !string.Equals(
+                                    s.GameState, "FUT",
+                                    StringComparison.OrdinalIgnoreCase) &&
+                                !string.Equals(
+                                    s.GameState, "PRE",
+                                    StringComparison.OrdinalIgnoreCase),
                         },
                         teamLookup))
                     .ToList(),

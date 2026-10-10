@@ -138,7 +138,23 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// </summary>
         public bool? IsIntermission { get; set; }
 
-        /// <summary>True when a boxscore is cached for this game.</summary>
+        /// <summary>
+        /// True when this game can be expanded on the Game Day page.
+        ///
+        /// False only for FUT/PRE games, which have not started and
+        /// therefore have no boxscore to display. For LIVE, CRIT,
+        /// FINAL and OFF games this is always true — the frontend
+        /// uses it to allow the click, and the
+        /// GET /api/Games/{gameId}/boxscore endpoint fetches the
+        /// boxscore from the NHL API on demand if the in-memory
+        /// cache does not have one.
+        ///
+        /// Previously this meant "a boxscore is currently in the
+        /// in-memory cache for this game", which caused finished
+        /// games to become unclickable when the cache was cold
+        /// (e.g. after an API restart, or before the first live
+        /// tick of the day had fetched them).
+        /// </summary>
         public bool HasBoxscore { get; set; }
     }
 }
