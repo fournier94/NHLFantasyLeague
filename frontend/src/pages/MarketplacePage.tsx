@@ -1,10 +1,13 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import {
     acceptTradeOfferResponse,
     cancelTradeOffer,
+    cancelTradeOfferResponse,
     createTradeOffer,
+    rejectTradeOfferResponse,
     getTeamRoster,
     listReceivedResponses,
     listSentResponses,
@@ -15,6 +18,7 @@ import {
     type PlayerContractLine,
     type RespondToTradeOfferPick,
     type RosterEntry,
+    type SeasonStatLine,
     type TeamRoster,
     type TradeOffer,
     type TradeOfferResponse,
@@ -437,6 +441,24 @@ const OFFER_BLOOM_NEAR = 'rgba(0, 200, 255, 0.55)';
 const OFFER_BLOOM_FAR = 'rgba(0, 200, 255, 0.15)';
 
 /**
+ * Accepted-offer overrides for the contained-filament frame.
+ *
+ * Same two-layer build as the default cyan frame — a thick gold
+ * tube under a thin pale-gold filament with an inward bloom — with
+ * every color swapped from cyan to gold. Nothing extends past the
+ * card's own bounding box: no drop-shadow, no blur, all light
+ * stays inside the frame.
+ *
+ * Only the outer frame changes. The inner dividers, the ⇄ glyph,
+ * and the demand-side text keep their original palette, so the
+ * gold swap reads as a border-only cue.
+ */
+const ACCEPTED_TUBE_COLOR = '#FFC72C';
+const ACCEPTED_FILAMENT = 'rgba(255, 250, 220, 0.95)';
+const ACCEPTED_BLOOM_NEAR = 'rgba(255, 199, 44, 0.55)';
+const ACCEPTED_BLOOM_FAR = 'rgba(255, 199, 44, 0.15)';
+
+/**
  * Publish button neon. Same contained filament technique as the
  * offer card, applied to the button's own bounding box:
  *
@@ -823,6 +845,8 @@ function AddOfferPanel({
                         slotIndex: i,
                         positionGroup: s.positionGroup,
                         offeringPlayerId: s.offeringPlayerId,
+                        offeringPlayerNhlPlayerId:
+                            entry?.nhlPlayerId ?? null,
                         offeringPlayerFirstName:
                             entry?.firstName ?? null,
                         offeringPlayerLastName:
@@ -835,6 +859,10 @@ function AddOfferPanel({
                             entry?.currentContract ?? null,
                         offeringPlayerSecondContract:
                             entry?.secondContract ?? null,
+                        offeringPlayerCurrentSeasonStats:
+                            entry?.currentSeason ?? null,
+                        offeringPlayerLastSeasonStats:
+                            entry?.lastSeason ?? null,
                         demandMinContractYears: parseOptionalInt(
                             s.minContractYears,
                         ),
@@ -2178,6 +2206,7 @@ function responseToOfferShape(
             slotIndex: s.slotIndex,
             positionGroup: s.positionGroup,
             offeringPlayerId: s.respondingPlayerId,
+            offeringPlayerNhlPlayerId: s.respondingPlayerNhlPlayerId,
             offeringPlayerFirstName: s.respondingPlayerFirstName,
             offeringPlayerLastName: s.respondingPlayerLastName,
             offeringPlayerNhlTeam: s.respondingPlayerNhlTeam,
@@ -2186,6 +2215,10 @@ function responseToOfferShape(
                 s.respondingPlayerCurrentContract,
             offeringPlayerSecondContract:
                 s.respondingPlayerSecondContract,
+            offeringPlayerCurrentSeasonStats:
+                s.respondingPlayerCurrentSeasonStats,
+            offeringPlayerLastSeasonStats:
+                s.respondingPlayerLastSeasonStats,
             demandMinContractYears: s.demandMinContractYears,
             demandMaxSalary: s.demandMaxSalary,
             demandMaxAge: s.demandMaxAge,
@@ -2209,10 +2242,11 @@ function ReceivedOffersPanel({
     const [error, setError] = useState<string | null>(null);
 
     /**
-     * Id of the response currently being accepted, or null. Used to
-     * disable the "Accepter" button on that card only.
+     * Id of the response currently being acted on (accepted or
+     * refused), or null. Used to disable the buttons on that card
+     * only.
      */
-    const [acceptBusyId, setAcceptBusyId] = useState<number | null>(null);
+    const [busyId, setBusyId] = useState<number | null>(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -2233,7 +2267,7 @@ function ReceivedOffersPanel({
     }, [load, refreshTick]);
 
     async function handleAccept(responseId: number) {
-        setAcceptBusyId(responseId);
+        setBusyId(responseId);
         setError(null);
 
         try {
@@ -2244,7 +2278,33 @@ function ReceivedOffersPanel({
                 err instanceof Error ? err.message : 'Erreur inconnue.',
             );
         } finally {
-            setAcceptBusyId(null);
+            setBusyId(null);
+        }
+    }
+
+    async function handleReject(responseId: number) {
+        if (
+            !window.confirm(
+                'Refuser cette offre ? ' +
+                "L'annonce sera retirée du marché et l'autre " +
+                'gestionnaire ne la verra plus dans ses offres envoyées.',
+            )
+        ) {
+            return;
+        }
+
+        setBusyId(responseId);
+        setError(null);
+
+        try {
+            await rejectTradeOfferResponse(responseId);
+            await load();
+        } catch (err) {
+            setError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setBusyId(null);
         }
     }
 
@@ -2281,13 +2341,14 @@ function ReceivedOffersPanel({
                         response,
                         response.respondingFantasyTeamName,
                     )}
-                    busy={acceptBusyId === response.id}
+                    busy={busyId === response.id}
                     onCancel={() => {
                         // Responses cannot be cancelled by the recipient.
                         // No-op.
                     }}
                     userRoster={null}
                     onAccept={() => void handleAccept(response.id)}
+                    onReject={() => void handleReject(response.id)}
                 />
             ))}
         </div>
@@ -2312,6 +2373,7 @@ function SentOffersPanel({
     const [responses, setResponses] = useState<TradeOfferResponse[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [busyId, setBusyId] = useState<number | null>(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -2330,6 +2392,24 @@ function SentOffersPanel({
     useEffect(() => {
         void load();
     }, [load, refreshTick]);
+
+    async function handleCancel(responseId: number) {
+        if (!window.confirm('Annuler cette offre envoyée ?')) return;
+
+        setBusyId(responseId);
+        setError(null);
+
+        try {
+            await cancelTradeOfferResponse(responseId);
+            await load();
+        } catch (err) {
+            setError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setBusyId(null);
+        }
+    }
 
     if (loading) {
         return (
@@ -2364,15 +2444,139 @@ function SentOffersPanel({
                         response,
                         response.tradeOfferCreatedByFantasyTeamName,
                     )}
-                    busy={false}
+                    busy={busyId === response.id}
                     onCancel={() => {
-                        // Response cancellation is not implemented.
-                        // No-op.
+                        // Response cards are not the user's own
+                        // offer; the "Mon offre" header never
+                        // renders on them, so this callback is
+                        // never reached.
                     }}
+                    responseStatus={response.status}
+                    onCancelResponse={() =>
+                        void handleCancel(response.id)
+                    }
                     userRoster={null}
                 />
             ))}
         </div>
+    );
+}
+
+// ---------------------------------------------------------------------
+// Small per-slot stat table
+//
+// Shows the current season and previous season of NHL stats for a
+// player. The layout is:
+//
+//              GP  G  A  PTS  3B  FP     (skater)
+//   26-27      X   X   X   X    X   X
+//   25-26      X   X   X   X    X   X
+//
+// Goalies use W / L / OTL / SO instead of G / A / PTS / 3B.
+// Null stat lines render as dashes so the row layout stays fixed.
+// ---------------------------------------------------------------------
+
+function StatLinesTable({
+    current,
+    previous,
+    isGoalie,
+}: {
+    current: SeasonStatLine | null;
+    previous: SeasonStatLine | null;
+    isGoalie: boolean;
+}) {
+    const columns = isGoalie
+        ? ['GP', 'W', 'L', 'OTL', 'SO', 'FP']
+        : ['GP', 'G', 'A', 'PTS', '3B', 'FP'];
+
+    function rowValues(line: SeasonStatLine | null): (string | number)[] {
+        if (!line) {
+            return ['—', '—', '—', '—', '—', '—'];
+        }
+
+        return isGoalie
+            ? [
+                line.gamesPlayed,
+                line.wins,
+                line.losses,
+                line.overtimeLosses,
+                line.shutouts,
+                line.fantasyPoints,
+            ]
+            : [
+                line.gamesPlayed,
+                line.goals,
+                line.assists,
+                line.points,
+                line.hatTricks,
+                line.fantasyPoints,
+            ];
+    }
+
+    function shortLabel(
+        line: SeasonStatLine | null,
+        fallback: string,
+    ): string {
+        const label = line?.label;
+
+        if (!label) return fallback;
+
+        // "2026-27" / "2026-2027" -> "26-27"
+        return label.replace(/^20(\d{2})-(?:20)?(\d{2})$/, '$1-$2');
+    }
+
+    const currentValues = rowValues(current);
+    const previousValues = rowValues(previous);
+
+    return (
+        <table className='mt-1 w-full table-fixed border-collapse text-[0.55rem] leading-tight tabular-nums md:text-[0.6rem]'>
+            <thead>
+                <tr className='text-[#7DD3FC]'>
+                    <th className='w-8 text-left font-normal' />
+
+                    {columns.map((column) => (
+                        <th
+                            key={column}
+                            className='text-center font-normal'
+                        >
+                            {column}
+                        </th>
+                    ))}
+                </tr>
+            </thead>
+
+            <tbody className='text-foreground'>
+                <tr>
+                    <td className='text-left text-[#7DD3FC]'>
+                        {shortLabel(current, '26-27')}
+                    </td>
+
+                    {currentValues.map((value, index) => (
+                        <td
+                            key={index}
+                            className='text-center'
+                        >
+                            {value}
+                        </td>
+                    ))}
+                </tr>
+
+                <tr>
+                    <td className='text-left text-[#7DD3FC]'>
+                        {shortLabel(previous, '25-26')}
+                    </td>
+
+                    {previousValues.map((value, index) => (
+                        <td
+                            key={index}
+                            className='text-center'
+                        >
+                            {value}
+                        </td>
+                    ))}
+                </tr>
+            </tbody>
+        </table>
     );
 }
 
@@ -2388,6 +2592,9 @@ function OfferCard({
     hideInternalCancel = false,
     onSlotClick,
     onAccept,
+    onReject,
+    responseStatus,
+    onCancelResponse,
 }: {
     offer: TradeOffer;
     busy: boolean;
@@ -2406,19 +2613,70 @@ function OfferCard({
      * that specific player.
      */
     onSlotClick?: (slotIndex: number) => void;
+        /**
+      * When provided AND the offer is still Pending, renders the
+      * "Accepter" button. Only the "Offres reçues" panel passes this.
+      * The "Offres envoyées" and "Regarder les offres" panels leave it
+      * undefined, so no button appears there.
+      */
+        onAccept?: () => void;
+
+        /**
+         * When provided AND the offer is still Pending, renders the
+         * "Refuser" button to the left of "Accepter". Only the "Offres
+         * reçues" panel passes this.
+         */
+        onReject?: () => void;
+
     /**
-     * When provided AND the offer is still Pending, renders the
-     * "Accepter" button. Only the "Offres reçues" panel passes this.
-     * The "Offres envoyées" and "Regarder les offres" panels leave it
-     * undefined, so no button appears there.
+     * When set, this card represents a response the current user's
+     * team sent to someone else's offer. Renders a "Mon offre
+     * envoyée" header and — when the status is still Pending — a
+     * small "Annuler" button that calls `onCancelResponse`.
+     *
+     * The value is the raw status string from the response DTO
+     * ("Pending", "Accepted", "Rejected" or "Cancelled").
      */
-    onAccept?: () => void;
+    responseStatus?: string;
+    /**
+     * When provided AND `responseStatus === 'Pending'`, the card
+     * renders a small "Annuler" button in its header. Only the
+     * "Offres envoyées" panel passes this.
+     */
+    onCancelResponse?: () => void;
 }) {
+    // Name shown over the "Demande" column when the viewer is not
+    // the offer's creator. The right column of the header represents
+    // the responding side of the exchange, so it is only meaningful
+    // on offers the viewer could respond to. On the viewer's own
+    // offers (Vos offres actives, publish preview) the creator name
+    // on the left already identifies the row, and repeating the
+    // connected user's own team name on the right was redundant.
+    //
+    // Falls back to the account's display name, then to a generic
+    // "Vous", so the column always has a label even for an
+    // account that has not yet been assigned a fantasy team.
+    const { user } = useAuth();
+    const connectedUserName =
+        user?.fantasyTeamName ?? user?.displayName ?? 'Vous';
+
     /**
-     * True when the user can respond to this offer: not his own, and
-     * we have his roster loaded so we can populate the dropdowns.
-     */
+    * True when the user can respond to this offer: not his own, and
+    * we have his roster loaded so we can populate the dropdowns.
+    */
     const canRespond = !offer.isMine && userRoster != null;
+
+    /**
+     * True when the underlying response has been accepted. Only
+     * synthesized response cards (Reçues / Envoyées) can carry
+     * this status: real TradeOffers only ever have Active, Closed
+     * or Cancelled.
+     *
+     * When true, the card swaps its cyan contained-filament frame
+     * for a gold one and the action row at the bottom shows a
+     * single gold "OFFRE ACCEPTÉE" label instead of any button.
+     */
+    const isAccepted = offer.status === 'Accepted';
 
     /**
      * User's picks, keyed by slot index. null means "not picked yet".
@@ -2535,35 +2793,44 @@ function OfferCard({
         }
     }
 
+    // Contained-filament frame colors. Cyan by default, gold once
+    // the underlying response has been accepted. Same two-layer
+    // technique in both cases; only the palette changes.
+    const tubeColor = isAccepted
+        ? ACCEPTED_TUBE_COLOR
+        : OFFER_TUBE_COLOR;
+
+    const filamentColor = isAccepted
+        ? ACCEPTED_FILAMENT
+        : OFFER_FILAMENT;
+
+    const bloomNear = isAccepted
+        ? ACCEPTED_BLOOM_NEAR
+        : OFFER_BLOOM_NEAR;
+
+    const bloomFar = isAccepted
+        ? ACCEPTED_BLOOM_FAR
+        : OFFER_BLOOM_FAR;
+
     return (
         <article
             className='relative overflow-hidden rounded-lg'
             style={{
                 backgroundColor: FRAME_BG,
-                border: `${OFFER_TUBE_PX}px solid ${OFFER_TUBE_COLOR}`,
+                border: `${OFFER_TUBE_PX}px solid ${tubeColor}`,
                 boxShadow: [
-                    `inset 0 0 0 1px ${OFFER_FILAMENT}`,
-                    `inset 0 0 10px ${OFFER_BLOOM_NEAR}`,
-                    `inset 0 0 28px ${OFFER_BLOOM_FAR}`,
+                    `inset 0 0 0 1px ${filamentColor}`,
+                    `inset 0 0 10px ${bloomNear}`,
+                    `inset 0 0 28px ${bloomFar}`,
                 ].join(', '),
             }}
         >
-            {/* Top-left badge. "Acceptée" wins over "Nouvelle offre"
-                if both conditions ever become true; in practice they
-                are mutually exclusive because response cards (which
-                carry the Accepted status) always set isNew = false. */}
-            {offer.status === 'Accepted' ? (
-                <span
-                    className='absolute left-3 top-3 z-20 rounded px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wider'
-                    style={{
-                        backgroundColor: '#22C55E',
-                        color: '#04160A',
-                        boxShadow: 'inset 0 0 0 1px #86EFAC',
-                    }}
-                >
-                    Acceptée
-                </span>
-            ) : offer.isNew && !offer.isMine ? (
+            {/* Top-left badge. Only the "Nouvelle offre" case is
+                rendered here. The accepted state is signalled by
+                the gold frame and the gold "OFFRE ACCEPTÉE" label
+                at the bottom, so a second green badge would just
+                be visual noise. */}
+            {offer.isNew && !offer.isMine ? (
                 <span
                     className='absolute left-3 top-3 z-20 rounded px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wider'
                     style={{
@@ -2576,40 +2843,18 @@ function OfferCard({
                 </span>
             ) : null}
 
-            <div
-                className='relative border-b px-3 py-2'
-                style={{
-                    borderColor: 'rgba(0, 168, 255, 0.35)',
-                    background: HEADER_GRADIENT,
-                }}
-            >
-                <div className='mx-auto flex max-w-[80%] flex-col items-center text-center'>
-                    <p
-                        className='truncate text-sm font-bold text-white'
-                        style={{
-                            textShadow: '0 0 6px rgba(0, 229, 255, 0.4)',
-                        }}
-                    >
-                        {offer.createdByFantasyTeamName}
-                        {offer.isMine && (
-                            <span className='ml-2 text-[0.6rem] uppercase tracking-wider text-[#00E5FF]'>
-                                Mon offre
-                            </span>
-                        )}
-                    </p>
-                    <p className='text-[0.6rem] uppercase tracking-wider text-[#7DD3FC]'>
-                        {new Date(offer.createdAt).toLocaleDateString(
-                            'fr-CA',
-                            {
-                                day: 'numeric',
-                                month: 'short',
-                                year: 'numeric',
-                            },
-                        )}
-                    </p>
-                </div>
+            {offer.isMine && !hideInternalCancel && (
+                <div
+                    className='relative border-b px-3 py-2'
+                    style={{
+                        borderColor: 'rgba(0, 168, 255, 0.35)',
+                        background: HEADER_GRADIENT,
+                    }}
+                >
+                    <span className='block text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#00E5FF]'>
+                        Mon offre
+                    </span>
 
-                {offer.isMine && !hideInternalCancel && (
                     <button
                         type='button'
                         onClick={onCancel}
@@ -2618,8 +2863,34 @@ function OfferCard({
                     >
                         Annuler
                     </button>
-                )}
-            </div>
+                </div>
+            )}
+
+            {responseStatus != null && (
+                <div
+                    className='relative border-b px-3 py-2'
+                    style={{
+                        borderColor: 'rgba(0, 168, 255, 0.35)',
+                        background: HEADER_GRADIENT,
+                    }}
+                >
+                    <span className='block text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#00E5FF]'>
+                        Mon offre envoyée
+                    </span>
+
+                    {responseStatus === 'Pending' &&
+                        onCancelResponse && (
+                            <button
+                                type='button'
+                                onClick={onCancelResponse}
+                                disabled={busy}
+                                className='absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50'
+                            >
+                                Annuler
+                            </button>
+                        )}
+                </div>
+            )}
 
             <div className='space-y-3 p-3'>
                 <div
@@ -2635,16 +2906,20 @@ function OfferCard({
                             borderColor: 'rgba(0, 168, 255, 0.2)',
                         }}
                     >
-                        <span className='text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC] md:text-xs'>
-                            Offre
+                        <span className='truncate px-2 text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC] md:text-xs'>
+                            {offer.createdByFantasyTeamName}
                         </span>
                         <span
                             aria-hidden='true'
                             className={SLOT_ARROW_COL}
                         />
-                        <span className='text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC] md:text-xs'>
-                            Demande
-                        </span>
+                        {!offer.isMine ? (
+                            <span className='truncate px-2 text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC] md:text-xs'>
+                                {connectedUserName}
+                            </span>
+                        ) : (
+                            <span aria-hidden='true' />
+                        )}
                     </div>
 
                     <div className='relative'>
@@ -2733,20 +3008,52 @@ function OfferCard({
                                                             size={14}
                                                         />
                                                     )}
-                                                    <span className='truncate font-semibold'>
-                                                        {
-                                                            slot.offeringPlayerFirstName
-                                                        }{' '}
-                                                        {
-                                                            slot.offeringPlayerLastName
-                                                        }
-                                                    </span>
+                                                    {slot.offeringPlayerNhlPlayerId !=
+                                                        null ? (
+                                                        <Link
+                                                            to={`/joueurs/${slot.offeringPlayerNhlPlayerId}`}
+                                                            onClick={(e) =>
+                                                                e.stopPropagation()
+                                                            }
+                                                            className='truncate font-semibold text-foreground transition-colors hover:text-[#00E5FF]'
+                                                        >
+                                                            {
+                                                                slot.offeringPlayerFirstName
+                                                            }{' '}
+                                                            {
+                                                                slot.offeringPlayerLastName
+                                                            }
+                                                        </Link>
+                                                    ) : (
+                                                        <span className='truncate font-semibold'>
+                                                            {
+                                                                slot.offeringPlayerFirstName
+                                                            }{' '}
+                                                            {
+                                                                slot.offeringPlayerLastName
+                                                            }
+                                                        </span>
+                                                    )}
                                                     <span className='shrink-0 text-[0.6rem] uppercase text-[#7DD3FC] md:text-xs'>
                                                         {
                                                             slot.offeringPlayerPosition
                                                         }
                                                     </span>
                                                 </div>
+
+                                                <StatLinesTable
+                                                    current={
+                                                        slot.offeringPlayerCurrentSeasonStats
+                                                    }
+                                                    previous={
+                                                        slot.offeringPlayerLastSeasonStats
+                                                    }
+                                                    isGoalie={
+                                                        toPositionGroup(
+                                                            slot.offeringPlayerPosition,
+                                                        ) === 'G'
+                                                    }
+                                                />
 
                                                 {currentContractLabel && (
                                                     <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.6rem] font-semibold text-emerald-400 md:text-xs'>
@@ -2937,21 +3244,59 @@ function OfferCard({
                     </div>
                 )}
 
-                {/* Accept button: only shown when the parent wires
-                    onAccept (i.e. the "Offres reçues" panel) AND the
-                    response is still Pending. Once accepted, the
-                    top-left green badge takes over and the button is
-                    gone. */}
-                {onAccept && offer.status === 'Pending' && (
+                {/* Response action buttons (Accepter / Refuser):
+                    shown only when the parent wires at least one
+                    callback (i.e. the "Offres reçues" panel) AND the
+                    response is still Pending. Refuser sits to the
+                    left of Accepter. Once the response flips to
+                    Accepted, this block disappears entirely and the
+                    gold "OFFRE ACCEPTÉE" label below takes its
+                    place. */}
+                {(onAccept || onReject) && offer.status === 'Pending' && (
+                    <div className='flex justify-center gap-2 pt-1'>
+                        {onReject && (
+                            <button
+                                type='button'
+                                onClick={onReject}
+                                disabled={busy}
+                                className='w-32 cursor-pointer rounded-lg border border-destructive/60 bg-transparent px-4 py-2 text-sm font-bold uppercase tracking-wider text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50'
+                            >
+                                Refuser
+                            </button>
+                        )}
+
+                        {onAccept && (
+                            <button
+                                type='button'
+                                onClick={onAccept}
+                                disabled={busy}
+                                className='w-32 cursor-pointer rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold uppercase tracking-wider text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50'
+                            >
+                                {busy ? 'Envoi...' : 'Accepter'}
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {/* Accepted-state label. Rendered on every card whose
+                    underlying response status is Accepted — which
+                    means both sides of the exchange: the offer
+                    creator's "Reçues" panel and the responder's
+                    "Envoyées" panel. The gold color matches the
+                    gold frame applied to the card above, so the
+                    whole card reads as one accepted state. */}
+                {isAccepted && (
                     <div className='flex justify-center pt-1'>
-                        <button
-                            type='button'
-                            onClick={onAccept}
-                            disabled={busy}
-                            className='w-40 cursor-pointer rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold uppercase tracking-wider text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50'
+                        <span
+                            className='text-lg font-bold uppercase tracking-widest'
+                            style={{
+                                color: '#FFC72C',
+                                textShadow:
+                                    '0 0 8px rgba(255, 199, 44, 0.5)',
+                            }}
                         >
-                            {busy ? 'Envoi...' : 'Accepter'}
-                        </button>
+                            Offre acceptée
+                        </span>
                     </div>
                 )}
             </div>

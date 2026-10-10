@@ -31,6 +31,8 @@ import {
     refreshSinglePlayer,
     startRefreshAllGameLogs,
     getJobStatus,
+    getAcceptedTrades,
+    deleteAcceptedTrade,
     type RosterStatusHistoryRow,
     type ProtectedSalaryRow,
     type PlayerContractRow,
@@ -43,6 +45,7 @@ import {
     type RosterEntry,
     type SystemEventLog,
     type TeamRoster,
+    type AcceptedTradeRow,
 } from '@/api/client';
 import { useAuraAll } from '@/lib/auraContext';
 import { AURA_CHANNELS } from '@/lib/auraConfig';
@@ -295,6 +298,17 @@ export default function AdminPage() {
 
     const [showAppearance, setShowAppearance] = useState(false);
 
+    // Accepted trades section state.
+    const [showAcceptedTrades, setShowAcceptedTrades] = useState(false);
+    const [acceptedTrades, setAcceptedTrades] =
+        useState<AcceptedTradeRow[]>([]);
+    const [acceptedTradesLoading, setAcceptedTradesLoading] =
+        useState(false);
+    const [acceptedTradesError, setAcceptedTradesError] =
+        useState<string | null>(null);
+    const [acceptedTradesBusyId, setAcceptedTradesBusyId] =
+        useState<number | null>(null);
+
     // Export rosters section state.
     const [exportingRosters, setExportingRosters] = useState(false);
     const [exportRostersError, setExportRostersError] = useState<string | null>(null);
@@ -536,6 +550,12 @@ export default function AdminPage() {
     useEffect(() => {
         void loadProtectedSalaries();
     }, []);
+
+    // Load accepted trades whenever the section is opened.
+    useEffect(() => {
+        if (!showAcceptedTrades) return;
+        void loadAcceptedTrades();
+    }, [showAcceptedTrades]);
 
     // Load manual-contract players once on mount.
     useEffect(() => {
@@ -1152,6 +1172,47 @@ export default function AdminPage() {
             );
         } finally {
             setProtectedSalariesLoading(false);
+        }
+    }
+
+    async function loadAcceptedTrades() {
+        setAcceptedTradesLoading(true);
+        setAcceptedTradesError(null);
+
+        try {
+            const data = await getAcceptedTrades();
+            setAcceptedTrades(data);
+        } catch (err) {
+            setAcceptedTradesError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setAcceptedTradesLoading(false);
+        }
+    }
+
+    async function handleDeleteAcceptedTrade(responseId: number) {
+        if (
+            !window.confirm(
+                'Supprimer ce trade accepté ? Cette action est ' +
+                'irréversible.',
+            )
+        ) {
+            return;
+        }
+
+        setAcceptedTradesBusyId(responseId);
+        setAcceptedTradesError(null);
+
+        try {
+            await deleteAcceptedTrade(responseId);
+            await loadAcceptedTrades();
+        } catch (err) {
+            setAcceptedTradesError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setAcceptedTradesBusyId(null);
         }
     }
 
@@ -2843,6 +2904,154 @@ export default function AdminPage() {
                             );
                         })}
                     </ul>
+                )}
+            </div>
+
+            {/* ============================================================
+                Trades en attentes
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <button
+                    type='button'
+                    onClick={() =>
+                        setShowAcceptedTrades((v) => !v)
+                    }
+                    className='cursor-pointer rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-opacity hover:brightness-110'
+                    style={{
+                        backgroundColor: '#080D1A',
+                        border: '3px solid #FFC72C',
+                        boxShadow: [
+                            'inset 0 0 0 1px rgba(255, 250, 220, 0.95)',
+                            'inset 0 0 12px rgba(255, 199, 44, 0.55)',
+                            'inset 0 0 28px rgba(255, 199, 44, 0.15)',
+                        ].join(', '),
+                    }}
+                >
+                    {showAcceptedTrades
+                        ? '▼ Masquer les trades en attentes'
+                        : '▶ Trades en attentes'}
+                </button>
+
+                {showAcceptedTrades && (
+                    <div className='space-y-3'>
+                        {acceptedTradesError && (
+                            <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                                {acceptedTradesError}
+                            </p>
+                        )}
+
+                        {acceptedTradesLoading &&
+                            acceptedTrades.length === 0 && (
+                                <p className='text-sm text-muted-foreground'>
+                                    Chargement...
+                                </p>
+                            )}
+
+                        {!acceptedTradesLoading &&
+                            acceptedTrades.length === 0 &&
+                            !acceptedTradesError && (
+                                <p className='rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground'>
+                                    Aucun trade accepté en attente.
+                                </p>
+                            )}
+
+                        {acceptedTrades.map((trade) => (
+                            <div
+                                key={trade.responseId}
+                                className='rounded-lg border border-border bg-card p-3'
+                            >
+                                <div className='flex items-start justify-between gap-2'>
+                                    <div className='min-w-0'>
+                                        <p className='truncate text-sm font-semibold text-foreground'>
+                                            {trade.offerCreatorTeamName}
+                                            {' → '}
+                                            {trade.respondingTeamName}
+                                        </p>
+                                        <p className='mt-0.5 text-xs text-muted-foreground'>
+                                            Reçue le{' '}
+                                            {new Date(
+                                                trade.createdAt,
+                                            ).toLocaleDateString(
+                                                'fr-CA',
+                                            )}
+                                        </p>
+                                    </div>
+
+                                    <button
+                                        type='button'
+                                        onClick={() =>
+                                            void handleDeleteAcceptedTrade(
+                                                trade.responseId,
+                                            )
+                                        }
+                                        disabled={
+                                            acceptedTradesBusyId ===
+                                            trade.responseId
+                                        }
+                                        className='shrink-0 cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50'
+                                    >
+                                        Supprimer
+                                    </button>
+                                </div>
+
+                                {trade.note && (
+                                    <p className='mt-2 rounded border border-[#00A8FF]/25 bg-[#00A8FF]/5 px-2 py-1 text-xs italic text-[#7DD3FC]'>
+                                        « {trade.note} »
+                                    </p>
+                                )}
+
+                                <ul className='mt-2 space-y-1'>
+                                    {trade.slots.map((slot) => (
+                                        <li
+                                            key={slot.slotIndex}
+                                            className='grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded border border-border/50 bg-background px-2 py-1 text-xs'
+                                        >
+                                            <span className='min-w-0 truncate text-foreground'>
+                                                {slot.offeringPlayerFirstName &&
+                                                    slot.offeringPlayerLastName
+                                                    ? `${slot.offeringPlayerFirstName} ${slot.offeringPlayerLastName}`
+                                                    : '—'}
+                                                {slot.offeringPlayerNhlTeam && (
+                                                    <span className='ml-1 text-muted-foreground'>
+                                                        (
+                                                        {
+                                                            slot.offeringPlayerNhlTeam
+                                                        }
+                                                        )
+                                                    </span>
+                                                )}
+                                            </span>
+
+                                            <span
+                                                aria-hidden='true'
+                                                className='shrink-0 text-[#7DD3FC]'
+                                            >
+                                                ⇄
+                                            </span>
+
+                                            <span className='min-w-0 truncate text-right text-foreground'>
+                                                {
+                                                    slot.respondingPlayerFirstName
+                                                }{' '}
+                                                {
+                                                    slot.respondingPlayerLastName
+                                                }
+                                                {slot.respondingPlayerNhlTeam && (
+                                                    <span className='ml-1 text-muted-foreground'>
+                                                        (
+                                                        {
+                                                            slot.respondingPlayerNhlTeam
+                                                        }
+                                                        )
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        ))}
+                    </div>
                 )}
             </div>
 

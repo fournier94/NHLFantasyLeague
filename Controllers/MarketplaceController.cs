@@ -1,8 +1,10 @@
-﻿using Microsoft.AspNetCore.Identity;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using NhlFantasyLeague.api.Models;
 using NhlFantasyLeague.api.Models.Dtos;
 using NhlFantasyLeague.api.Services;
+using NhlFantasyLeague.api.Services.Auth;
 
 namespace NhlFantasyLeague.api.Controllers
 {
@@ -212,6 +214,105 @@ namespace NhlFantasyLeague.api.Controllers
 
             var result = await _marketplaceService
                 .AcceptOfferResponseAsync(uid, id, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(new { message = result.Message });
+            }
+
+            return Ok(new { message = result.Message });
+        }
+
+        /// <summary>
+        /// Cancels a Pending response that the calling user's team
+        /// sent to someone else's offer. The original offer stays
+        /// Active — only this response is withdrawn.
+        /// </summary>
+        [HttpPost("responses/{id:int}/cancel")]
+        public async Task<IActionResult> CancelResponse(
+            int id,
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var result = await _marketplaceService
+                .CancelOfferResponseAsync(uid, id, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(new { message = result.Message });
+            }
+
+            return Ok(new { message = result.Message });
+        }
+
+        /// <summary>
+        /// Refuses a Pending response to one of the calling user's own
+        /// offers. Deletes the entire TradeOffer, which cascades to
+        /// every response and every "seen" marker tied to it.
+        /// </summary>
+        [HttpPost("responses/{id:int}/reject")]
+        public async Task<IActionResult> RejectResponse(
+            int id,
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var result = await _marketplaceService
+                .RejectOfferResponseAsync(uid, id, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(new { message = result.Message });
+            }
+
+            return Ok(new { message = result.Message });
+        }
+
+        // -----------------------------------------------------------------
+        // Admin: accepted trades awaiting manual player swaps
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Commissioner-only. Lists every accepted response across the
+        /// league, newest first, with both sides of every slot
+        /// populated so the commissioner knows which players to move.
+        /// </summary>
+        [Authorize(Roles = AuthService.CommissionerRole)]
+        [HttpGet("admin/accepted-trades")]
+        public async Task<IActionResult> ListAcceptedTrades(
+            CancellationToken ct)
+        {
+            var trades = await _marketplaceService
+                .ListAcceptedTradesAsync(ct);
+
+            return Ok(trades);
+        }
+
+        /// <summary>
+        /// Commissioner-only. Deletes the TradeOffer that owns the
+        /// given accepted response. Cascades to every response and
+        /// every "seen" marker tied to that offer, so the trade
+        /// disappears from every section it was visible in.
+        /// </summary>
+        [Authorize(Roles = AuthService.CommissionerRole)]
+        [HttpDelete("admin/accepted-trades/{responseId:int}")]
+        public async Task<IActionResult> DeleteAcceptedTrade(
+            int responseId,
+            CancellationToken ct)
+        {
+            var result = await _marketplaceService
+                .AdminDeleteAcceptedTradeAsync(responseId, ct);
 
             if (!result.Success)
             {

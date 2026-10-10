@@ -1560,6 +1560,14 @@ export interface TradeOfferSlot {
 
     /** Optional player the creator is offering. */
     offeringPlayerId: number | null;
+
+    /**
+     * NHL API id of the offered player. Used to link the player's
+     * name to /joueurs/{nhlPlayerId}. Null when the slot has no
+     * offering player.
+     */
+    offeringPlayerNhlPlayerId: number | null;
+
     offeringPlayerFirstName: string | null;
     offeringPlayerLastName: string | null;
     offeringPlayerNhlTeam: string | null;
@@ -1572,11 +1580,24 @@ export interface TradeOfferSlot {
     offeringPlayerCurrentContract: PlayerContractLine | null;
 
     /**
-     * Second contract to display, e.g. a future deal, or null. When
-     * present, the browse tab renders "current -> second" exactly like
-     * the Mon équipe player cards.
-     */
+ * Second contract to display, e.g. a future deal, or null. When
+ * present, the browse tab renders "current -> second" exactly like
+ * the Mon équipe player cards.
+ */
     offeringPlayerSecondContract: PlayerContractLine | null;
+
+    /**
+     * NHL regular-season stats for the offered player in the current
+     * season, or null when no row exists yet. Rendered as a small
+     * table under the player's name on the offer card.
+     */
+    offeringPlayerCurrentSeasonStats: SeasonStatLine | null;
+
+    /**
+     * NHL regular-season stats for the offered player in the previous
+     * season, or null.
+     */
+    offeringPlayerLastSeasonStats: SeasonStatLine | null;
 
     /** Demand filters (all optional). */
     demandMinContractYears: number | null;
@@ -1700,12 +1721,31 @@ export interface TradeOfferResponseSlot {
     positionGroup: string;
 
     respondingPlayerId: number;
+
+    /**
+     * NHL API id of the responding player. Used to link the
+     * player's name to /joueurs/{nhlPlayerId}.
+     */
+    respondingPlayerNhlPlayerId: number | null;
+
     respondingPlayerFirstName: string | null;
     respondingPlayerLastName: string | null;
     respondingPlayerNhlTeam: string | null;
     respondingPlayerPosition: string | null;
     respondingPlayerCurrentContract: PlayerContractLine | null;
     respondingPlayerSecondContract: PlayerContractLine | null;
+
+    /**
+     * NHL regular-season stats for the responding player in the
+     * current season, or null. Mirrors the offering side.
+     */
+    respondingPlayerCurrentSeasonStats: SeasonStatLine | null;
+
+    /**
+     * NHL regular-season stats for the responding player in the
+     * previous season, or null.
+     */
+    respondingPlayerLastSeasonStats: SeasonStatLine | null;
 
     demandMinContractYears: number | null;
     demandMaxSalary: number | null;
@@ -1791,6 +1831,99 @@ export function acceptTradeOfferResponse(
     return apiPost<{ message: string }>(
         `/Marketplace/responses/${responseId}/accept`,
         {},
+    );
+}
+
+/**
+ * Cancels a Pending response that the calling user's team sent to
+ * someone else's offer. The original offer stays Active — the
+ * response is simply withdrawn.
+ */
+export function cancelTradeOfferResponse(
+    responseId: number,
+): Promise<{ message: string }> {
+    return apiPost<{ message: string }>(
+        `/Marketplace/responses/${responseId}/cancel`,
+        {},
+    );
+}
+
+/**
+ * Refuses a Pending response to one of the calling user's own
+ * offers. Deletes the entire TradeOffer, which cascades to every
+ * response and every "seen" marker tied to it. The offer is
+ * withdrawn on both sides of the exchange.
+ */
+export function rejectTradeOfferResponse(
+    responseId: number,
+): Promise<{ message: string }> {
+    return apiPost<{ message: string }>(
+        `/Marketplace/responses/${responseId}/reject`,
+        {},
+    );
+}
+
+// ---------------------------------------------------------------------
+// Admin: accepted trades awaiting manual player swaps
+// (commissioner only)
+// ---------------------------------------------------------------------
+
+/** One slot of an accepted trade, as returned by the admin endpoint. */
+export interface AcceptedTradeSlot {
+    slotIndex: number;
+    /** "F", "D" or "G". */
+    positionGroup: string;
+
+    // --- Side offered by the original offer creator ---
+    offeringPlayerId: number | null;
+    offeringPlayerNhlPlayerId: number | null;
+    offeringPlayerFirstName: string | null;
+    offeringPlayerLastName: string | null;
+    offeringPlayerNhlTeam: string | null;
+
+    // --- Side offered by the responding team ---
+    respondingPlayerId: number;
+    respondingPlayerNhlPlayerId: number | null;
+    respondingPlayerFirstName: string | null;
+    respondingPlayerLastName: string | null;
+    respondingPlayerNhlTeam: string | null;
+}
+
+/** One accepted response, as returned by the admin endpoint. */
+export interface AcceptedTradeRow {
+    responseId: number;
+    tradeOfferId: number;
+    offerCreatorTeamId: number;
+    offerCreatorTeamName: string;
+    respondingTeamId: number;
+    respondingTeamName: string;
+    createdAt: string;
+    note: string | null;
+    slots: AcceptedTradeSlot[];
+}
+
+/**
+ * Lists every accepted response across the league, newest first.
+ * Commissioner-only. Skips the client cache so the list is always
+ * current when the admin opens the section.
+ */
+export function getAcceptedTrades(): Promise<AcceptedTradeRow[]> {
+    return apiGet<AcceptedTradeRow[]>(
+        '/Marketplace/admin/accepted-trades',
+        { cacheTtlMs: 0 },
+    );
+}
+
+/**
+ * Deletes the TradeOffer that owns the given accepted response.
+ * Cascades to every response and every "seen" marker tied to it.
+ * Commissioner-only.
+ */
+export function deleteAcceptedTrade(
+    responseId: number,
+): Promise<{ message: string }> {
+    return apiDelete<{ message: string }>(
+        `/Marketplace/admin/accepted-trades/${responseId}`,
     );
 }
 
