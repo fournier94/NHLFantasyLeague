@@ -28,12 +28,14 @@ import {
     createManualContract,
     updateManualContract,
     deleteManualContract,
+    refreshSinglePlayer,
     startRefreshAllGameLogs,
     getJobStatus,
     type RosterStatusHistoryRow,
     type ProtectedSalaryRow,
     type PlayerContractRow,
     type ManualContractPlayerRow,
+    type RefreshedPlayer,
     type AdminUserRow,
     type BackgroundJobStatus,
     type FantasyTeam,
@@ -383,6 +385,17 @@ export default function AdminPage() {
     const [manualEditingStartYear, setManualEditingStartYear] = useState('');
     const [manualEditingEndYear, setManualEditingEndYear] = useState('');
     const [manualEditingSalary, setManualEditingSalary] = useState('');
+
+    // --- Refresh single player section state ---
+
+    const [refreshPlayerIdInput, setRefreshPlayerIdInput] = useState('');
+    const [refreshPlayerBusy, setRefreshPlayerBusy] = useState(false);
+    const [refreshPlayerSuccess, setRefreshPlayerSuccess] =
+        useState<string | null>(null);
+    const [refreshPlayerError, setRefreshPlayerError] =
+        useState<string | null>(null);
+    const [lastRefreshedPlayer, setLastRefreshedPlayer] =
+        useState<RefreshedPlayer | null>(null);
 
     // System event logs section state.
     const [eventLogs, setEventLogs] = useState<SystemEventLog[]>([]);
@@ -1630,6 +1643,53 @@ export default function AdminPage() {
             );
         } finally {
             setManualBusy(false);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Refresh single player section
+    // ---------------------------------------------------------------
+
+    async function handleRefreshSinglePlayer() {
+        const trimmed = refreshPlayerIdInput.trim();
+
+        if (trimmed === '') {
+            setRefreshPlayerError('Entrez un NhlPlayerId.');
+            return;
+        }
+
+        const nhlId = Number(trimmed);
+
+        if (
+            !Number.isFinite(nhlId) ||
+            !Number.isInteger(nhlId) ||
+            nhlId <= 0
+        ) {
+            setRefreshPlayerError(
+                'NhlPlayerId invalide. Entrez un entier positif, ex: 8478402.',
+            );
+            return;
+        }
+
+        setRefreshPlayerBusy(true);
+        setRefreshPlayerError(null);
+        setRefreshPlayerSuccess(null);
+
+        try {
+            const player = await refreshSinglePlayer(nhlId);
+
+            setLastRefreshedPlayer(player);
+            setRefreshPlayerSuccess(
+                `Rafraîchi : ${player.firstName} ${player.lastName} ` +
+                `(${player.position}, NhlPlayerId ${player.nhlPlayerId}).`,
+            );
+        } catch (err) {
+            setLastRefreshedPlayer(null);
+            setRefreshPlayerError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setRefreshPlayerBusy(false);
         }
     }
 
@@ -3281,6 +3341,106 @@ export default function AdminPage() {
                                 Terminé.
                             </p>
                         )}
+                    </div>
+                )}
+            </div>
+
+            {/* ============================================================
+                Rafraîchir un joueur
+                ============================================================ */}
+            <div className='max-w-2xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Rafraîchir un joueur
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Force un rafraîchissement immédiat des données d'un
+                    seul joueur depuis sa page NHL : identité, équipe,
+                    repêchage, bio, photo, statistiques de carrière,
+                    et colonnes de la saison en cours. Un seul appel
+                    à l'API LNH par clic. Utile quand les jobs
+                    planifiés (hebdomadaire, quotidien) n'ont pas
+                    encore passé, ou pour corriger un joueur précis.
+                </p>
+
+                {refreshPlayerError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {refreshPlayerError}
+                    </p>
+                )}
+
+                {refreshPlayerSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {refreshPlayerSuccess}
+                    </p>
+                )}
+
+                <div className='flex items-end gap-2'>
+                    <div className='flex-1'>
+                        <label className='text-xs font-medium text-muted-foreground'>
+                            NhlPlayerId (ex: 8478402)
+                        </label>
+                        <input
+                            type='text'
+                            inputMode='numeric'
+                            value={refreshPlayerIdInput}
+                            autoComplete='off'
+                            onChange={(event) =>
+                                setRefreshPlayerIdInput(event.target.value)
+                            }
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    void handleRefreshSinglePlayer();
+                                }
+                            }}
+                            placeholder='8478402'
+                            className={`mt-1 ${selectClass}`}
+                        />
+                    </div>
+
+                    <button
+                        type='button'
+                        onClick={() => void handleRefreshSinglePlayer()}
+                        disabled={
+                            refreshPlayerBusy ||
+                            refreshPlayerIdInput.trim() === ''
+                        }
+                        className={primaryButtonClass}
+                    >
+                        {refreshPlayerBusy
+                            ? 'Rafraîchissement...'
+                            : 'Rafraîchir'}
+                    </button>
+                </div>
+
+                {lastRefreshedPlayer && (
+                    <div className='flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2'>
+                        {lastRefreshedPlayer.headshotUrl ? (
+                            <img
+                                src={lastRefreshedPlayer.headshotUrl}
+                                alt={`${lastRefreshedPlayer.firstName} ${lastRefreshedPlayer.lastName}`}
+                                className='h-10 w-10 rounded-md bg-white object-cover'
+                                loading='lazy'
+                            />
+                        ) : (
+                            <div className='flex h-10 w-10 items-center justify-center rounded-md bg-secondary text-xs font-semibold text-foreground'>
+                                {lastRefreshedPlayer.firstName.charAt(0)}
+                                {lastRefreshedPlayer.lastName.charAt(0)}
+                            </div>
+                        )}
+
+                        <div className='min-w-0 flex-1'>
+                            <p className='truncate text-sm font-medium text-foreground'>
+                                {lastRefreshedPlayer.firstName}{' '}
+                                {lastRefreshedPlayer.lastName}
+                            </p>
+                            <p className='text-xs text-muted-foreground'>
+                                {lastRefreshedPlayer.position}
+                                {' · NhlPlayerId '}
+                                {lastRefreshedPlayer.nhlPlayerId}
+                            </p>
+                        </div>
                     </div>
                 )}
             </div>

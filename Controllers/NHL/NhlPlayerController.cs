@@ -65,6 +65,52 @@ namespace NhlFantasyLeague.api.Controllers.NHL
             return Ok(player);
         }
 
+        /// <summary>
+        /// Manual single-player refresh from the admin page.
+        ///
+        /// Fetches the NHL landing page for one player and updates
+        /// his Player row (identity, team, draft, birth, headshot),
+        /// his PlayerCareerStat rows, and the landing-owned columns
+        /// of his current-season PlayerSeasonStat.
+        ///
+        /// One NHL API call per invocation. Doesn't touch CapFreeze,
+        /// doesn't touch RosterEntries, doesn't touch contract rows.
+        /// Those are owned by other flows.
+        ///
+        /// Use case: the commissioner notices a specific player's
+        /// data is stale and wants to force a refresh without
+        /// waiting for the scheduled jobs or running the full
+        /// league-wide populate.
+        /// </summary>
+        [HttpPost("player/{id}/refresh")]
+        public async Task<IActionResult> RefreshPlayer(int id)
+        {
+            var player = await _nhlPlayerService.SavePlayerAsync(id);
+
+            if (player == null)
+            {
+                return NotFound(new
+                {
+                    message =
+                        $"Aucune donnée NHL retournée pour le NhlPlayerId " +
+                        $"{id}. L'ID est peut-être invalide, ou l'API NHL " +
+                        "n'a rien renvoyé pour ce joueur."
+                });
+            }
+
+            return Ok(new
+            {
+                player.Id,
+                player.NhlPlayerId,
+                player.FirstName,
+                player.LastName,
+                player.Position,
+                player.HeadshotUrl,
+                player.NhlTeamId,
+                player.PreviousNhlTeamId,
+            });
+        }
+
         [HttpGet("player/{id}/raw")]
         public async Task<IActionResult> GetPlayerRawData(int id)
         {

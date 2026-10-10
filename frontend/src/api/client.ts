@@ -1874,3 +1874,32 @@ export function getJobStatus(
         cacheTtlMs: 0,
     });
 }
+
+// ---------------------------------------------------------------------
+// Manual single-player NHL landing refresh (commissioner only)
+//
+// Forces an immediate refresh of one player's data from his NHL
+// landing page: identity, team, draft, bio, headshot, career
+// stats, and the landing-owned columns of his current-season
+// PlayerSeasonStat. One NHL API call per invocation.
+// ---------------------------------------------------------------------
+
+export interface RefreshedPlayer {
+    id: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    headshotUrl: string | null;
+    nhlTeamId: number | null;
+    previousNhlTeamId: number | null;
+}
+
+export function refreshSinglePlayer(
+    nhlPlayerId: number,
+): Promise<RefreshedPlayer> {
+    return apiPost<RefreshedPlayer>(
+        `/NhlPlayer/player/${nhlPlayerId}/refresh`,
+        {},
+    );
+}
