@@ -444,7 +444,7 @@ namespace NhlFantasyLeague.api.Services
             return minutes * 60 + seconds;
         }
 
-        /// <summary>
+               /// <summary>
         /// Formats total seconds as an "MM:SS" time-on-ice string.
         /// Always returns a padded seconds component, e.g. "18:05",
         /// so the frontend can render it raw without further parsing.
@@ -455,6 +455,30 @@ namespace NhlFantasyLeague.api.Services
             var seconds = totalSeconds % 60;
 
             return $"{minutes}:{seconds:D2}";
+        }
+
+        /// <summary>
+        /// Age in years from a birth date. Same computation as the
+        /// one used on the roster endpoint, so a player's age reads
+        /// identically on the marketplace cards and on Mon équipe.
+        /// Null when no birth date is known.
+        /// </summary>
+        private static int? CalculateAge(DateOnly? birthDate)
+        {
+            if (birthDate == null)
+            {
+                return null;
+            }
+
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var age = today.Year - birthDate.Value.Year;
+
+            if (birthDate.Value > today.AddYears(-age))
+            {
+                age--;
+            }
+
+            return age;
         }
 
         public async Task<TradeOfferActionResultDto> CreateOfferAsync(
@@ -982,36 +1006,45 @@ offeredPlayerIds, ct);
      .AsNoTracking()
      .Include(r => r.TradeOffer)
          .ThenInclude(o => o.Slots)
+             .ThenInclude(s => s.OfferingPlayer)
+                 .ThenInclude(p => p!.NhlTeam)
      .Include(r => r.TradeOffer)
          .ThenInclude(o => o.CreatedByFantasyTeam)
      .Include(r => r.RespondingFantasyTeam)
      .Include(r => r.Slots)
          .ThenInclude(s => s.RespondingPlayer)
              .ThenInclude(p => p!.NhlTeam)
-                .Where(r =>
-                    r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
-                    r.TradeOffer.Status == TradeOfferStatus.Active &&
-                    (r.Status == TradeOfferResponseStatus.Pending ||
-                     r.Status == TradeOfferResponseStatus.Accepted))
-                .OrderByDescending(r => r.CreatedAt)
-                .ToListAsync(ct);
+     .Where(r =>
+         r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
+         r.TradeOffer.Status == TradeOfferStatus.Active &&
+         (r.Status == TradeOfferResponseStatus.Pending ||
+          r.Status == TradeOfferResponseStatus.Accepted))
+     .OrderByDescending(r => r.CreatedAt)
+     .ToListAsync(ct);
 
             if (responses.Count == 0)
             {
                 return new List<TradeOfferResponseDto>();
             }
 
-            var respondingPlayerIds = responses
+            // Both sides of every slot: the offering player from the
+            // original offer, and the responding player.
+            var playerIds = responses
                 .SelectMany(r => r.Slots)
                 .Select(s => s.RespondingPlayerId)
+                .Concat(
+                    responses
+                        .SelectMany(r => r.TradeOffer.Slots)
+                        .Where(s => s.OfferingPlayerId.HasValue)
+                        .Select(s => s.OfferingPlayerId!.Value))
                 .Distinct()
                 .ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
-      respondingPlayerIds, ct);
+                playerIds, ct);
 
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
-                respondingPlayerIds, ct);
+                playerIds, ct);
 
             return responses
      .Select(r => ToResponseDto(
@@ -1037,39 +1070,48 @@ offeredPlayerIds, ct);
             var myTeamId = user.FantasyTeamId.Value;
 
             var responses = await _dbContext.TradeOfferResponses
-                .AsNoTracking()
-                .Include(r => r.TradeOffer)
-                    .ThenInclude(o => o.Slots)
-                .Include(r => r.TradeOffer)
-                    .ThenInclude(o => o.CreatedByFantasyTeam)
-                .Include(r => r.RespondingFantasyTeam)
-                .Include(r => r.Slots)
-                    .ThenInclude(s => s.RespondingPlayer)
-                        .ThenInclude(p => p!.NhlTeam)
-                .Where(r =>
-                    r.RespondingFantasyTeamId == myTeamId &&
-                    r.TradeOffer.Status == TradeOfferStatus.Active &&
-                    (r.Status == TradeOfferResponseStatus.Pending ||
-                     r.Status == TradeOfferResponseStatus.Accepted))
-                .OrderByDescending(r => r.CreatedAt)
-                .ToListAsync(ct);
+      .AsNoTracking()
+      .Include(r => r.TradeOffer)
+          .ThenInclude(o => o.Slots)
+              .ThenInclude(s => s.OfferingPlayer)
+                  .ThenInclude(p => p!.NhlTeam)
+      .Include(r => r.TradeOffer)
+          .ThenInclude(o => o.CreatedByFantasyTeam)
+      .Include(r => r.RespondingFantasyTeam)
+      .Include(r => r.Slots)
+          .ThenInclude(s => s.RespondingPlayer)
+              .ThenInclude(p => p!.NhlTeam)
+      .Where(r =>
+          r.RespondingFantasyTeamId == myTeamId &&
+          r.TradeOffer.Status == TradeOfferStatus.Active &&
+          (r.Status == TradeOfferResponseStatus.Pending ||
+           r.Status == TradeOfferResponseStatus.Accepted))
+      .OrderByDescending(r => r.CreatedAt)
+      .ToListAsync(ct);
 
             if (responses.Count == 0)
             {
                 return new List<TradeOfferResponseDto>();
             }
 
-            var respondingPlayerIds = responses
+            // Both sides of every slot: the offering player from the
+            // original offer, and the responding player.
+            var playerIds = responses
                 .SelectMany(r => r.Slots)
                 .Select(s => s.RespondingPlayerId)
+                .Concat(
+                    responses
+                        .SelectMany(r => r.TradeOffer.Slots)
+                        .Where(s => s.OfferingPlayerId.HasValue)
+                        .Select(s => s.OfferingPlayerId!.Value))
                 .Distinct()
                 .ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
-     respondingPlayerIds, ct);
+                playerIds, ct);
 
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
-                respondingPlayerIds, ct);
+                playerIds, ct);
 
             return responses
      .Select(r => ToResponseDto(
@@ -1195,30 +1237,31 @@ offeredPlayerIds, ct);
         }
 
         /// <summary>
-        /// Refuses a Pending response to one of the calling user's own
-        /// offers. Deletes the entire TradeOffer.
+        /// Refuses a Pending response to one of the calling user's
+        /// own offers.
         ///
-        /// Deleting the offer cascades (via the OnDelete(DeleteBehavior
-        /// .Cascade) rules configured in AppDbContext) to:
+        /// The TradeOffer itself is NOT touched. Refusing a specific
+        /// answer only tells the responding manager that his answer
+        /// was not accepted; the announcement stays Active and keeps
+        /// its place on the market in "Vos offres actives". Other
+        /// managers (including the one who was just refused) can
+        /// still see it and submit new responses.
         ///
-        ///   - every TradeOfferResponse on the offer, including the
-        ///     one being refused — this is what makes the response
-        ///     disappear from the responder's "Offres envoyées";
+        /// What changes: the response moves from Pending to Rejected.
+        /// That single status flip removes it from:
         ///
-        ///   - every TradeOfferView on the offer, so the "new offer"
-        ///     badge state for it is cleaned up too;
-        ///
-        ///   - every TradeOfferSlot on the offer;
-        ///
-        ///   - every TradeOfferResponseSlot on every deleted response.
-        ///
-        /// The net effect is what the league wants: refusing a response
-        /// withdraws the whole offer from the marketplace, on both
-        /// sides of the exchange, in one atomic operation.
+        ///   - the offer creator's "Offres reçues" list (filtered on
+        ///     Pending or Accepted);
+        ///   - the responder's "Offres envoyées" list (same filter);
+        ///   - the responder's own "browse" exclusion (only Pending
+        ///     responses hide the offer from the browse list, so once
+        ///     the response is Rejected, the offer is visible to him
+        ///     again should he change his mind and re-answer).
         ///
         /// Authorization: only the offer's creator can refuse a
-        /// response. A responder cannot refuse his own response through
-        /// this endpoint (that is what CancelOfferResponseAsync is for).
+        /// response. A responder cannot refuse his own response
+        /// through this endpoint (that is what CancelOfferResponseAsync
+        /// is for).
         /// </summary>
         public async Task<TradeOfferActionResultDto> RejectOfferResponseAsync(
             int userId,
@@ -1259,16 +1302,18 @@ offeredPlayerIds, ct);
                     "Cette reponse a deja ete traitee.");
             }
 
-            // Hard-delete the offer. The cascade rules in AppDbContext
-            // remove every response and every view tied to it.
-            _dbContext.TradeOffers.Remove(response.TradeOffer);
+            // Refuse the response in place. The TradeOffer is left
+            // untouched: it stays Active, stays in "Vos offres
+            // actives", and stays visible to every other manager.
+            // Only this specific response is discarded.
+            response.Status = TradeOfferResponseStatus.Rejected;
 
             await _dbContext.SaveChangesAsync(ct);
 
             return new TradeOfferActionResultDto
             {
                 Success = true,
-                Message = "Offre refusee et retiree du marche.",
+                Message = "Réponse refusée.",
             };
         }
 
@@ -1476,36 +1521,45 @@ offeredPlayerIds, ct);
         }
 
         private async Task<TradeOfferResponseDto?> LoadResponseDtoAsync(
-            int responseId,
-            CancellationToken ct)
+     int responseId,
+     CancellationToken ct)
         {
             var response = await _dbContext.TradeOfferResponses
-      .AsNoTracking()
-      .Include(r => r.TradeOffer)
-          .ThenInclude(o => o.Slots)
-      .Include(r => r.TradeOffer)
-          .ThenInclude(o => o.CreatedByFantasyTeam)
-      .Include(r => r.RespondingFantasyTeam)
-      .Include(r => r.Slots)
-          .ThenInclude(s => s.RespondingPlayer)
-              .ThenInclude(p => p!.NhlTeam)
-      .FirstOrDefaultAsync(r => r.Id == responseId, ct);
+                .AsNoTracking()
+                .Include(r => r.TradeOffer)
+                    .ThenInclude(o => o.Slots)
+                        .ThenInclude(s => s.OfferingPlayer)
+                            .ThenInclude(p => p!.NhlTeam)
+                .Include(r => r.TradeOffer)
+                    .ThenInclude(o => o.CreatedByFantasyTeam)
+                .Include(r => r.RespondingFantasyTeam)
+                .Include(r => r.Slots)
+                    .ThenInclude(s => s.RespondingPlayer)
+                        .ThenInclude(p => p!.NhlTeam)
+                .FirstOrDefaultAsync(r => r.Id == responseId, ct);
 
             if (response == null)
             {
                 return null;
             }
 
-            var respondingPlayerIds = response.Slots
+            // Load contracts and stats for BOTH sides of every slot:
+            // the offering player from the original offer, and the
+            // responding player.
+            var playerIds = response.Slots
                 .Select(s => s.RespondingPlayerId)
+                .Concat(
+                    response.TradeOffer.Slots
+                        .Where(s => s.OfferingPlayerId.HasValue)
+                        .Select(s => s.OfferingPlayerId!.Value))
                 .Distinct()
                 .ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
-      respondingPlayerIds, ct);
+                playerIds, ct);
 
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
-                respondingPlayerIds, ct);
+                playerIds, ct);
 
             return ToResponseDto(
                 response,
@@ -1693,6 +1747,8 @@ offeredPlayerIds, ct);
                                 s.OfferingPlayer?.NhlTeam?.Abbreviation,
                             OfferingPlayerPosition =
                                 s.OfferingPlayer?.Position,
+                            OfferingPlayerAge = CalculateAge(
+                                s.OfferingPlayer?.BirthDate),
                             OfferingPlayerRosterStatus = offeringStatus,
                             OfferingPlayerCurrentContract = current,
                             OfferingPlayerSecondContract = second,
@@ -1713,9 +1769,9 @@ offeredPlayerIds, ct);
         }
 
         private static TradeOfferResponseDto ToResponseDto(
-     TradeOfferResponse response,
-     IReadOnlyDictionary<int, List<PlayerContract>> contractsByPlayerId,
-     IReadOnlyDictionary<int, PlayerStatLines> statsByPlayerId)
+TradeOfferResponse response,
+IReadOnlyDictionary<int, List<PlayerContract>> contractsByPlayerId,
+IReadOnlyDictionary<int, PlayerStatLines> statsByPlayerId)
         {
             var offerSlotsByIndex = response.TradeOffer.Slots
                 .ToDictionary(s => s.SlotIndex);
@@ -1726,13 +1782,13 @@ offeredPlayerIds, ct);
                 TradeOfferId = response.TradeOfferId,
                 TradeOfferNote = response.TradeOffer.Note,
                 TradeOfferCreatedByFantasyTeamId =
-         response.TradeOffer.CreatedByFantasyTeamId,
+                    response.TradeOffer.CreatedByFantasyTeamId,
                 TradeOfferCreatedByFantasyTeamName =
-         response.TradeOffer.CreatedByFantasyTeam?.Name
-             ?? string.Empty,
+                    response.TradeOffer.CreatedByFantasyTeam?.Name
+                    ?? string.Empty,
                 RespondingFantasyTeamId = response.RespondingFantasyTeamId,
                 RespondingFantasyTeamName =
-         response.RespondingFantasyTeam?.Name ?? string.Empty,
+                    response.RespondingFantasyTeam?.Name ?? string.Empty,
                 CreatedAt = response.CreatedAt,
                 Status = response.Status.ToString(),
                 Slots = response.Slots
@@ -1743,38 +1799,78 @@ offeredPlayerIds, ct);
                             s.SlotIndex,
                             out var offerSlot);
 
-                        var (current, second) =
+                        // ---- RIGHT side: responding player ----
+                        var (respondCurrent, respondSecond) =
                             ResolveContractLinesForSlot(
                                 s.RespondingPlayerId,
                                 contractsByPlayerId);
 
-                        var (currentStats, previousStats) =
+                        var (respondCurrentStats, respondPrevStats) =
                             ResolveStatLinesForSlot(
                                 s.RespondingPlayerId,
+                                statsByPlayerId);
+
+                        // ---- LEFT side: offering player on the original offer ----
+                        var (offeringCurrent, offeringSecond) =
+                            ResolveContractLinesForSlot(
+                                offerSlot?.OfferingPlayerId,
+                                contractsByPlayerId);
+
+                        var (offeringCurrentStats, offeringPrevStats) =
+                            ResolveStatLinesForSlot(
+                                offerSlot?.OfferingPlayerId,
                                 statsByPlayerId);
 
                         return new TradeOfferResponseSlotDto
                         {
                             SlotIndex = s.SlotIndex,
                             PositionGroup =
-          offerSlot?.PositionGroup ?? string.Empty,
+                                offerSlot?.PositionGroup ?? string.Empty,
+
+                            // LEFT: offering side, copied from the
+                            // original offer slot.
+                            OfferingPlayerId = offerSlot?.OfferingPlayerId,
+                            OfferingPlayerNhlPlayerId =
+                                offerSlot?.OfferingPlayer?.NhlPlayerId,
+                            OfferingPlayerFirstName =
+                                offerSlot?.OfferingPlayer?.FirstName,
+                            OfferingPlayerLastName =
+                                offerSlot?.OfferingPlayer?.LastName,
+                            OfferingPlayerNhlTeam =
+                                offerSlot?.OfferingPlayer?.NhlTeam?.Abbreviation,
+                            OfferingPlayerPosition =
+                                offerSlot?.OfferingPlayer?.Position,
+                            OfferingPlayerAge = CalculateAge(
+                                offerSlot?.OfferingPlayer?.BirthDate),
+                            OfferingPlayerCurrentContract = offeringCurrent,
+                            OfferingPlayerSecondContract = offeringSecond,
+                            OfferingPlayerCurrentSeasonStats =
+                                offeringCurrentStats,
+                            OfferingPlayerLastSeasonStats =
+                                offeringPrevStats,
+
+                            // RIGHT: responding side.
                             RespondingPlayerId = s.RespondingPlayerId,
                             RespondingPlayerNhlPlayerId =
-          s.RespondingPlayer?.NhlPlayerId,
+                                s.RespondingPlayer?.NhlPlayerId,
                             RespondingPlayerFirstName =
-          s.RespondingPlayer?.FirstName,
+                                s.RespondingPlayer?.FirstName,
                             RespondingPlayerLastName =
                                 s.RespondingPlayer?.LastName,
                             RespondingPlayerNhlTeam =
                                 s.RespondingPlayer?.NhlTeam?.Abbreviation,
                             RespondingPlayerPosition =
                                 s.RespondingPlayer?.Position,
-                            RespondingPlayerCurrentContract = current,
-                            RespondingPlayerSecondContract = second,
+                            RespondingPlayerAge = CalculateAge(
+                                s.RespondingPlayer?.BirthDate),
+                            RespondingPlayerCurrentContract = respondCurrent,
+                            RespondingPlayerSecondContract = respondSecond,
                             RespondingPlayerCurrentSeasonStats =
-                                currentStats,
+                                respondCurrentStats,
                             RespondingPlayerLastSeasonStats =
-                                previousStats,
+                                respondPrevStats,
+
+                            // Demand filters (kept on the DTO).
                             DemandMinContractYears =
                                 offerSlot?.DemandMinContractYears,
                             DemandMaxSalary = offerSlot?.DemandMaxSalary,

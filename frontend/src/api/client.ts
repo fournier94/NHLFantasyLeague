@@ -1580,6 +1580,13 @@ export interface TradeOfferSlot {
     offeringPlayerPosition: string | null;
 
     /**
+     * Age in years, computed server-side from the player's birth
+     * date. Null when the birth date is unknown. Rendered next to
+     * the player's name on the offer card.
+     */
+    offeringPlayerAge: number | null;
+
+    /**
      * Contract covering the current season for the offered player, or
      * null. Displayed first under the player's name on the browse tab.
      */
@@ -1604,6 +1611,24 @@ export interface TradeOfferSlot {
      * season, or null.
      */
     offeringPlayerLastSeasonStats: SeasonStatLine | null;
+
+    /**
+     * Responding player, only present on slots synthesized from a
+     * TradeOfferResponse (Reçues / Envoyées panels). When set, the
+     * right column of the card renders this player instead of the
+     * demand block. Absent on real TradeOffers.
+     */
+    respondingPlayerId?: number | null;
+    respondingPlayerNhlPlayerId?: number | null;
+    respondingPlayerFirstName?: string | null;
+    respondingPlayerLastName?: string | null;
+    respondingPlayerNhlTeam?: string | null;
+    respondingPlayerPosition?: string | null;
+    respondingPlayerAge?: number | null;
+    respondingPlayerCurrentContract?: PlayerContractLine | null;
+    respondingPlayerSecondContract?: PlayerContractLine | null;
+    respondingPlayerCurrentSeasonStats?: SeasonStatLine | null;
+    respondingPlayerLastSeasonStats?: SeasonStatLine | null;
 
     /** Demand filters (all optional). */
     demandMinContractYears: number | null;
@@ -1632,6 +1657,14 @@ export interface TradeOffer {
      * frontend.
      */
     isNew: boolean;
+
+    /**
+     * Responding team, only set on shapes synthesized from a
+     * TradeOfferResponse. When present, the card header renders this
+     * team name in the right column instead of the connected user.
+     */
+    respondingFantasyTeamId?: number;
+    respondingFantasyTeamName?: string;
 
     slots: TradeOfferSlot[];
 }
@@ -1726,6 +1759,22 @@ export interface TradeOfferResponseSlot {
     slotIndex: number;
     positionGroup: string;
 
+    // --- LEFT: the offering player from the original offer ---
+
+    offeringPlayerId: number | null;
+    offeringPlayerNhlPlayerId: number | null;
+    offeringPlayerFirstName: string | null;
+    offeringPlayerLastName: string | null;
+    offeringPlayerNhlTeam: string | null;
+    offeringPlayerPosition: string | null;
+    offeringPlayerAge: number | null;
+    offeringPlayerCurrentContract: PlayerContractLine | null;
+    offeringPlayerSecondContract: PlayerContractLine | null;
+    offeringPlayerCurrentSeasonStats: SeasonStatLine | null;
+    offeringPlayerLastSeasonStats: SeasonStatLine | null;
+
+    // --- RIGHT: the responding player ---
+
     respondingPlayerId: number;
 
     /**
@@ -1738,6 +1787,7 @@ export interface TradeOfferResponseSlot {
     respondingPlayerLastName: string | null;
     respondingPlayerNhlTeam: string | null;
     respondingPlayerPosition: string | null;
+    respondingPlayerAge: number | null;
     respondingPlayerCurrentContract: PlayerContractLine | null;
     respondingPlayerSecondContract: PlayerContractLine | null;
 

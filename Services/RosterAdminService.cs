@@ -1017,26 +1017,63 @@ namespace NhlFantasyLeague.api.Services
             }
 
             var leagueLines = careerRows
-                .GroupBy(s => new
-                {
-                    s.PlayerId,
-                    s.Season,
-                    s.LeagueAbbreviation
-                })
-                .Select(g => new CardStatLine
-                {
-                    PlayerId = g.Key.PlayerId,
-                    Season = g.Key.Season,
-                    LeagueAbbreviation = g.Key.LeagueAbbreviation,
-                    GamesPlayed = g.Sum(s => s.GamesPlayed),
-                    Goals = g.Sum(s => s.Goals),
-                    Assists = g.Sum(s => s.Assists),
-                    Points = g.Sum(s => s.Points),
-                    Wins = g.Sum(s => s.Wins),
-                    Losses = g.Sum(s => s.Losses),
-                    OvertimeLosses = g.Sum(s => s.OvertimeLosses)
-                })
-                .ToList();
+     .GroupBy(s => new
+     {
+         s.PlayerId,
+         s.Season,
+         s.LeagueAbbreviation
+     })
+     .Select(g =>
+     {
+         // Weighted average ATOI across the group's rows.
+         // A mid-season trade splits one season into
+         // several Sequence rows; weighting by games
+         // played makes a 30-game stint at 20:00 and a
+         // 50-game stint at 15:00 average out to the
+         // season-long 16:52, not the naive 17:30.
+         //
+         // Rows whose ATOI is missing or unparsable are
+         // skipped entirely so they do not drag the
+         // average toward zero. Null when no usable row
+         // was found: the frontend renders a dash then.
+         var weightedSeconds = 0;
+         var weightedGames = 0;
+
+         foreach (var row in g)
+         {
+             var seconds = ParseToiSeconds(
+                 row.AverageTimeOnIce);
+
+             if (seconds > 0 && row.GamesPlayed > 0)
+             {
+                 weightedSeconds +=
+                     seconds * row.GamesPlayed;
+                 weightedGames += row.GamesPlayed;
+             }
+         }
+
+         string? aggregatedToi =
+             weightedGames > 0
+                 ? FormatToiSeconds(
+                     weightedSeconds / weightedGames)
+                 : null;
+
+         return new CardStatLine
+         {
+             PlayerId = g.Key.PlayerId,
+             Season = g.Key.Season,
+             LeagueAbbreviation = g.Key.LeagueAbbreviation,
+             GamesPlayed = g.Sum(s => s.GamesPlayed),
+             Goals = g.Sum(s => s.Goals),
+             Assists = g.Sum(s => s.Assists),
+             Points = g.Sum(s => s.Points),
+             Wins = g.Sum(s => s.Wins),
+             Losses = g.Sum(s => s.Losses),
+             OvertimeLosses = g.Sum(s => s.OvertimeLosses),
+             TimeOnIce = aggregatedToi,
+         };
+     })
+     .ToList();
 
             var chosenLines = leagueLines
                 .GroupBy(l => new { l.PlayerId, l.Season })
@@ -1074,12 +1111,16 @@ namespace NhlFantasyLeague.api.Services
             // PlayerGameLog. PlayerCareerStat is the historical
             // archive and only refreshes when the landing page is
             // re-synced, which can be hours behind. For the current
-            // season, PlayerSeasonStat always wins.
+            // season, PlayerSeasonStat always wins for the counting
+            // stats (GP / G / A / PTS / W / L / OTL).
             //
-            // PlayerCareerStat is kept as a fallback for players who
-            // have a career row for the current season but no
-            // PlayerSeasonStat row yet (should be rare, but harmless
-            // to keep).
+            // TimeOnIce is different. PlayerSeasonStat has no ATOI
+            // column, so the archive is the only source for TOI on
+            // the current season too. When we replace the archive-
+            // derived line with the live one, we have to carry the
+            // archive's TimeOnIce forward, otherwise the popup shows
+            // a dash for every player whose live row exists — which
+            // is every player with at least one game log this year.
             foreach (var kvp in seasonStatByPlayerAndSeasonCode)
             {
                 var (playerId, seasonCode) = kvp.Key;
@@ -1090,6 +1131,15 @@ namespace NhlFantasyLeague.api.Services
                 }
 
                 var stat = kvp.Value;
+
+                // Grab the archive-derived line for this player
+                // before we overwrite it. It may not exist (player
+                // has a live row but no archive row yet), in which
+                // case TimeOnIce stays null and the frontend
+                // renders a dash, which is correct.
+                currentStatsByPlayerId.TryGetValue(
+                    playerId,
+                    out var previousArchiveLine);
 
                 currentStatsByPlayerId[playerId] = new CardStatLine
                 {
@@ -1103,6 +1153,7 @@ namespace NhlFantasyLeague.api.Services
                     Wins = stat.Wins,
                     Losses = stat.Losses,
                     OvertimeLosses = stat.OvertimeLosses,
+                    TimeOnIce = previousArchiveLine?.TimeOnIce,
                 };
             }
 
@@ -1608,9 +1659,9 @@ namespace NhlFantasyLeague.api.Services
         }
 
         private static SeasonStatLineDto? ToSeasonStatLineDto(
-     Season? season,
-     CardStatLine? line,
-     PlayerSeasonStat? seasonStat = null)
+Season? season,
+CardStatLine? line,
+PlayerSeasonStat? seasonStat = null)
         {
             if (season == null || line == null)
             {
@@ -1638,7 +1689,12 @@ namespace NhlFantasyLeague.api.Services
                 // these. Zero when the row is missing.
                 HatTricks = seasonStat?.HatTricks ?? 0,
                 Shutouts = seasonStat?.Shutouts ?? 0,
-                FantasyPoints = seasonStat?.FantasyPoints ?? 0
+                FantasyPoints = seasonStat?.FantasyPoints ?? 0,
+
+                // Weighted average ATOI from the archive. Null when
+                // no row in the group carried a usable value; the
+                // frontend renders "—" then.
+                TimeOnIce = line.TimeOnIce,
             };
         }
 
@@ -1697,6 +1753,50 @@ namespace NhlFantasyLeague.api.Services
             var startYear = seasonCode / 10000;
             var endYear = seasonCode % 100;
             return $"{startYear % 100:D2}-{endYear:D2}";
+        }
+
+        /// <summary>
+        /// Parses an "MM:SS" time-on-ice string into total seconds.
+        /// Returns -1 when the value is null, empty, or unparsable,
+        /// so callers can distinguish "no value" from "0:00".
+        /// </summary>
+        private static int ParseToiSeconds(string? toi)
+        {
+            if (string.IsNullOrWhiteSpace(toi))
+            {
+                return -1;
+            }
+
+            var parts = toi.Split(':');
+
+            if (parts.Length != 2)
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[0], out var minutes))
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[1], out var seconds))
+            {
+                return -1;
+            }
+
+            return minutes * 60 + seconds;
+        }
+
+        /// <summary>
+        /// Formats total seconds as an "MM:SS" time-on-ice string.
+        /// Always pads the seconds component (e.g. "18:05") so the
+        /// frontend can render the value raw.
+        /// </summary>
+        private static string FormatToiSeconds(int totalSeconds)
+        {
+            var minutes = totalSeconds / 60;
+            var seconds = totalSeconds % 60;
+            return $"{minutes}:{seconds:D2}";
         }
 
         private static (PlayerContractLineDto? Current, PlayerContractLineDto? Second)
@@ -2130,6 +2230,14 @@ namespace NhlFantasyLeague.api.Services
             public int Wins { get; set; }
             public int Losses { get; set; }
             public int OvertimeLosses { get; set; }
+
+            /// <summary>
+            /// Weighted average ATOI across the group's Sequence
+            /// rows, formatted "MM:SS". Null when no row in the
+            /// group carried a usable ATOI value, so the frontend
+            /// renders a dash instead of a misleading "0:00".
+            /// </summary>
+            public string? TimeOnIce { get; set; }
         }
 
         private sealed class RecentGameLogRow

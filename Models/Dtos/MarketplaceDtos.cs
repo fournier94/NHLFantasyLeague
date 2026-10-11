@@ -71,6 +71,13 @@
         public string? OfferingPlayerPosition { get; set; }
 
         /// <summary>
+        /// Age in years, computed from the player's BirthDate. Null
+        /// when the birth date is unknown. Displayed next to the
+        /// player's name on the offer card.
+        /// </summary>
+        public int? OfferingPlayerAge { get; set; }
+
+        /// <summary>
         /// "Active", "Bench" or "Prospect" for the offering player,
         /// as of the current season. Null when the player is no
         /// longer on the creator's roster (offer is stale) or when
@@ -135,15 +142,21 @@
     /// of the exchange:
     ///
     ///   - Received view ("Offres reçues")  — from the offer
-    ///     creator's point of view. The card header shows the
-    ///     RESPONDING team's name.
+    ///     creator's point of view.
     ///
     ///   - Sent view ("Offres envoyées")    — from the responding
-    ///     team's point of view. The card header shows the ORIGINAL
-    ///     OFFER CREATOR's name.
+    ///     team's point of view.
     ///
-    /// Both names are carried so the frontend can pick the right one
-    /// per section without a second call.
+    /// Both team names are carried so the frontend can render the
+    /// two header columns and the two slot columns consistently:
+    ///
+    ///   - LEFT column: the original offer creator and the player
+    ///     he offered.
+    ///   - RIGHT column: the responding team and the player he
+    ///     offered in return.
+    ///
+    /// This is the same layout in both views, so a response card
+    /// looks identical whichever side is looking at it.
     /// </summary>
     public class TradeOfferResponseDto
     {
@@ -153,13 +166,13 @@
         /// <summary>Free-text note from the original offer, or null.</summary>
         public string? TradeOfferNote { get; set; }
 
-        // --- Original offer creator ("sent" header) ---
+        // --- Original offer creator (left header column) ---
 
         public int TradeOfferCreatedByFantasyTeamId { get; set; }
         public string TradeOfferCreatedByFantasyTeamName { get; set; } =
             string.Empty;
 
-        // --- Responding team ("received" header) ---
+        // --- Responding team (right header column) ---
 
         public int RespondingFantasyTeamId { get; set; }
         public string RespondingFantasyTeamName { get; set; } = string.Empty;
@@ -170,6 +183,12 @@
         public List<TradeOfferResponseSlotDto> Slots { get; set; } = new();
     }
 
+    /// <summary>
+    /// One slot of a response. Carries BOTH sides of that slot so a
+    /// response card can render the offer creator's offering player
+    /// on the left and the responding player on the right, without
+    /// fetching the original offer separately.
+    /// </summary>
     public class TradeOfferResponseSlotDto
     {
         public int SlotIndex { get; set; }
@@ -177,37 +196,41 @@
         /// <summary>"F", "D" or "G" — copied from the original offer slot.</summary>
         public string PositionGroup { get; set; } = string.Empty;
 
-        // --- The player the responding team offers for this slot ---
+        // --- LEFT: the offering player on the original offer ---
+
+        public int? OfferingPlayerId { get; set; }
+        public int? OfferingPlayerNhlPlayerId { get; set; }
+        public string? OfferingPlayerFirstName { get; set; }
+        public string? OfferingPlayerLastName { get; set; }
+        public string? OfferingPlayerNhlTeam { get; set; }
+        public string? OfferingPlayerPosition { get; set; }
+
+        /// <summary>Age in years of the offering player, or null.</summary>
+        public int? OfferingPlayerAge { get; set; }
+
+        public PlayerContractLineDto? OfferingPlayerCurrentContract { get; set; }
+        public PlayerContractLineDto? OfferingPlayerSecondContract { get; set; }
+        public SeasonStatLineDto? OfferingPlayerCurrentSeasonStats { get; set; }
+        public SeasonStatLineDto? OfferingPlayerLastSeasonStats { get; set; }
+
+        // --- RIGHT: the player the responding team offers ---
 
         public int RespondingPlayerId { get; set; }
-
-        /// <summary>
-        /// NHL API id of the responding player. Used by the frontend
-        /// to link the player's name to his detail page
-        /// (/joueurs/{nhlPlayerId}).
-        /// </summary>
         public int? RespondingPlayerNhlPlayerId { get; set; }
-
         public string? RespondingPlayerFirstName { get; set; }
         public string? RespondingPlayerLastName { get; set; }
         public string? RespondingPlayerNhlTeam { get; set; }
         public string? RespondingPlayerPosition { get; set; }
+
+        /// <summary>Age in years of the responding player, or null.</summary>
+        public int? RespondingPlayerAge { get; set; }
+
         public PlayerContractLineDto? RespondingPlayerCurrentContract { get; set; }
         public PlayerContractLineDto? RespondingPlayerSecondContract { get; set; }
-
-        /// <summary>
-        /// NHL regular-season stats for the responding player in the
-        /// current season, or null. Mirrors the offering side.
-        /// </summary>
         public SeasonStatLineDto? RespondingPlayerCurrentSeasonStats { get; set; }
-
-        /// <summary>
-        /// NHL regular-season stats for the responding player in the
-        /// previous season, or null.
-        /// </summary>
         public SeasonStatLineDto? RespondingPlayerLastSeasonStats { get; set; }
 
-        // --- Demand filters from the original offer slot ---
+        // --- Demand filters from the original offer slot (kept for reference) ---
 
         public int? DemandMinContractYears { get; set; }
         public decimal? DemandMaxSalary { get; set; }
