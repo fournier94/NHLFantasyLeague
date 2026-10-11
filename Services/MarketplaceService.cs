@@ -33,10 +33,8 @@ namespace NhlFantasyLeague.api.Services
 
         /// <summary>
         /// One player's two card-visible stat lines (current and
-        /// previous season). Either can be null when no
-        /// PlayerSeasonStat row exists yet for that season, which
-        /// happens for rookies and for players who have not dressed
-        /// in the NHL this year.
+        /// previous season). Either can be null when no row exists
+        /// for that season in either source table.
         /// </summary>
         private sealed class PlayerStatLines
         {
@@ -45,10 +43,57 @@ namespace NhlFantasyLeague.api.Services
         }
 
         /// <summary>
+        /// Sum of one player's PlayerCareerStat rows for one NHL
+        /// season. A season split across several Sequence rows
+        /// (mid-season trade) is aggregated into one line here,
+        /// matching how RosterAdminService builds the Mon équipe
+        /// card.
+        /// </summary>
+        private sealed class CareerStatAggregate
+        {
+            public int PlayerId { get; set; }
+            public int Season { get; set; }
+            public int GamesPlayed { get; set; }
+            public int Goals { get; set; }
+            public int Assists { get; set; }
+            public int Points { get; set; }
+            public int Wins { get; set; }
+            public int Losses { get; set; }
+            public int OvertimeLosses { get; set; }
+        }
+
+        /// <summary>
         /// Bulk-loads the current and previous season stat lines for
-        /// a set of players, keyed by PlayerId. Two queries total:
-        /// one for the two Season rows, one for the PlayerSeasonStat
-        /// rows.
+        /// a set of players, keyed by PlayerId.
+        ///
+        /// Two data sources:
+        ///
+        ///   - PlayerSeasonStat is the live-tracked table. Only the
+        ///     current season has rows in it (the live refresh and
+        ///     the log recompute write there). Its rows carry
+        ///     HatTricks, Shutouts and FantasyPoints.
+        ///
+        ///   - PlayerCareerStat is the historical archive written by
+        ///     the NHL landing sync. Its rows carry the raw per-
+        ///     season NHL totals (GP / G / A / PTS / W / L / OTL).
+        ///     This is the only place previous-season totals live,
+        ///     since PlayerSeasonStat is populated for the current
+        ///     season only.
+        ///
+        /// The two sources are combined per player:
+        ///
+        ///   - Current season: prefer PlayerSeasonStat (live).
+        ///     Fall back to PlayerCareerStat if no live row exists.
+        ///
+        ///   - Previous season: use PlayerCareerStat. A live row for
+        ///     the previous season is not expected, but if the
+        ///     archive is missing and a live row exists, it is used
+        ///     as a fallback.
+        ///
+        /// Both season codes are matched directly against
+        /// PlayerCareerStat.Season (a raw season code int, no FK), so
+        /// this works even if no Seasons row exists for the previous
+        /// year.
         /// </summary>
         private async Task<Dictionary<int, PlayerStatLines>>
             LoadStatLinesByPlayerIdAsync(
@@ -60,6 +105,11 @@ namespace NhlFantasyLeague.api.Services
                 return new Dictionary<int, PlayerStatLines>();
             }
 
+            // ---- Season rows (current and previous) -------------------
+            // Needed to resolve Season.Id for the PlayerSeasonStat
+            // lookup and to get the display name for the card label.
+            // A missing previous-season row is tolerated: the label
+            // then falls back to deriving "25-26" from the raw code.
             var seasons = await _dbContext.Seasons
                 .AsNoTracking()
                 .Where(s =>
@@ -73,22 +123,56 @@ namespace NhlFantasyLeague.api.Services
             var previousSeason = seasons.FirstOrDefault(s =>
                 s.NhlSeasonCode == PreviousSeasonNhlCode);
 
+            // ---- PlayerSeasonStat rows (current and previous) ---------
             var seasonIds = new List<int>();
 
             if (currentSeason != null) seasonIds.Add(currentSeason.Id);
             if (previousSeason != null) seasonIds.Add(previousSeason.Id);
 
-            if (seasonIds.Count == 0)
-            {
-                return new Dictionary<int, PlayerStatLines>();
-            }
+            var seasonStats = seasonIds.Count == 0
+                ? new List<PlayerSeasonStat>()
+                : await _dbContext.PlayerSeasonStats
+                    .AsNoTracking()
+                    .Where(s =>
+                        playerIds.Contains(s.PlayerId) &&
+                        seasonIds.Contains(s.SeasonId))
+                    .ToListAsync(ct);
 
-            var stats = await _dbContext.PlayerSeasonStats
+            // ---- PlayerCareerStat rows (current and previous) ---------
+            // NHL regular season rows only (GameTypeId == 2). The
+            // archive's Season column is the raw code, so we can
+            // filter without needing a Seasons row to exist.
+            var careerRows = await _dbContext.PlayerCareerStats
                 .AsNoTracking()
-                .Where(s =>
-                    playerIds.Contains(s.PlayerId) &&
-                    seasonIds.Contains(s.SeasonId))
+                .Where(r =>
+                    playerIds.Contains(r.PlayerId) &&
+                    r.GameTypeId == 2 &&
+                    r.LeagueAbbreviation == "NHL" &&
+                    (r.Season == CurrentSeasonNhlCode ||
+                     r.Season == PreviousSeasonNhlCode))
                 .ToListAsync(ct);
+
+            // Aggregate per (playerId, seasonCode). A season split
+            // across several Sequence rows is summed into one line,
+            // matching how RosterAdminService builds the Mon équipe
+            // card.
+            var careerByPlayerAndSeason =
+                careerRows
+                    .GroupBy(r => new { r.PlayerId, r.Season })
+                    .ToDictionary(
+                        g => (g.Key.PlayerId, g.Key.Season),
+                        g => new CareerStatAggregate
+                        {
+                            PlayerId = g.Key.PlayerId,
+                            Season = g.Key.Season,
+                            GamesPlayed = g.Sum(r => r.GamesPlayed),
+                            Goals = g.Sum(r => r.Goals),
+                            Assists = g.Sum(r => r.Assists),
+                            Points = g.Sum(r => r.Points),
+                            Wins = g.Sum(r => r.Wins),
+                            Losses = g.Sum(r => r.Losses),
+                            OvertimeLosses = g.Sum(r => r.OvertimeLosses),
+                        });
 
             var result = new Dictionary<int, PlayerStatLines>();
 
@@ -96,27 +180,52 @@ namespace NhlFantasyLeague.api.Services
             {
                 var lines = new PlayerStatLines();
 
+                // ---- Current season ----------------------------------
+                // Prefer the live-tracked PlayerSeasonStat row. Fall
+                // back to the archive if the live row is missing.
+                PlayerSeasonStat? currentLiveRow = null;
+
                 if (currentSeason != null)
                 {
-                    var row = stats.FirstOrDefault(s =>
+                    currentLiveRow = seasonStats.FirstOrDefault(s =>
                         s.PlayerId == id &&
                         s.SeasonId == currentSeason.Id);
-
-                    if (row != null)
-                    {
-                        lines.Current = ToStatLineDto(row, currentSeason);
-                    }
                 }
 
-                if (previousSeason != null)
+                if (currentLiveRow != null && currentSeason != null)
                 {
-                    var row = stats.FirstOrDefault(s =>
+                    lines.Current = ToStatLineDto(
+                        currentLiveRow, currentSeason);
+                }
+                else if (careerByPlayerAndSeason.TryGetValue(
+                             (id, CurrentSeasonNhlCode),
+                             out var currentCareer))
+                {
+                    lines.Current = ToStatLineDtoFromCareer(
+                        currentCareer, currentSeason);
+                }
+
+                // ---- Previous season ---------------------------------
+                // Historical totals always come from the archive. If
+                // the archive is missing and a live row exists for
+                // the previous season, use it as a fallback.
+                if (careerByPlayerAndSeason.TryGetValue(
+                        (id, PreviousSeasonNhlCode),
+                        out var previousCareer))
+                {
+                    lines.Previous = ToStatLineDtoFromCareer(
+                        previousCareer, previousSeason);
+                }
+                else if (previousSeason != null)
+                {
+                    var previousLiveRow = seasonStats.FirstOrDefault(s =>
                         s.PlayerId == id &&
                         s.SeasonId == previousSeason.Id);
 
-                    if (row != null)
+                    if (previousLiveRow != null)
                     {
-                        lines.Previous = ToStatLineDto(row, previousSeason);
+                        lines.Previous = ToStatLineDto(
+                            previousLiveRow, previousSeason);
                     }
                 }
 
@@ -150,6 +259,53 @@ namespace NhlFantasyLeague.api.Services
                 HatTricks = stat.HatTricks,
                 Shutouts = stat.Shutouts,
                 FantasyPoints = stat.FantasyPoints,
+            };
+        }
+
+        /// <summary>
+        /// Builds a SeasonStatLineDto from a PlayerCareerStat
+        /// aggregate. Used for previous-season rows (where only the
+        /// archive has data) and as a current-season fallback when
+        /// the live PlayerSeasonStat row is missing.
+        ///
+        /// HatTricks, Shutouts and FantasyPoints are set to 0: the
+        /// archive does not carry them per card season, and the card
+        /// does not display them for historical seasons. This
+        /// matches RosterAdminService.ToSeasonStatLineDto.
+        ///
+        /// The label is taken from the matching Season row when one
+        /// exists. When it does not (the previous-season Seasons
+        /// row was never created), the label is derived from the
+        /// raw season code, e.g. "2025-26".
+        /// </summary>
+        private static SeasonStatLineDto ToStatLineDtoFromCareer(
+            CareerStatAggregate aggregate,
+            Season? season)
+        {
+            var code = aggregate.Season;
+
+            var label =
+                season != null && !string.IsNullOrWhiteSpace(season.Name)
+                    ? season.Name
+                    : $"{code / 10000}-{code % 100:D2}";
+
+            return new SeasonStatLineDto
+            {
+                Label = label,
+                NhlSeasonCode = code,
+                LeagueAbbreviation = "NHL",
+                TeamName = null,
+                GameTypeId = 2,
+                GamesPlayed = aggregate.GamesPlayed,
+                Goals = aggregate.Goals,
+                Assists = aggregate.Assists,
+                Points = aggregate.Points,
+                Wins = aggregate.Wins,
+                Losses = aggregate.Losses,
+                OvertimeLosses = aggregate.OvertimeLosses,
+                HatTricks = 0,
+                Shutouts = 0,
+                FantasyPoints = 0,
             };
         }
 
