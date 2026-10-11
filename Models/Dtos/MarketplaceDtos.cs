@@ -14,6 +14,22 @@
         public decimal? DemandMaxSalary { get; set; }
         public int? DemandMaxAge { get; set; }
         public int? DemandMinPointsLastYear { get; set; }
+
+        /// <summary>
+        /// Whether the responder's player dropdown should be filtered
+        /// by the demand criteria above.
+        ///
+        /// true  (default) → only players that satisfy every demand
+        ///                    filter are offered for this slot.
+        /// false           → every player of the matching position
+        ///                    group is offered, ignoring the other
+        ///                    filters. Position is always enforced.
+        ///
+        /// Defaults to true when omitted from the JSON body, so an
+        /// old client that does not send the field keeps the strict
+        /// behavior.
+        /// </summary>
+        public bool EnforceDemandCriteria { get; set; } = true;
     }
 
     public class TradeOfferDto
@@ -119,6 +135,14 @@
         public decimal? DemandMaxSalary { get; set; }
         public int? DemandMaxAge { get; set; }
         public int? DemandMinPointsLastYear { get; set; }
+
+        /// <summary>
+        /// Whether the responder's player dropdown should be filtered
+        /// by the demand criteria above. true = strict (the default
+        /// and current behavior), false = show every player of the
+        /// matching position. Position is always enforced regardless.
+        /// </summary>
+        public bool EnforceDemandCriteria { get; set; } = true;
     }
 
     public class TradeOfferActionResultDto

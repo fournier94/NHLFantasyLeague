@@ -223,12 +223,12 @@ namespace NhlFantasyLeague.api.Services
                 : request.Note!.Trim();
 
             AddHistoryRow(
-                entry.PlayerId,
-                oldTeamId,
-                season.Id,
-                status,
-                effectiveAt,
-                note);
+        entry.PlayerId,
+        oldTeamId,
+        season.Id,
+        status,
+        effectiveAt,
+        note);
 
             AddHistoryRow(
                 entry.PlayerId,
@@ -237,6 +237,16 @@ namespace NhlFantasyLeague.api.Services
                 status,
                 effectiveAt,
                 note);
+
+            // A player who changes fantasy teams can no longer be
+            // offered by his old team, nor used as a responding
+            // pick by a former manager. Drop every active offer
+            // and every pending or accepted response that
+            // references him, in the same transaction as the
+            // roster move.
+            var (offersDeleted, responsesDeleted) =
+                await DeleteMarketplaceObjectsInvolvingPlayersAsync(
+                    new[] { entry.PlayerId });
 
             await _dbContext.SaveChangesAsync();
 
@@ -247,7 +257,9 @@ namespace NhlFantasyLeague.api.Services
                 Success = true,
                 Message =
                     $"'{PlayerName(entry.Player)}' moved from '{oldTeamName}' " +
-                    $"to '{newTeam.Name}' for {season.Name}.",
+                    $"to '{newTeam.Name}' for {season.Name}." +
+                    BuildMarketplaceCleanupSuffix(
+                        offersDeleted, responsesDeleted),
                 Entry = ToRosterEntryDto(entry)
             };
         }
@@ -844,6 +856,9 @@ namespace NhlFantasyLeague.api.Services
             // Status-only and slot-only updates do not append history:
             // they are covered by the swap / set-status endpoints, which
             // write their own rows. This keeps the audit trail exact.
+            var offersDeleted = 0;
+            var responsesDeleted = 0;
+
             if (teamChanged)
             {
                 var effectiveAt = NormalizeEffectiveAt(request.EffectiveAt!.Value);
@@ -867,17 +882,30 @@ namespace NhlFantasyLeague.api.Services
                     tradeStatus,
                     effectiveAt,
                     note);
+
+                // Same cleanup as MovePlayerAsync: this path also
+                // changes a player's team (just via a different
+                // request shape), so every marketplace object that
+                // references him is now stale.
+                (offersDeleted, responsesDeleted) =
+                    await DeleteMarketplaceObjectsInvolvingPlayersAsync(
+                        new[] { entry.PlayerId });
             }
 
             await _dbContext.SaveChangesAsync();
 
             OnRosterChanged();
 
+            var marketplaceSuffix =
+                BuildMarketplaceCleanupSuffix(
+                    offersDeleted, responsesDeleted);
+
             return new RosterActionResultDto
             {
                 Success = true,
                 Message = teamChanged
-                    ? $"'{PlayerName(entry.Player)}' transferred to '{entry.FantasyTeam?.Name}'."
+                    ? $"'{PlayerName(entry.Player)}' transferred to '{entry.FantasyTeam?.Name}'." +
+                        marketplaceSuffix
                     : $"'{PlayerName(entry.Player)}' updated on '{entry.FantasyTeam?.Name}'.",
                 Entry = ToRosterEntryDto(entry)
             };
@@ -2117,6 +2145,144 @@ PlayerSeasonStat? seasonStat = null)
         {
             var tomorrow = DateTime.UtcNow.Date.AddDays(1);
             return DateTime.SpecifyKind(tomorrow, DateTimeKind.Utc);
+        }
+
+        /// <summary>
+        /// Deletes every active marketplace object that references
+        /// any of the given players, because a player who just
+        /// changed teams can no longer be offered by his old team
+        /// (as a TradeOffer offering player) nor used as a
+        /// responding pick by a former manager (as a
+        /// TradeOfferResponse responding player).
+        ///
+        /// Two passes:
+        ///
+        ///   1. Every ACTIVE TradeOffer that lists one of these
+        ///      players as an OfferingPlayerId on any of its slots.
+        ///      Deleting the offer cascades to its slots, its
+        ///      responses, its response slots, and its per-user
+        ///      "seen" markers (see AppDbContext for the cascade
+        ///      rules). This is the correct unit of deletion: an
+        ///      offer that still advertises a player his old team
+        ///      no longer owns is invalid from its first slot
+        ///      onward.
+        ///
+        ///   2. Every PENDING or ACCEPTED TradeOfferResponse whose
+        ///      slot uses one of these players as a
+        ///      RespondingPlayerId, restricted to offers that are
+        ///      NOT being deleted in pass 1 (their responses
+        ///      cascade, so no explicit delete is needed). The
+        ///      parent TradeOffer is left untouched — it is
+        ///      another manager's announcement and remains valid
+        ///      if it doesn't reference any of these players on
+        ///      its own slots.
+        ///
+        /// Closed, Cancelled and Rejected responses, and non-Active
+        /// offers, are not touched: they are already invisible to
+        /// every user (each panel filters them out) and deleting
+        /// them would erase audit rows for no benefit.
+        ///
+        /// Does NOT call SaveChangesAsync. The caller must save in
+        /// the same transaction as the roster mutation, so the
+        /// marketplace is always consistent with who currently
+        /// owns whom.
+        /// </summary>
+        private async Task<(int OffersDeleted, int ResponsesDeleted)>
+            DeleteMarketplaceObjectsInvolvingPlayersAsync(
+                IReadOnlyCollection<int> playerIds)
+        {
+            if (playerIds.Count == 0)
+            {
+                return (0, 0);
+            }
+
+            // Pass 1: active offers that advertise any of these
+            // players on the creator's side.
+            var offerIdsToDelete = await _dbContext.TradeOfferSlots
+                .AsNoTracking()
+                .Where(s =>
+                    s.OfferingPlayerId.HasValue &&
+                    playerIds.Contains(s.OfferingPlayerId.Value) &&
+                    s.TradeOffer.Status == TradeOfferStatus.Active)
+                .Select(s => s.TradeOfferId)
+                .Distinct()
+                .ToListAsync();
+
+            if (offerIdsToDelete.Count > 0)
+            {
+                var offersToDelete = await _dbContext.TradeOffers
+                    .Where(o => offerIdsToDelete.Contains(o.Id))
+                    .ToListAsync();
+
+                _dbContext.TradeOffers.RemoveRange(offersToDelete);
+            }
+
+            // Pass 2: pending or accepted responses that used any
+            // of these players on the responder's side, restricted
+            // to offers we are NOT already deleting.
+            var responseIdsToDelete = await _dbContext
+                .TradeOfferResponseSlots
+                .AsNoTracking()
+                .Where(s =>
+                    playerIds.Contains(s.RespondingPlayerId) &&
+                    (s.TradeOfferResponse.Status ==
+                        TradeOfferResponseStatus.Pending ||
+                     s.TradeOfferResponse.Status ==
+                        TradeOfferResponseStatus.Accepted) &&
+                    !offerIdsToDelete.Contains(
+                        s.TradeOfferResponse.TradeOfferId))
+                .Select(s => s.TradeOfferResponseId)
+                .Distinct()
+                .ToListAsync();
+
+            if (responseIdsToDelete.Count > 0)
+            {
+                var responsesToDelete = await _dbContext
+                    .TradeOfferResponses
+                    .Where(r => responseIdsToDelete.Contains(r.Id))
+                    .ToListAsync();
+
+                _dbContext.TradeOfferResponses.RemoveRange(
+                    responsesToDelete);
+            }
+
+            return (
+                offerIdsToDelete.Count,
+                responseIdsToDelete.Count);
+        }
+
+        /// <summary>
+        /// Builds the trailing clause the roster operation appends
+        /// to its success message when the marketplace cleanup
+        /// deleted anything. Returns an empty string when nothing
+        /// was deleted, so the caller can just concatenate
+        /// unconditionally.
+        /// </summary>
+        private static string BuildMarketplaceCleanupSuffix(
+            int offersDeleted,
+            int responsesDeleted)
+        {
+            if (offersDeleted == 0 && responsesDeleted == 0)
+            {
+                return string.Empty;
+            }
+
+            var parts = new List<string>();
+
+            if (offersDeleted > 0)
+            {
+                parts.Add($"{offersDeleted} offer(s)");
+            }
+
+            if (responsesDeleted > 0)
+            {
+                parts.Add($"{responsesDeleted} response(s)");
+            }
+
+            return
+                " Marketplace: removed " +
+                string.Join(" and ", parts) +
+                " involving him.";
         }
 
         private void AddHistoryRow(

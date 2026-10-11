@@ -190,6 +190,35 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 }
 
 /**
+ * Like apiPost, but for PUT: sends JSON, expects JSON back.
+ * Clears the GET cache on success so the next read refetches.
+ */
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${API_BASE}${path}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: FETCH_CREDENTIALS,
+        body: JSON.stringify(body),
+    });
+
+    if (response.status === 401) {
+        clearApiCache();
+        notifyUnauthorized();
+        throw new Error(await readErrorMessage(response, 'Non authentifié.'));
+    }
+
+    if (!response.ok) {
+        throw new Error(
+            await readErrorMessage(response, `Erreur API ${response.status}`),
+        );
+    }
+
+    clearApiCache();
+
+    return (await response.json()) as T;
+}
+
+/**
  * Like apiPost, but for PATCH: sends JSON, expects JSON back.
  * Clears the GET cache on success so the next read refetches.
  */
@@ -1564,6 +1593,15 @@ export interface TradeOfferSlot {
     /** "F", "D" or "G". */
     positionGroup: string;
 
+    /**
+     * When true, the responder's player dropdown is filtered by the
+     * demand criteria below — the strict behavior the marketplace
+     * has always had. When false, the dropdown shows every player of
+     * the matching position, ignoring the other criteria. The
+     * position group itself is always enforced regardless.
+     */
+    enforceDemandCriteria: boolean;
+
     /** Optional player the creator is offering. */
     offeringPlayerId: number | null;
 
@@ -1703,6 +1741,13 @@ export interface CreateTradeOfferSlotRequest {
     demandMaxSalary?: number | null;
     demandMaxAge?: number | null;
     demandMinPointsLastYear?: number | null;
+    /**
+     * When true, the responder only sees his players that satisfy
+     * the demand criteria above. When false, he sees every player
+     * of the matching position (position is always enforced).
+     * Defaults to true on the backend when omitted.
+     */
+    enforceDemandCriteria?: boolean;
 }
 
 /** Body of POST /api/Marketplace/offers. */
@@ -1719,6 +1764,26 @@ export function createTradeOffer(
     request: CreateTradeOfferRequest,
 ): Promise<TradeOffer> {
     return apiPost<TradeOffer>('/Marketplace/offers', request);
+}
+
+/**
+ * Updates an existing marketplace offer owned by the calling user's
+ * team. Same payload shape as createTradeOffer: the backend replaces
+ * every slot and the note in place. The offer's Id, CreatedAt, and
+ * every per-user "seen" marker are preserved, so it keeps its place
+ * on the browse list and does not pop up as "Nouvelle offre" again.
+ *
+ * The backend refuses the update if the offer has any Pending or
+ * Accepted response.
+ */
+export function updateTradeOffer(
+    offerId: number,
+    request: CreateTradeOfferRequest,
+): Promise<TradeOffer> {
+    return apiPut<TradeOffer>(
+        `/Marketplace/offers/${offerId}`,
+        request,
+    );
 }
 
 /**

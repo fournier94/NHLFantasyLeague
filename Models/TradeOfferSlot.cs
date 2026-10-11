@@ -42,5 +42,27 @@
 
         /// <summary>Minimum points produced last NHL season.</summary>
         public int? DemandMinPointsLastYear { get; set; }
+
+        /// <summary>
+        /// Whether the responder's player dropdown is filtered by the
+        /// demand criteria above.
+        ///
+        /// true  (default) → only players that satisfy every demand
+        ///                    filter are offered for this slot. This
+        ///                    is the behavior every existing offer
+        ///                    has had since the marketplace shipped.
+        ///
+        /// false           → every player of the matching position
+        ///                    group is offered, ignoring the demand
+        ///                    filters. The position group itself is
+        ///                    always enforced regardless of this flag,
+        ///                    because it is what defines the slot.
+        ///
+        /// Set per slot by the offer creator through the "Critères
+        /// recherchés" form's checkbox. The responder never sees or
+        /// edits it — it only governs which players appear in his
+        /// dropdown.
+        /// </summary>
+        public bool EnforceDemandCriteria { get; set; } = true;
     }
 }

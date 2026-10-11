@@ -98,6 +98,37 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(new { inserted });
         }
 
+        /// <summary>
+        /// Replaces the slots and note of an existing offer owned by
+        /// the calling user's team. Refused when the offer already has
+        /// a Pending or Accepted response, since changing the demanded
+        /// players underneath a responder would invalidate their
+        /// picks.
+        /// </summary>
+        [HttpPut("offers/{id:int}")]
+        public async Task<IActionResult> UpdateOffer(
+            int id,
+            [FromBody] CreateTradeOfferRequest request,
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var result = await _marketplaceService
+                .UpdateOfferAsync(uid, id, request, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(new { message = result.Message });
+            }
+
+            return Ok(result.Offer);
+        }
+
         [HttpDelete("offers/{id:int}")]
         public async Task<IActionResult> CancelOffer(
             int id,

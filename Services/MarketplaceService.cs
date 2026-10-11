@@ -481,6 +481,101 @@ namespace NhlFantasyLeague.api.Services
             return age;
         }
 
+        /// <summary>
+        /// Validates the slot list of a trade-offer request against the
+        /// calling team's roster for the given season. Returns the
+        /// first error message it finds, or null when the request is
+        /// valid.
+        ///
+        /// Shared by CreateOfferAsync and UpdateOfferAsync so the two
+        /// endpoints can never drift apart on the offer rules:
+        ///   - 1..10 slots,
+        ///   - position group is F / D / G,
+        ///   - each offered player appears at most once across slots,
+        ///   - each offered player is on the calling team for the
+        ///     season,
+        ///   - the offered player's position group matches the slot's
+        ///     demanded position group.
+        /// </summary>
+        private async Task<string?> ValidateOfferSlotsAsync(
+            int teamId,
+            int seasonId,
+            IList<CreateTradeOfferSlotRequest>? slots,
+            CancellationToken ct)
+        {
+            if (slots == null || slots.Count == 0)
+            {
+                return "Ajoutez au moins un joueur a votre offre.";
+            }
+
+            if (slots.Count > 10)
+            {
+                return "Maximum 10 joueurs par offre.";
+            }
+
+            var rosterEntries = await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Include(e => e.Player)
+                .Where(e =>
+                    e.FantasyTeamId == teamId &&
+                    e.SeasonId == seasonId)
+                .ToListAsync(ct);
+
+            var rosterByPlayerId = rosterEntries
+                .GroupBy(e => e.PlayerId)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var seenPlayerIds = new HashSet<int>();
+
+            for (var i = 0; i < slots.Count; i++)
+            {
+                var slot = slots[i];
+
+                if (!IsValidPositionGroup(slot.PositionGroup))
+                {
+                    return
+                        $"Position invalide a l'emplacement {i + 1}. " +
+                        "Utilisez F, D ou G.";
+                }
+
+                if (slot.OfferingPlayerId.HasValue)
+                {
+                    if (!seenPlayerIds.Add(slot.OfferingPlayerId.Value))
+                    {
+                        return
+                            "Le meme joueur ne peut pas apparaitre " +
+                            "deux fois dans la meme offre.";
+                    }
+
+                    if (!rosterByPlayerId.TryGetValue(
+                            slot.OfferingPlayerId.Value,
+                            out var entry))
+                    {
+                        return
+                            $"Le joueur {slot.OfferingPlayerId.Value} " +
+                            "n'est pas sur votre equipe pour la saison " +
+                            "en cours.";
+                    }
+
+                    var playerGroup = PositionGroupHelper.Classify(
+                        entry.Player?.Position);
+
+                    if (!PositionMatchesGroup(
+                            playerGroup, slot.PositionGroup))
+                    {
+                        return
+                            $"La position du joueur " +
+                            $"{entry.Player?.FirstName} " +
+                            $"{entry.Player?.LastName} ne correspond pas " +
+                            $"a la position demandee pour l'emplacement " +
+                            $"{i + 1}.";
+                    }
+                }
+            }
+
+            return null;
+        }
+
         public async Task<TradeOfferActionResultDto> CreateOfferAsync(
             int userId,
             CreateTradeOfferRequest request,
@@ -509,75 +604,12 @@ namespace NhlFantasyLeague.api.Services
                     "Aucune saison active. Lancez POST /api/League/setup.");
             }
 
-            if (request.Slots == null || request.Slots.Count == 0)
+            var validationError = await ValidateOfferSlotsAsync(
+                teamId, season.Id, request.Slots, ct);
+
+            if (validationError != null)
             {
-                return Failure(
-                    "Ajoutez au moins un joueur a votre offre.");
-            }
-
-            if (request.Slots.Count > 10)
-            {
-                return Failure("Maximum 10 joueurs par offre.");
-            }
-
-            var rosterEntries = await _dbContext.RosterEntries
-                .AsNoTracking()
-                .Include(e => e.Player)
-                .Where(e =>
-                    e.FantasyTeamId == teamId &&
-                    e.SeasonId == season.Id)
-                .ToListAsync(ct);
-
-            var rosterByPlayerId = rosterEntries
-                .GroupBy(e => e.PlayerId)
-                .ToDictionary(g => g.Key, g => g.First());
-
-            var seenPlayerIds = new HashSet<int>();
-
-            for (var i = 0; i < request.Slots.Count; i++)
-            {
-                var slot = request.Slots[i];
-
-                if (!IsValidPositionGroup(slot.PositionGroup))
-                {
-                    return Failure(
-                        $"Position invalide a l'emplacement {i + 1}. " +
-                        "Utilisez F, D ou G.");
-                }
-
-                if (slot.OfferingPlayerId.HasValue)
-                {
-                    if (!seenPlayerIds.Add(slot.OfferingPlayerId.Value))
-                    {
-                        return Failure(
-                            "Le meme joueur ne peut pas apparaitre " +
-                            "deux fois dans la meme offre.");
-                    }
-
-                    if (!rosterByPlayerId.TryGetValue(
-                            slot.OfferingPlayerId.Value,
-                            out var entry))
-                    {
-                        return Failure(
-                            $"Le joueur {slot.OfferingPlayerId.Value} " +
-                            "n'est pas sur votre equipe pour la saison " +
-                            "en cours.");
-                    }
-
-                    var playerGroup = PositionGroupHelper.Classify(
-                        entry.Player?.Position);
-
-                    if (!PositionMatchesGroup(
-                            playerGroup, slot.PositionGroup))
-                    {
-                        return Failure(
-                            $"La position du joueur " +
-                            $"{entry.Player?.FirstName} " +
-                            $"{entry.Player?.LastName} ne correspond pas " +
-                            $"a la position demandee pour l'emplacement " +
-                            $"{i + 1}.");
-                    }
-                }
+                return Failure(validationError);
             }
 
             var offer = new TradeOffer
@@ -632,6 +664,150 @@ namespace NhlFantasyLeague.api.Services
             {
                 Success = true,
                 Message = "Offre publiee.",
+                Offer = reloaded,
+            };
+        }
+
+        /// <summary>
+        /// Replaces the slot list and the note of an existing offer
+        /// owned by the calling team.
+        ///
+        /// IDENTITY IS PRESERVED: the TradeOffer row itself is not
+        /// deleted and re-created, so its Id, its CreatedAt, and every
+        /// per-user "seen" marker stay valid. On the browse list the
+        /// modified offer keeps its position and does not pop up as
+        /// "Nouvelle offre" again.
+        ///
+        /// REFUSES TO EDIT WHEN A RESPONSE IS IN FLIGHT: if any
+        /// Pending or Accepted response exists on the offer, the
+        /// update is refused. Replacing the offered players or the
+        /// demand criteria underneath a responder would silently
+        /// invalidate the picks they already submitted, and the
+        /// correct fix is to cancel the offer and publish a new one.
+        ///
+        /// Rejected / Cancelled responses are left in place as
+        /// historical rows — every panel filters them out, so they
+        /// never appear to any user.
+        /// </summary>
+        public async Task<TradeOfferActionResultDto> UpdateOfferAsync(
+            int userId,
+            int offerId,
+            CreateTradeOfferRequest request,
+            CancellationToken ct = default)
+        {
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return Failure(
+                    "Vous devez avoir une equipe pour modifier une offre.");
+            }
+
+            var teamId = user.FantasyTeamId.Value;
+
+            var offer = await _dbContext.TradeOffers
+                .Include(o => o.Slots)
+                .FirstOrDefaultAsync(o => o.Id == offerId, ct);
+
+            if (offer == null)
+            {
+                return Failure("Offre introuvable.");
+            }
+
+            if (offer.CreatedByFantasyTeamId != teamId)
+            {
+                return Failure(
+                    "Vous ne pouvez modifier que vos propres offres.");
+            }
+
+            if (offer.Status != TradeOfferStatus.Active)
+            {
+                return Failure("Cette offre n'est plus active.");
+            }
+
+            var blockingResponses = await _dbContext.TradeOfferResponses
+                .AsNoTracking()
+                .CountAsync(r =>
+                    r.TradeOfferId == offerId &&
+                    (r.Status == TradeOfferResponseStatus.Pending ||
+                     r.Status == TradeOfferResponseStatus.Accepted), ct);
+
+            if (blockingResponses > 0)
+            {
+                return Failure(
+                    "Cette offre a deja recu une reponse. " +
+                    "Annulez-la et publiez-en une nouvelle pour la " +
+                    "modifier.");
+            }
+
+            var season = await _dbContext.Seasons
+                .AsNoTracking()
+                .OrderByDescending(s => s.StartDate)
+                .FirstOrDefaultAsync(ct);
+
+            if (season == null)
+            {
+                return Failure(
+                    "Aucune saison active. Lancez POST /api/League/setup.");
+            }
+
+            var validationError = await ValidateOfferSlotsAsync(
+                teamId, season.Id, request.Slots, ct);
+
+            if (validationError != null)
+            {
+                return Failure(validationError);
+            }
+
+            // Replace the slots in place. Materialize the current
+            // collection before removing so we can mutate it while
+            // iterating. EF Core orders the DELETEs before the
+            // INSERTs within the same SaveChanges, so the unique
+            // index on (TradeOfferId, SlotIndex) stays satisfied
+            // throughout the transaction.
+            var oldSlots = offer.Slots.ToList();
+            _dbContext.TradeOfferSlots.RemoveRange(oldSlots);
+            offer.Slots.Clear();
+
+            for (var i = 0; i < request.Slots.Count; i++)
+            {
+                var slot = request.Slots[i];
+
+                offer.Slots.Add(new TradeOfferSlot
+                {
+                    SlotIndex = i,
+                    PositionGroup = slot.PositionGroup
+          .Trim()
+          .ToUpperInvariant(),
+                    OfferingPlayerId = slot.OfferingPlayerId,
+                    DemandMinContractYears = slot.DemandMinContractYears,
+                    DemandMaxSalary = slot.DemandMaxSalary,
+                    DemandMaxAge = slot.DemandMaxAge,
+                    DemandMinPointsLastYear = slot.DemandMinPointsLastYear,
+                    EnforceDemandCriteria = slot.EnforceDemandCriteria,
+                });
+            }
+
+            offer.Note = string.IsNullOrWhiteSpace(request.Note)
+                ? null
+                : request.Note.Trim();
+
+            await _dbContext.SaveChangesAsync(ct);
+
+            var reloaded = await LoadOfferDtoAsync(offer.Id, userId, ct);
+
+            if (reloaded == null)
+            {
+                return Failure(
+                    "Offre modifiee mais impossible de la recharger.");
+            }
+
+            return new TradeOfferActionResultDto
+            {
+                Success = true,
+                Message = "Offre modifiee.",
                 Offer = reloaded,
             };
         }
@@ -1803,6 +1979,8 @@ offeredPlayerIds, ct);
                             DemandMaxAge = s.DemandMaxAge,
                             DemandMinPointsLastYear =
                                 s.DemandMinPointsLastYear,
+                            EnforceDemandCriteria =
+                                s.EnforceDemandCriteria,
                         };
                     })
                     .ToList(),

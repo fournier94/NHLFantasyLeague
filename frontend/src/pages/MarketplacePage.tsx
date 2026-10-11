@@ -14,6 +14,7 @@ import {
     listTradeOffers,
     markOffersSeen,
     respondToTradeOffer,
+    updateTradeOffer,
     type CreateTradeOfferSlotRequest,
     type PlayerContractLine,
     type RespondToTradeOfferPick,
@@ -53,6 +54,12 @@ interface SlotState {
     maxSalary: string;
     maxAge: string;
     minPointsLastYear: string;
+    /**
+     * Whether the responder's player dropdown should be filtered
+     * by the criteria above. Mirrors TradeOfferSlot.enforceDemandCriteria.
+     * Defaults to true (strict) in EMPTY_SLOT.
+     */
+    enforceCriteria: boolean;
 }
 
 const EMPTY_SLOT: SlotState = {
@@ -63,6 +70,9 @@ const EMPTY_SLOT: SlotState = {
     maxSalary: '',
     maxAge: '',
     minPointsLastYear: '',
+    // Ticked by default: the responder's dropdown is filtered by
+    // the criteria, matching the marketplace's historical behavior.
+    enforceCriteria: true,
 };
 
 const MAX_SLOTS = 10;
@@ -181,6 +191,7 @@ function slotToRequest(slot: SlotState): CreateTradeOfferSlotRequest {
         demandMaxSalary: parseOptionalMoney(slot.maxSalary),
         demandMaxAge: parseOptionalInt(slot.maxAge),
         demandMinPointsLastYear: parseOptionalInt(slot.minPointsLastYear),
+        enforceDemandCriteria: slot.enforceCriteria,
     };
 }
 
@@ -366,8 +377,18 @@ function playerMatchesSlotDemand(
     entry: RosterEntry,
     slot: TradeOfferSlot,
 ): boolean {
+    // Position is always enforced: it is what defines the slot.
     if (toPositionGroup(entry.position) !== slot.positionGroup) {
         return false;
+    }
+
+    // When the offer creator opted out of demand criteria for this
+    // slot, any player of the matching position is a valid pick.
+    // Note: `!== false` rather than a plain truthiness check, so a
+    // payload that somehow omits the field (older cached response,
+    // bad data) is treated as the safe default of "strict".
+    if (slot.enforceDemandCriteria === false) {
+        return true;
     }
 
     if (slot.demandMinContractYears != null) {
@@ -629,6 +650,23 @@ export default function MarketplacePage() {
         'view' | 'mine' | 'publish'
     >('view');
 
+    /**
+     * Offer currently being edited, or null when the user is
+     * publishing a new one.
+     *
+     * The "Modifier" button on a "Mon offre" card sets this and
+     * switches the sub-view to 'publish'. AddOfferPanel detects it
+     * and renders in edit mode: the form is pre-populated from the
+     * offer's slots and note, and the submit call goes through
+     * updateTradeOffer instead of createTradeOffer. Clearing it
+     * back to null returns the panel to its fresh-publish state.
+     *
+     * The offer itself is captured (not just its id) so the form
+     * does not have to re-fetch it.
+     */
+    const [editingOffer, setEditingOffer] =
+        useState<TradeOffer | null>(null);
+
     // The "Créer" tab no longer has a sub-toggle. Its only remaining
     // option ("Envoyer une offre", not built yet) renders directly.
     // The old "Publier une annonce" sub-view now lives in the Marché
@@ -819,6 +857,19 @@ export default function MarketplacePage() {
                     onOpenTeamRoster={(id, name) =>
                         setRosterPopupTeam({ id, name })
                     }
+                    onEditOffer={
+                        // Only meaningful on "Vos offres actives":
+                        // the "Modifier" button is rendered only on
+                        // the user's own offers, and this callback
+                        // switches the sub-view to 'publish' with
+                        // the offer pre-loaded.
+                        browseSubView === 'mine'
+                            ? (offer) => {
+                                setEditingOffer(offer);
+                                setBrowseSubView('publish');
+                            }
+                            : undefined
+                    }
                 />
             )}
 
@@ -827,10 +878,19 @@ export default function MarketplacePage() {
                     onPublished={() => {
                         // We're already on the Marché tab; just refresh
                         // the lists and drop the user on "Vos offres" so
-                        // he sees the offer he just published.
+                        // he sees the offer he just published or
+                        // modified.
                         setBrowseRefreshTick((t) => t + 1);
                         setBrowseSubView('mine');
+                        setEditingOffer(null);
                     }}
+                    onCancelEdit={() => {
+                        // Back out of edit mode without touching the
+                        // offer. Returns to "Vos offres actives".
+                        setBrowseSubView('mine');
+                        setEditingOffer(null);
+                    }}
+                    initialOffer={editingOffer}
                     teamId={user?.fantasyTeamId ?? null}
                     teamName={user?.fantasyTeamName ?? null}
                 />
@@ -876,16 +936,77 @@ function AddOfferPanel({
     teamId,
     teamName,
     onPublished,
+    onCancelEdit,
+    initialOffer,
 }: {
     teamId: number | null;
     teamName: string | null;
     onPublished: () => void;
+    /**
+     * When provided AND `initialOffer` is set, renders a small
+     * "Modification de l'offre" header with an "Annuler" button
+     * that backs out of edit mode without touching the offer.
+     */
+    onCancelEdit?: () => void;
+    /**
+     * Offer to edit. When set, the panel:
+     *   - initializes its slots and note from this offer on first
+     *     render,
+     *   - renders a "Modification de l'offre" header,
+     *   - switches the submit call to updateTradeOffer.
+     *
+     * When null, the panel is in fresh-publish mode.
+     *
+     * The panel is conditionally mounted by MarketplacePage only
+     * when the sub-view is 'publish', so it always mounts fresh
+     * with whatever initialOffer is current at that moment.
+     */
+    initialOffer?: TradeOffer | null;
 }) {
     const [roster, setRoster] = useState<TeamRoster | null>(null);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
 
-    const [slots, setSlots] = useState<SlotState[]>([{ ...EMPTY_SLOT }]);
+    const [slots, setSlots] = useState<SlotState[]>(() =>
+        initialOffer
+            ? initialOffer.slots.map((slot) => ({
+                positionGroup:
+                    slot.positionGroup as PositionGroup,
+                offeringPlayerId: slot.offeringPlayerId,
+                firstHandled:
+                    slot.positionGroup !== ''
+                        ? slot.offeringPlayerId != null
+                            ? 'player'
+                            : 'position'
+                        : null,
+                minContractYears:
+                    slot.demandMinContractYears != null
+                        ? String(slot.demandMinContractYears)
+                        : '',
+                maxSalary:
+                    slot.demandMaxSalary != null
+                        ? String(
+                            (slot.demandMaxSalary / 1_000_000)
+                                .toFixed(2)
+                                .replace(/\.?0+$/, ''),
+                        )
+                        : '',
+                maxAge:
+                    slot.demandMaxAge != null
+                        ? String(slot.demandMaxAge)
+                        : '',
+                minPointsLastYear:
+                    slot.demandMinPointsLastYear != null
+                        ? String(slot.demandMinPointsLastYear)
+                        : '',
+                // `!== false` matches the frontend guard in
+                // playerMatchesSlotDemand: undefined / null is
+                // treated as the safe default of "strict".
+                enforceCriteria:
+                    slot.enforceDemandCriteria !== false,
+            }))
+            : [{ ...EMPTY_SLOT }],
+    );
 
     /**
      * Index of the slot currently expanded in the "Ajouter une offre"
@@ -895,13 +1016,16 @@ function AddOfferPanel({
      */
     const [expandedSlotIndex, setExpandedSlotIndex] = useState(0);
 
-    const [note, setNote] = useState('');
+    const [note, setNote] = useState(() => initialOffer?.note ?? '');
 
     /**
-     * Whether the optional message textarea is expanded. Collapsed by
-     * default; clicking the "Ajouter un message" button reveals it.
-     */
-    const [showNote, setShowNote] = useState(false);
+    * Whether the optional message textarea is expanded. Collapsed by
+    * default; clicking the "Ajouter un message" button reveals it.
+    * Auto-expanded when editing an offer that already had a note.
+    */
+    const [showNote, setShowNote] = useState(
+        () => (initialOffer?.note ?? '').trim() !== '',
+    );
 
     const [submitting, setSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
@@ -1010,6 +1134,11 @@ function AddOfferPanel({
                         demandMinPointsLastYear: parseOptionalInt(
                             s.minPointsLastYear,
                         ),
+                        // Mirrors the flag the backend will store on
+                        // this slot. Not read by the preview card
+                        // itself (no dropdown renders in preview),
+                        // but required by the TradeOfferSlot type.
+                        enforceDemandCriteria: s.enforceCriteria,
                     };
                 }),
         }),
@@ -1246,11 +1375,31 @@ function AddOfferPanel({
                 note: note.trim() === '' ? null : note.trim(),
             };
 
-            await createTradeOffer(request);
+            if (initialOffer) {
+                // Edit mode: update the offer in place. Its identity
+                // (Id, CreatedAt, per-user "seen" markers) is
+                // preserved on the backend, so it keeps its place on
+                // the browse list and does not show up as "Nouvelle
+                // offre" again for users who had already seen it.
+                await updateTradeOffer(initialOffer.id, request);
+                setSubmitSuccess('Offre modifiée.');
+            } else {
+                await createTradeOffer(request);
+                setSubmitSuccess('Offre publiée.');
+            }
 
-            setSubmitSuccess('Offre publiée.');
             setShowPreview(false);
-            handleResetAll();
+
+            // In edit mode the parent clears initialOffer and drops
+            // us back on "Vos offres actives", so there is nothing
+            // to reset — the panel will remount fresh the next time
+            // it is opened. In create mode, reset the form now so
+            // the user can publish another offer without stale
+            // data.
+            if (!initialOffer) {
+                handleResetAll();
+            }
+
             onPublished();
         } catch (err) {
             setSubmitError(
@@ -1290,6 +1439,31 @@ function AddOfferPanel({
 
     return (
         <div className='space-y-3'>
+            {initialOffer && (
+                <div
+                    className='flex items-center justify-between gap-2 rounded-lg border px-3 py-2'
+                    style={{
+                        borderColor: 'rgba(0, 200, 255, 0.6)',
+                        backgroundColor: 'rgba(0, 200, 255, 0.08)',
+                    }}
+                >
+                    <span className='text-xs font-semibold uppercase tracking-wider text-[#00C8FF]'>
+                        Modification de l'offre
+                    </span>
+
+                    {onCancelEdit && (
+                        <button
+                            type='button'
+                            onClick={onCancelEdit}
+                            disabled={submitting}
+                            className='cursor-pointer rounded border border-[#00C8FF]/60 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:opacity-50'
+                        >
+                            Annuler
+                        </button>
+                    )}
+                </div>
+            )}
+
             {submitSuccess && (
                 <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
                     {submitSuccess}
@@ -2140,6 +2314,30 @@ function FilterForm({
                     />
                 </label>
             </div>
+
+            {/* Opt-in / opt-out for demand enforcement. Ticked by
+                default: the responder's dropdown is filtered by the
+                criteria above, which is the marketplace's existing
+                behavior. Unticking it tells the responder that any
+                player of the matching position is acceptable for
+                this slot. Position is always enforced regardless. */}
+            <label className='mt-1 flex cursor-pointer items-start gap-2 text-[0.6rem] leading-tight text-[#7DD3FC] md:text-[0.7rem]'>
+                <input
+                    type='checkbox'
+                    checked={slot.enforceCriteria}
+                    onChange={(e) =>
+                        onFieldChange({
+                            enforceCriteria: e.target.checked,
+                        })
+                    }
+                    className='mt-0.5 h-3 w-3 shrink-0 cursor-pointer'
+                    style={{ accentColor: '#00C8FF' }}
+                />
+                <span>
+                    Autoriser les joueurs qui ne répondent pas à ces
+                    critères
+                </span>
+            </label>
         </div>
     );
 }
@@ -2153,6 +2351,7 @@ function BrowseOffersPanel({
     teamId,
     mode,
     onOpenTeamRoster,
+    onEditOffer,
 }: {
     refreshTick: number;
     teamId: number | null;
@@ -2173,6 +2372,16 @@ function BrowseOffersPanel({
      * /mon-equipe.
      */
     onOpenTeamRoster: (teamId: number, teamName: string) => void;
+    /**
+     * When provided, each "Mon offre" card renders a "Modifier"
+     * button next to "Annuler". The callback receives the offer
+     * the user wants to edit; the parent typically opens the
+     * publish panel pre-populated with it.
+     *
+     * Undefined on the "Voir les offres" side: the user never
+     * edits anyone else's offer.
+     */
+    onEditOffer?: (offer: TradeOffer) => void;
 }) {
     const [offers, setOffers] = useState<TradeOffer[]>([]);
     const [loading, setLoading] = useState(true);
@@ -2302,6 +2511,11 @@ function BrowseOffersPanel({
                     offer={offer}
                     busy={busyId === offer.id}
                     onCancel={() => handleCancel(offer.id)}
+                    onEdit={
+                        onEditOffer
+                            ? () => onEditOffer(offer)
+                            : undefined
+                    }
                     userRoster={userRoster}
                     onOpenTeamRoster={onOpenTeamRoster}
                 />
@@ -2393,6 +2607,14 @@ function responseToOfferShape(
             demandMaxSalary: s.demandMaxSalary,
             demandMaxAge: s.demandMaxAge,
             demandMinPointsLastYear: s.demandMinPointsLastYear,
+
+            // Not carried on the response DTO — a response is a
+            // historical record and nothing on the response card
+            // renders a dropdown, so the flag never affects the
+            // display. Defaulting to true matches what every offer
+            // was when the response was recorded, and satisfies the
+            // TradeOfferSlot type requirement.
+            enforceDemandCriteria: true,
         })),
     };
 }
@@ -3491,6 +3713,7 @@ function OfferCard({
     offer,
     busy,
     onCancel,
+    onEdit,
     userRoster,
     hideInternalCancel = false,
     onSlotClick,
@@ -3503,6 +3726,16 @@ function OfferCard({
     offer: TradeOffer;
     busy: boolean;
     onCancel: () => void;
+    /**
+     * When provided, a "Modifier" button is rendered on the
+     * "Mon offre" header row, to the left of the "Annuler" button.
+     * Only the "Vos offres actives" panel passes this: the
+     * "Voir les offres" panel never edits anyone else's offer, and
+     * the publish preview popup hides the entire header row.
+     *
+     * See the Mon offre header block below for the exact rendering.
+     */
+    onEdit?: () => void;
     userRoster: TeamRoster | null;
     /**
      * When true, the card does NOT render its own "Annuler" button
@@ -4056,14 +4289,27 @@ function OfferCard({
                         Mon offre
                     </span>
 
-                    <button
-                        type='button'
-                        onClick={onCancel}
-                        disabled={busy}
-                        className='absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50'
-                    >
-                        Annuler
-                    </button>
+                    <div className='absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5'>
+                        {onEdit && (
+                            <button
+                                type='button'
+                                onClick={onEdit}
+                                disabled={busy}
+                                className='cursor-pointer rounded border border-[#00E5FF] px-2 py-0.5 text-xs font-semibold text-[#00E5FF] transition-colors hover:bg-[#00E5FF]/15 disabled:opacity-50'
+                            >
+                                Modifier
+                            </button>
+                        )}
+
+                        <button
+                            type='button'
+                            onClick={onCancel}
+                            disabled={busy}
+                            className='cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50'
+                        >
+                            Annuler
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -4375,63 +4621,103 @@ function OfferCard({
                                             />
                                         ) : (
                                             <>
-                                                <p className='text-xs font-semibold text-foreground md:text-sm'>
-                                                    {groupLabel(
-                                                        slot.positionGroup as PositionGroup,
-                                                    )}
-                                                </p>
-
-                                                <ul className='mt-1 inline-block text-left text-[0.6rem] text-[#7DD3FC] md:text-[0.7rem]'>
-                                                    {slot.demandMinContractYears !=
-                                                        null && (
-                                                            <li>
-                                                                Contrat min :{' '}
-                                                                {
-                                                                    slot.demandMinContractYears
-                                                                }{' '}
-                                                                an
-                                                                {slot.demandMinContractYears >
-                                                                    1
-                                                                    ? 's'
-                                                                    : ''}
-                                                            </li>
-                                                        )}
-                                                    {slot.demandMaxSalary != null && (
-                                                        <li>
-                                                            Salaire max :{' '}
-                                                            {compactSalary(
-                                                                slot.demandMaxSalary,
+                                                        <p className='text-xs font-semibold text-foreground md:text-sm'>
+                                                            {groupLabel(
+                                                                slot.positionGroup as PositionGroup,
                                                             )}
-                                                        </li>
-                                                    )}
-                                                    {slot.demandMaxAge != null && (
-                                                        <li>
-                                                            Âge max :{' '}
-                                                            {slot.demandMaxAge}
-                                                        </li>
-                                                    )}
-                                                    {slot.demandMinPointsLastYear !=
-                                                        null && (
-                                                            <li>
-                                                                Points min (an dernier) :{' '}
-                                                                {
-                                                                    slot.demandMinPointsLastYear
-                                                                }
-                                                            </li>
-                                                        )}
-                                                    {slot.demandMinContractYears ==
-                                                        null &&
-                                                        slot.demandMaxSalary ==
-                                                        null &&
-                                                        slot.demandMaxAge == null &&
-                                                        slot.demandMinPointsLastYear ==
-                                                        null && (
-                                                            <li className='italic opacity-70'>
-                                                                Aucun critère
-                                                                particulier
-                                                            </li>
-                                                        )}
-                                                </ul>
+                                                        </p>
+
+                                                        <div className='mt-1 flex items-center gap-1.5'>
+                                                            {/*
+                                                     * Red arrow on the
+                                                     * left of the criteria
+                                                     * when the offer creator
+                                                     * is enforcing them as a
+                                                     * hard filter. Signals
+                                                     * to the responder that
+                                                     * the dropdown below is
+                                                     * already filtered by
+                                                     * these requirements
+                                                     * and no candidate that
+                                                     * fails them will ever
+                                                     * appear.
+                                                     *
+                                                     * Only rendered when at
+                                                     * least one criterion is
+                                                     * actually set — with an
+                                                     * empty criteria list the
+                                                     * arrow would point at
+                                                     * nothing.
+                                                     */}
+                                                            {slot.enforceDemandCriteria &&
+                                                                (slot.demandMinContractYears != null ||
+                                                                    slot.demandMaxSalary != null ||
+                                                                    slot.demandMaxAge != null ||
+                                                                    slot.demandMinPointsLastYear != null) && (
+                                                                    <svg
+                                                                        viewBox='0 0 20 16'
+                                                                        className='h-4 w-5 shrink-0'
+                                                                        aria-hidden='true'
+                                                                    >
+                                                                        <path
+                                                                            d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
+                                                                            fill='#EF4444'
+                                                                        />
+                                                                    </svg>
+                                                                )}
+
+                                                            <ul className='inline-block text-left text-[0.6rem] text-[#7DD3FC] md:text-[0.7rem]'>
+                                                                {slot.demandMinContractYears !=
+                                                                    null && (
+                                                                        <li>
+                                                                            Contrat min :{' '}
+                                                                            {
+                                                                                slot.demandMinContractYears
+                                                                            }{' '}
+                                                                            an
+                                                                            {slot.demandMinContractYears >
+                                                                                1
+                                                                                ? 's'
+                                                                                : ''}
+                                                                        </li>
+                                                                    )}
+                                                                {slot.demandMaxSalary != null && (
+                                                                    <li>
+                                                                        Salaire max :{' '}
+                                                                        {compactSalary(
+                                                                            slot.demandMaxSalary,
+                                                                        )}
+                                                                    </li>
+                                                                )}
+                                                                {slot.demandMaxAge != null && (
+                                                                    <li>
+                                                                        Âge max :{' '}
+                                                                        {slot.demandMaxAge}
+                                                                    </li>
+                                                                )}
+                                                                {slot.demandMinPointsLastYear !=
+                                                                    null && (
+                                                                        <li>
+                                                                            Points min (an dernier) :{' '}
+                                                                            {
+                                                                                slot.demandMinPointsLastYear
+                                                                            }
+                                                                        </li>
+                                                                    )}
+                                                                {slot.demandMinContractYears ==
+                                                                    null &&
+                                                                    slot.demandMaxSalary ==
+                                                                    null &&
+                                                                    slot.demandMaxAge == null &&
+                                                                    slot.demandMinPointsLastYear ==
+                                                                    null && (
+                                                                        <li className='italic opacity-70'>
+                                                                            Aucun critère
+                                                                            particulier
+                                                                        </li>
+                                                                    )}
+                                                            </ul>
+                                                        </div>
 
                                                 {/* Response picker: only shown
                                                     when the offer is not the

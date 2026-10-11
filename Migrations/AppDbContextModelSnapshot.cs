@@ -1866,6 +1866,11 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int?>("DemandMinPointsLastYear")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("EnforceDemandCriteria")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
                     b.Property<int?>("OfferingPlayerId")
                         .HasColumnType("integer");
 
