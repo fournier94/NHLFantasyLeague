@@ -259,3 +259,23 @@
 .roster-section-title {
     color: #F2F5FA;
 }
+
+/* ------------------------------------------------------------------ */
+/* Marketplace sub-toggle                                              */
+/*                                                                     */
+/* On phones 400px wide or less, the three labels ("Voir les offres",  */
+/* "Vos offres actives", "Publier une annonce") do not fit on one row  */
+/* at the default 12px font. This drops them to ~10.4px so the row     */
+/* stays on a single line. Above 400px nothing changes.                */
+/*                                                                     */
+/* This lives here instead of as a Tailwind arbitrary variant because  */
+/* the `max-[400px]:text-[0.65rem]` form can lose the specificity     */
+/* race against the base `text-xs` class depending on Tailwind's       */
+/* CSS ordering. A plain media query has no such ambiguity.            */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 400px) {
+    .marketplace-sub-toggle {
+        font-size: 0.65rem;
+    }
+}

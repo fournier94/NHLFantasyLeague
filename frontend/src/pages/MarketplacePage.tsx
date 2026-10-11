@@ -422,6 +422,27 @@ const HEADER_GRADIENT =
     'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))';
 
 /**
+ * Colors for the highlighted stat columns on every offer card's
+ * stat table. Every entry uses the exact same hex as the matching
+ * column on the Classement page, so a stat that reads a certain
+ * way there reads the same way on the marketplace:
+ *
+ *   PTS -> PTS_HIGHLIGHT on ClassementPage (#00F0FF)
+ *   FP  -> GOLD          on ClassementPage (#FFC72C)
+ *
+ * A column whose label is not in this map renders in the table's
+ * default foreground color.
+ */
+const STAT_COLUMN_COLORS: Record<string, string> = {
+    PTS: '#00F0FF',
+    FP: '#FFC72C',
+};
+
+function statColumnColor(columnLabel: string): string | undefined {
+    return STAT_COLUMN_COLORS[columnLabel];
+}
+
+/**
  * Offer card neon frame (contained filament technique).
  *
  * Thick cyan tube + thin pale-cyan filament + inward bloom. Nothing
@@ -484,8 +505,16 @@ const inputClass =
 const labelClass =
     'text-xs font-semibold uppercase tracking-wider text-[#7DD3FC]';
 
-/** Middle column width so the arrow sits on the divider cleanly. */
-const SLOT_ARROW_COL = 'w-10 md:w-12';
+/**
+ * Middle column width so the arrow sits on the divider cleanly.
+ * On mobile it is deliberately narrow (20px) so the stat tables on
+ * both sides get as much horizontal room as possible and the
+ * rightmost stat column sits close to the middle divider. The
+ * arrow glyph and the divider line are both absolutely
+ * positioned, so neither depends on this width. Desktop keeps the
+ * original 48px so the layout there is unchanged.
+ */
+const SLOT_ARROW_COL = 'w-5 md:w-12';
 
 /**
  * How long the browse list must stay on screen before the frontend
@@ -645,7 +674,7 @@ export default function MarketplacePage() {
                     {view === 'browse' && (
                         <div className='flex items-center justify-center'>
                             <div
-                                className='flex items-center rounded-full border border-[#00E5FF]/60 bg-[#050A18]/80 p-0.5 text-xs'
+                                className='marketplace-sub-toggle flex items-center rounded-full border border-[#00E5FF]/60 bg-[#050A18]/80 p-0.5 text-xs'
                                 style={{
                                     boxShadow:
                                         '0 0 6px rgba(0, 229, 255, 0.35), inset 0 0 6px rgba(0, 229, 255, 0.08)',
@@ -656,9 +685,9 @@ export default function MarketplacePage() {
                                     onClick={() =>
                                         setBrowseSubView('view')
                                     }
-                                    className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'view'
-                                        ? 'bg-[#00E5FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                    className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'view'
+                                            ? 'bg-[#00E5FF] text-[#080D1A]'
+                                            : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
                                     Voir les offres
@@ -669,9 +698,9 @@ export default function MarketplacePage() {
                                     onClick={() =>
                                         setBrowseSubView('mine')
                                     }
-                                    className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'mine'
-                                        ? 'bg-[#00E5FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                    className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'mine'
+                                            ? 'bg-[#00E5FF] text-[#080D1A]'
+                                            : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
                                     Vos offres actives
@@ -682,9 +711,9 @@ export default function MarketplacePage() {
                                     onClick={() =>
                                         setBrowseSubView('publish')
                                     }
-                                    className={`cursor-pointer rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'publish'
-                                        ? 'bg-[#00E5FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                    className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'publish'
+                                            ? 'bg-[#00E5FF] text-[#080D1A]'
+                                            : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
                                     Publier une annonce
@@ -2191,11 +2220,12 @@ function BrowseOffersPanel({
  */
 function responseToOfferShape(
     response: TradeOfferResponse,
+    headerTeamId: number,
     headerTeamName: string,
 ): TradeOffer {
     return {
         id: response.id,
-        createdByFantasyTeamId: response.respondingFantasyTeamId,
+        createdByFantasyTeamId: headerTeamId,
         createdByFantasyTeamName: headerTeamName,
         createdAt: response.createdAt,
         note: response.tradeOfferNote,
@@ -2339,6 +2369,7 @@ function ReceivedOffersPanel({
                     key={response.id}
                     offer={responseToOfferShape(
                         response,
+                        response.respondingFantasyTeamId,
                         response.respondingFantasyTeamName,
                     )}
                     busy={busyId === response.id}
@@ -2442,6 +2473,7 @@ function SentOffersPanel({
                     key={response.id}
                     offer={responseToOfferShape(
                         response,
+                        response.tradeOfferCreatedByFantasyTeamId,
                         response.tradeOfferCreatedByFantasyTeamName,
                     )}
                     busy={busyId === response.id}
@@ -2485,9 +2517,12 @@ function StatLinesTable({
     previous: SeasonStatLine | null;
     isGoalie: boolean;
 }) {
+    // Skater columns now show Time On Ice where the hat-trick
+    // counter used to sit. Goalie columns are unchanged (they
+    // never had a hat-trick column to begin with).
     const columns = isGoalie
         ? ['GP', 'W', 'L', 'OTL', 'SO', 'FP']
-        : ['GP', 'G', 'A', 'PTS', '3B', 'FP'];
+        : ['GP', 'G', 'A', 'PTS', 'TOI', 'FP'];
 
     function rowValues(line: SeasonStatLine | null): (string | number)[] {
         if (!line) {
@@ -2508,7 +2543,10 @@ function StatLinesTable({
                 line.goals,
                 line.assists,
                 line.points,
-                line.hatTricks,
+                // Raw "MM:SS" string. The archive may not carry
+                // ATOI for older seasons; in that case we show a
+                // dash rather than a misleading "0".
+                line.timeOnIce ?? '—',
                 line.fantasyPoints,
             ];
     }
@@ -2530,14 +2568,39 @@ function StatLinesTable({
 
     return (
         <table className='mt-1 w-full table-fixed border-collapse text-[0.55rem] leading-tight tabular-nums md:text-[0.6rem]'>
+            {/*
+             * Explicit column widths so nothing overflows into its
+             * neighbour. The old layout used table-fixed with a single
+             * w-8 on the label and gave every stat column the same
+             * equal share of what was left, which was fine for "12" but
+             * not for "21:19" — TOI was spilling into FP.
+             *
+             * - label gets enough room for "26-27" and no more, so it
+             *   sits flush at the left edge.
+             * - TOI gets the widest stat column, because it is the only
+             *   one holding a 5-character "MM:SS" value.
+             * - FP stays narrow so it renders close to the middle
+             *   divider between the two sides of the offer card.
+             */}
+            <colgroup>
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '22%' }} />
+                <col style={{ width: '11%' }} />
+            </colgroup>
+
             <thead>
                 <tr className='text-[#7DD3FC]'>
-                    <th className='w-8 text-left font-normal' />
+                    <th className='px-0 text-left font-normal' />
 
                     {columns.map((column) => (
                         <th
                             key={column}
-                            className='text-center font-normal'
+                            className='px-0 text-center font-normal'
+                            style={{ color: statColumnColor(column) }}
                         >
                             {column}
                         </th>
@@ -2547,14 +2610,17 @@ function StatLinesTable({
 
             <tbody className='text-foreground'>
                 <tr>
-                    <td className='text-left text-[#7DD3FC]'>
+                    <td className='px-0 text-left text-[#7DD3FC]'>
                         {shortLabel(current, '26-27')}
                     </td>
 
                     {currentValues.map((value, index) => (
                         <td
                             key={index}
-                            className='text-center'
+                            className='px-0 text-center'
+                            style={{
+                                color: statColumnColor(columns[index]),
+                            }}
                         >
                             {value}
                         </td>
@@ -2562,14 +2628,17 @@ function StatLinesTable({
                 </tr>
 
                 <tr>
-                    <td className='text-left text-[#7DD3FC]'>
+                    <td className='px-0 text-left text-[#7DD3FC]'>
                         {shortLabel(previous, '25-26')}
                     </td>
 
                     {previousValues.map((value, index) => (
                         <td
                             key={index}
-                            className='text-center'
+                            className='px-0 text-center'
+                            style={{
+                                color: statColumnColor(columns[index]),
+                            }}
                         >
                             {value}
                         </td>
@@ -2659,6 +2728,7 @@ function OfferCard({
     const { user } = useAuth();
     const connectedUserName =
         user?.fantasyTeamName ?? user?.displayName ?? 'Vous';
+    const connectedUserTeamId = user?.fantasyTeamId ?? null;
 
     /**
     * True when the user can respond to this offer: not his own, and
@@ -2892,33 +2962,35 @@ function OfferCard({
                 </div>
             )}
 
-            <div className='space-y-3 p-3'>
-                <div
-                    className='overflow-hidden rounded-md border'
-                    style={{
-                        borderColor: 'rgba(0, 168, 255, 0.2)',
-                        backgroundColor: 'rgba(0, 168, 255, 0.03)',
-                    }}
-                >
+            <div className='space-y-3 p-2 md:p-3'>
+                <div>
                     <div
-                        className='grid grid-cols-[1fr_auto_1fr] items-center border-b py-1.5'
+                        className='flex items-center border-b py-1'
                         style={{
                             borderColor: 'rgba(0, 168, 255, 0.2)',
                         }}
                     >
-                        <span className='truncate px-2 text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC] md:text-xs'>
+                        <Link
+                            to={`/mon-equipe?teamId=${offer.createdByFantasyTeamId}`}
+                            className='flex-1 truncate px-2 text-center text-[0.6rem] font-bold uppercase tracking-wider text-[#00E5FF] transition-colors hover:text-white md:text-xs'
+                        >
                             {offer.createdByFantasyTeamName}
-                        </span>
-                        <span
-                            aria-hidden='true'
-                            className={SLOT_ARROW_COL}
-                        />
+                        </Link>
                         {!offer.isMine ? (
-                            <span className='truncate px-2 text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC] md:text-xs'>
-                                {connectedUserName}
-                            </span>
+                            connectedUserTeamId != null ? (
+                                <Link
+                                    to={`/mon-equipe?teamId=${connectedUserTeamId}`}
+                                    className='flex-1 truncate px-2 text-center text-[0.6rem] font-bold uppercase tracking-wider text-[#00E5FF] transition-colors hover:text-white md:text-xs'
+                                >
+                                    {connectedUserName}
+                                </Link>
+                            ) : (
+                                <div className='flex-1 truncate px-2 text-center text-[0.6rem] font-bold uppercase tracking-wider text-[#00E5FF] md:text-xs'>
+                                    {connectedUserName}
+                                </div>
+                            )
                         ) : (
-                            <span aria-hidden='true' />
+                            <div className='flex-1' aria-hidden='true' />
                         )}
                     </div>
 
@@ -2985,7 +3057,7 @@ function OfferCard({
                                             }
                                             : undefined
                                     }
-                                    className={`grid grid-cols-[1fr_auto_1fr] items-stretch px-3 py-2 transition-colors ${onSlotClick
+                                    className={`grid grid-cols-[1fr_auto_1fr] items-stretch px-1 py-2 transition-colors ${onSlotClick
                                         ? 'cursor-pointer hover:bg-[#00A8FF]/10 focus:outline-none focus-visible:bg-[#00A8FF]/15'
                                         : ''
                                         }`}

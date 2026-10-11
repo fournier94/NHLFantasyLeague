@@ -267,9 +267,20 @@ namespace NhlFantasyLeague.api.Models.Dtos
 
         /// <summary>
         /// Total fantasy points scored this season, sourced from
-        /// PlayerSeasonStat. Zero when the season row is missing.
+        /// PlayerSeasonStat for the current season and derived from
+        /// the counting stats for historical seasons. Zero when the
+        /// season row is missing.
         /// </summary>
         public int FantasyPoints { get; set; }
+
+        /// <summary>
+        /// Average time on ice for the season, formatted "MM:SS", or
+        /// null when the archive does not carry it. Sourced from
+        /// PlayerCareerStat.AverageTimeOnIce, aggregated across
+        /// Sequence rows when a season was split by a mid-season
+        /// trade (weighted by games played).
+        /// </summary>
+        public string? TimeOnIce { get; set; }
     }
 
     /// <summary>

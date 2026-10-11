@@ -383,6 +383,12 @@ export interface SeasonStatLine {
     shutouts: number;
     /** Total fantasy points scored this season. */
     fantasyPoints: number;
+    /**
+     * Average time on ice for the season, formatted "MM:SS", or
+     * null when the archive does not carry it. Sourced on the
+     * backend from PlayerCareerStat.AverageTimeOnIce.
+     */
+    timeOnIce: string | null;
 }
 
 /** One contract line on a player card: salary + seasons left. */

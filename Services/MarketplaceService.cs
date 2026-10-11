@@ -48,6 +48,15 @@ namespace NhlFantasyLeague.api.Services
         /// (mid-season trade) is aggregated into one line here,
         /// matching how RosterAdminService builds the Mon équipe
         /// card.
+        ///
+        /// Shutouts and HatTricks are carried so FantasyPoints can
+        /// be derived from the same formula the player page uses
+        /// for historical seasons. The archive does not store FP
+        /// directly.
+        ///
+        /// TimeOnIce is a weighted average across every Sequence
+        /// row, weighted by games played, and only when at least
+        /// one row carries a valid ATOI value.
         /// </summary>
         private sealed class CareerStatAggregate
         {
@@ -60,6 +69,9 @@ namespace NhlFantasyLeague.api.Services
             public int Wins { get; set; }
             public int Losses { get; set; }
             public int OvertimeLosses { get; set; }
+            public int Shutouts { get; set; }
+            public int HatTricks { get; set; }
+            public string? TimeOnIce { get; set; }
         }
 
         /// <summary>
@@ -156,29 +168,83 @@ namespace NhlFantasyLeague.api.Services
             // across several Sequence rows is summed into one line,
             // matching how RosterAdminService builds the Mon équipe
             // card.
+            //
+            // HatTricks is nullable on the archive: the column is
+            // only filled once the career hat-trick backfill has
+            // run for that row. Treating null as 0 means a season
+            // whose hat tricks have not been backfilled shows a
+            // hat-trick count of 0, which is the same behaviour as
+            // the player page's historical FP columns.
             var careerByPlayerAndSeason =
-                careerRows
-                    .GroupBy(r => new { r.PlayerId, r.Season })
-                    .ToDictionary(
-                        g => (g.Key.PlayerId, g.Key.Season),
-                        g => new CareerStatAggregate
-                        {
-                            PlayerId = g.Key.PlayerId,
-                            Season = g.Key.Season,
-                            GamesPlayed = g.Sum(r => r.GamesPlayed),
-                            Goals = g.Sum(r => r.Goals),
-                            Assists = g.Sum(r => r.Assists),
-                            Points = g.Sum(r => r.Points),
-                            Wins = g.Sum(r => r.Wins),
-                            Losses = g.Sum(r => r.Losses),
-                            OvertimeLosses = g.Sum(r => r.OvertimeLosses),
-                        });
+      careerRows
+          .GroupBy(r => new { r.PlayerId, r.Season })
+          .ToDictionary(
+              g => (g.Key.PlayerId, g.Key.Season),
+              g =>
+              {
+                  // Weighted average ATOI across every
+                  // Sequence row of the season. A row whose
+                  // ATOI is missing or unparsable is skipped
+                  // entirely so it does not drag the average
+                  // toward zero. If no row has a valid ATOI,
+                  // the result stays null and the frontend
+                  // renders "—".
+                  var weightedSeconds = 0;
+                  var weightedGames = 0;
+
+                  foreach (var row in g)
+                  {
+                      var seconds = ParseToiSeconds(
+                          row.AverageTimeOnIce);
+
+                      if (seconds > 0 && row.GamesPlayed > 0)
+                      {
+                          weightedSeconds +=
+                              seconds * row.GamesPlayed;
+                          weightedGames += row.GamesPlayed;
+                      }
+                  }
+
+                  string? aggregatedToi =
+                      weightedGames > 0
+                          ? FormatToiSeconds(
+                              weightedSeconds / weightedGames)
+                          : null;
+
+                  return new CareerStatAggregate
+                  {
+                      PlayerId = g.Key.PlayerId,
+                      Season = g.Key.Season,
+                      GamesPlayed = g.Sum(r => r.GamesPlayed),
+                      Goals = g.Sum(r => r.Goals),
+                      Assists = g.Sum(r => r.Assists),
+                      Points = g.Sum(r => r.Points),
+                      Wins = g.Sum(r => r.Wins),
+                      Losses = g.Sum(r => r.Losses),
+                      OvertimeLosses =
+                          g.Sum(r => r.OvertimeLosses),
+                      Shutouts = g.Sum(r => r.Shutouts),
+                      HatTricks = g.Sum(r => r.HatTricks ?? 0),
+                      TimeOnIce = aggregatedToi,
+                  };
+              });
 
             var result = new Dictionary<int, PlayerStatLines>();
 
             foreach (var id in playerIds)
             {
                 var lines = new PlayerStatLines();
+
+                // Resolve the archive aggregates once per player.
+                // The current-season live row (if any) overrides the
+                // counting stats, but the archive's ATOI is always
+                // the source for TimeOnIce, since PlayerSeasonStat
+                // does not store it.
+                careerByPlayerAndSeason.TryGetValue(
+                    (id, CurrentSeasonNhlCode), out var currentArchive);
+
+                careerByPlayerAndSeason.TryGetValue(
+                    (id, PreviousSeasonNhlCode), out var previousArchive);
 
                 // ---- Current season ----------------------------------
                 // Prefer the live-tracked PlayerSeasonStat row. Fall
@@ -195,26 +261,24 @@ namespace NhlFantasyLeague.api.Services
                 if (currentLiveRow != null && currentSeason != null)
                 {
                     lines.Current = ToStatLineDto(
-                        currentLiveRow, currentSeason);
+                        currentLiveRow,
+                        currentSeason,
+                        currentArchive?.TimeOnIce);
                 }
-                else if (careerByPlayerAndSeason.TryGetValue(
-                             (id, CurrentSeasonNhlCode),
-                             out var currentCareer))
+                else if (currentArchive != null)
                 {
                     lines.Current = ToStatLineDtoFromCareer(
-                        currentCareer, currentSeason);
+                        currentArchive, currentSeason);
                 }
 
                 // ---- Previous season ---------------------------------
                 // Historical totals always come from the archive. If
                 // the archive is missing and a live row exists for
                 // the previous season, use it as a fallback.
-                if (careerByPlayerAndSeason.TryGetValue(
-                        (id, PreviousSeasonNhlCode),
-                        out var previousCareer))
+                if (previousArchive != null)
                 {
                     lines.Previous = ToStatLineDtoFromCareer(
-                        previousCareer, previousSeason);
+                        previousArchive, previousSeason);
                 }
                 else if (previousSeason != null)
                 {
@@ -235,9 +299,17 @@ namespace NhlFantasyLeague.api.Services
             return result;
         }
 
+        /// <summary>
+        /// Builds a SeasonStatLineDto from a live PlayerSeasonStat
+        /// row. TimeOnIce is not stored on PlayerSeasonStat, so it
+        /// is passed in by the caller (taken from the archive's
+        /// aggregate for the same season) and defaults to null when
+        /// the archive has no ATOI for that player and season.
+        /// </summary>
         private static SeasonStatLineDto ToStatLineDto(
             PlayerSeasonStat stat,
-            Season season)
+            Season season,
+            string? timeOnIce = null)
         {
             return new SeasonStatLineDto
             {
@@ -259,6 +331,7 @@ namespace NhlFantasyLeague.api.Services
                 HatTricks = stat.HatTricks,
                 Shutouts = stat.Shutouts,
                 FantasyPoints = stat.FantasyPoints,
+                TimeOnIce = timeOnIce,
             };
         }
 
@@ -268,10 +341,17 @@ namespace NhlFantasyLeague.api.Services
         /// archive has data) and as a current-season fallback when
         /// the live PlayerSeasonStat row is missing.
         ///
-        /// HatTricks, Shutouts and FantasyPoints are set to 0: the
-        /// archive does not carry them per card season, and the card
-        /// does not display them for historical seasons. This
-        /// matches RosterAdminService.ToSeasonStatLineDto.
+        /// FantasyPoints is derived from the raw counting stats,
+        /// using the same formula the player page uses for
+        /// historical seasons:
+        ///
+        ///   skaters : Points + HatTricks * 3
+        ///   goalies : Points + Wins * 2 + OvertimeLosses
+        ///                    + Shutouts * 3
+        ///
+        /// The two formulas collapse into one expression: skaters
+        /// have 0 in every goalie column, and goalies have 0 in
+        /// HatTricks. So a single sum covers both cases exactly.
         ///
         /// The label is taken from the matching Season row when one
         /// exists. When it does not (the previous-season Seasons
@@ -289,6 +369,13 @@ namespace NhlFantasyLeague.api.Services
                     ? season.Name
                     : $"{code / 10000}-{code % 100:D2}";
 
+            var fantasyPoints =
+                aggregate.Points +
+                aggregate.HatTricks * 3 +
+                aggregate.Wins * 2 +
+                aggregate.OvertimeLosses +
+                aggregate.Shutouts * 3;
+
             return new SeasonStatLineDto
             {
                 Label = label,
@@ -303,16 +390,17 @@ namespace NhlFantasyLeague.api.Services
                 Wins = aggregate.Wins,
                 Losses = aggregate.Losses,
                 OvertimeLosses = aggregate.OvertimeLosses,
-                HatTricks = 0,
-                Shutouts = 0,
-                FantasyPoints = 0,
+                HatTricks = aggregate.HatTricks,
+                Shutouts = aggregate.Shutouts,
+                FantasyPoints = fantasyPoints,
+                TimeOnIce = aggregate.TimeOnIce,
             };
         }
 
         private static (SeasonStatLineDto? Current, SeasonStatLineDto? Previous)
-            ResolveStatLinesForSlot(
-                int? playerId,
-                IReadOnlyDictionary<int, PlayerStatLines>? statsByPlayerId)
+      ResolveStatLinesForSlot(
+          int? playerId,
+          IReadOnlyDictionary<int, PlayerStatLines>? statsByPlayerId)
         {
             if (!playerId.HasValue ||
                 statsByPlayerId == null ||
@@ -322,6 +410,51 @@ namespace NhlFantasyLeague.api.Services
             }
 
             return (lines.Current, lines.Previous);
+        }
+
+        /// <summary>
+        /// Parses an "MM:SS" time-on-ice string into total seconds.
+        /// Returns -1 when the value is null, empty, or unparsable,
+        /// so callers can distinguish "no value" from "0:00".
+        /// </summary>
+        private static int ParseToiSeconds(string? toi)
+        {
+            if (string.IsNullOrWhiteSpace(toi))
+            {
+                return -1;
+            }
+
+            var parts = toi.Split(':');
+
+            if (parts.Length != 2)
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[0], out var minutes))
+            {
+                return -1;
+            }
+
+            if (!int.TryParse(parts[1], out var seconds))
+            {
+                return -1;
+            }
+
+            return minutes * 60 + seconds;
+        }
+
+        /// <summary>
+        /// Formats total seconds as an "MM:SS" time-on-ice string.
+        /// Always returns a padded seconds component, e.g. "18:05",
+        /// so the frontend can render it raw without further parsing.
+        /// </summary>
+        private static string FormatToiSeconds(int totalSeconds)
+        {
+            var minutes = totalSeconds / 60;
+            var seconds = totalSeconds % 60;
+
+            return $"{minutes}:{seconds:D2}";
         }
 
         public async Task<TradeOfferActionResultDto> CreateOfferAsync(
