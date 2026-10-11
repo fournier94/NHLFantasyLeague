@@ -31,6 +31,11 @@ import {
     consumeMarketplacePopupRestore,
     setMarketplacePopupRestore,
 } from '@/lib/marketplacePopupRestoration';
+import {
+    clearPicksForOffer,
+    getPicksForOffer,
+    setPicksForOffer,
+} from '@/lib/marketplaceTradeState';
 
 // ---------------------------------------------------------------------
 // Types
@@ -2808,7 +2813,7 @@ function SlotPlayerBlock({
         <>
             <div className='flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 text-xs text-foreground md:text-sm'>
                 {nhlTeam && (
-                    <NhlTeamLogo abbreviation={nhlTeam} size={14} />
+                    <NhlTeamLogo abbreviation={nhlTeam} size={20} />
                 )}
 
                 {nhlPlayerId != null ? (
@@ -2941,32 +2946,10 @@ function RespondingPlayerBlock({
                         rather than pushing the name off-center. */}
                     <span className='flex min-w-0 items-center justify-center gap-x-1.5 truncate pr-2 text-xs font-semibold text-foreground md:text-sm'>
                         {entry?.nhlTeamAbbreviation && (
-                            /*
-                             * Wrapper holds the layout box at 14x14
-                             * so the dropdown height stays unchanged,
-                             * and the inner span is scaled 1.25x so
-                             * the rendered logo is ~17.5px. The
-                             * transform never affects layout, so the
-                             * wrapper's border-box is still 14x14 and
-                             * the select's total height is identical
-                             * to before.
-                             */
-                            <span
-                                aria-hidden='true'
-                                className='shrink-0'
-                                style={{
-                                    width: 14,
-                                    height: 14,
-                                    display: 'inline-block',
-                                    transform: 'scale(1.25)',
-                                    transformOrigin: 'center',
-                                }}
-                            >
-                                <NhlTeamLogo
-                                    abbreviation={entry.nhlTeamAbbreviation}
-                                    size={14}
-                                />
-                            </span>
+                            <NhlTeamLogo
+                                abbreviation={entry.nhlTeamAbbreviation}
+                                size={20}
+                            />
                         )}
 
                         <span className='truncate'>
@@ -3185,10 +3168,17 @@ function OfferCard({
     const isAccepted = offer.status === 'Accepted';
 
     /**
-     * User's picks, keyed by slot index. null means "not picked yet".
-     * Local to this card; reset when the card unmounts.
-     */
-    const [picks, setPicks] = useState<Record<number, number | null>>({});
+ * User's picks, keyed by slot index. null means "not picked yet".
+ *
+ * Initialized from the module-level store so the picks survive
+ * an in-app navigation that unmounts this card (e.g. the user
+ * opens the roster popup, clicks a player name, lands on
+ * PlayerPage and clicks Fermer). The store is updated on every
+ * change by `setPick` below.
+ */
+    const [picks, setPicks] = useState<Record<number, number | null>>(
+        () => getPicksForOffer(offer.id),
+    );
 
     /**
      * Matching user players for each slot: position group must match
@@ -3237,7 +3227,15 @@ function OfferCard({
     }, [canRespond, offer.slots, picks]);
 
     function setPick(slotIndex: number, playerId: number | null) {
-        setPicks((current) => ({ ...current, [slotIndex]: playerId }));
+        setPicks((current) => {
+            const next = { ...current, [slotIndex]: playerId };
+
+            // Keep the module-level store in sync so the picks
+            // survive a navigation that unmounts this card.
+            setPicksForOffer(offer.id, next);
+
+            return next;
+        });
     }
 
     /**
@@ -3291,7 +3289,13 @@ function OfferCard({
                 // was made. The success banner stays visible so
                 // he still gets confirmation that the offer went
                 // through.
+                //
+                // Also drop the store entry: without this, a
+                // subsequent mount of the same offer (should it
+                // ever come back into view) would restore the
+                // picks we just submitted.
                 setPicks({});
+                clearPicksForOffer(offer.id);
             } else {
                 setRespondError(result.message);
             }
@@ -3911,7 +3915,31 @@ function RosterPlayerRow({
                       <div className='flex min-w-0 flex-col items-center text-center'>
                 <div className='flex flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 text-sm leading-none text-foreground md:text-base'>
                     {entry.nhlTeamAbbreviation && (
-                        <span className='self-center'>
+                        /*
+                         * Wrapper holds the layout footprint at 16x16,
+                         * which is the same footprint the logo had at
+                         * size={16}. The inner NhlTeamLogo is 16px too,
+                         * and the whole wrapper is scaled 1.25x with
+                         * `transform` — which does NOT change layout, so
+                         * the row's natural height stays exactly what it
+                         * was before. The rendered logo reads as 20px
+                         * (16 * 1.25), but the card never grows.
+                         *
+                         * `self-center` is still needed because the row
+                         * uses items-baseline: without it, the logo
+                         * would sit on the text baseline instead of
+                         * being vertically centered against the row.
+                         */
+                        <span
+                            className='shrink-0 self-center'
+                            style={{
+                                width: 16,
+                                height: 16,
+                                display: 'inline-block',
+                                transform: 'scale(1.25)',
+                                transformOrigin: 'center',
+                            }}
+                        >
                             <NhlTeamLogo
                                 abbreviation={entry.nhlTeamAbbreviation}
                                 size={16}
