@@ -648,14 +648,15 @@ namespace NhlFantasyLeague.api.Services
             var userTeamId = user?.FantasyTeamId;
 
             var offers = await _dbContext.TradeOffers
-                .AsNoTracking()
-                .Include(o => o.CreatedByFantasyTeam)
-                .Include(o => o.Slots)
-                    .ThenInclude(s => s.OfferingPlayer)
-                        .ThenInclude(p => p!.NhlTeam)
-                .Where(o => o.Status == TradeOfferStatus.Active)
-                .OrderByDescending(o => o.CreatedAt)
-                .ToListAsync(ct);
+        .AsNoTracking()
+        .Include(o => o.CreatedByFantasyTeam)
+        .Include(o => o.Season)
+        .Include(o => o.Slots)
+            .ThenInclude(s => s.OfferingPlayer)
+                .ThenInclude(p => p!.NhlTeam)
+        .Where(o => o.Status == TradeOfferStatus.Active)
+        .OrderByDescending(o => o.CreatedAt)
+        .ToListAsync(ct);
 
             if (!includeMine && userTeamId.HasValue)
             {
@@ -1003,24 +1004,26 @@ offeredPlayerIds, ct);
             var myTeamId = user.FantasyTeamId.Value;
 
             var responses = await _dbContext.TradeOfferResponses
-     .AsNoTracking()
-     .Include(r => r.TradeOffer)
-         .ThenInclude(o => o.Slots)
-             .ThenInclude(s => s.OfferingPlayer)
-                 .ThenInclude(p => p!.NhlTeam)
-     .Include(r => r.TradeOffer)
-         .ThenInclude(o => o.CreatedByFantasyTeam)
-     .Include(r => r.RespondingFantasyTeam)
-     .Include(r => r.Slots)
-         .ThenInclude(s => s.RespondingPlayer)
-             .ThenInclude(p => p!.NhlTeam)
-     .Where(r =>
-         r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
-         r.TradeOffer.Status == TradeOfferStatus.Active &&
-         (r.Status == TradeOfferResponseStatus.Pending ||
-          r.Status == TradeOfferResponseStatus.Accepted))
-     .OrderByDescending(r => r.CreatedAt)
-     .ToListAsync(ct);
+.AsNoTracking()
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.Slots)
+  .ThenInclude(s => s.OfferingPlayer)
+      .ThenInclude(p => p!.NhlTeam)
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.CreatedByFantasyTeam)
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.Season)
+.Include(r => r.RespondingFantasyTeam)
+.Include(r => r.Slots)
+.ThenInclude(s => s.RespondingPlayer)
+  .ThenInclude(p => p!.NhlTeam)
+.Where(r =>
+r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
+r.TradeOffer.Status == TradeOfferStatus.Active &&
+(r.Status == TradeOfferResponseStatus.Pending ||
+r.Status == TradeOfferResponseStatus.Accepted))
+.OrderByDescending(r => r.CreatedAt)
+.ToListAsync(ct);
 
             if (responses.Count == 0)
             {
@@ -1046,11 +1049,22 @@ offeredPlayerIds, ct);
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 playerIds, ct);
 
+            // Cap info for both sides of every response.
+            var teamIds = responses
+                .Select(r => r.TradeOffer.CreatedByFantasyTeamId)
+                .Concat(responses.Select(r => r.RespondingFantasyTeamId))
+                .Distinct()
+                .ToList();
+
+            var teamCapInfo = await LoadCreatorTeamCapInfoAsync(
+                teamIds, ct);
+
             return responses
      .Select(r => ToResponseDto(
          r,
          contractsByPlayerId,
-         statsByPlayerId))
+         statsByPlayerId,
+         teamCapInfo))
      .ToList();
         }
 
@@ -1070,24 +1084,26 @@ offeredPlayerIds, ct);
             var myTeamId = user.FantasyTeamId.Value;
 
             var responses = await _dbContext.TradeOfferResponses
-      .AsNoTracking()
-      .Include(r => r.TradeOffer)
-          .ThenInclude(o => o.Slots)
-              .ThenInclude(s => s.OfferingPlayer)
-                  .ThenInclude(p => p!.NhlTeam)
-      .Include(r => r.TradeOffer)
-          .ThenInclude(o => o.CreatedByFantasyTeam)
-      .Include(r => r.RespondingFantasyTeam)
-      .Include(r => r.Slots)
-          .ThenInclude(s => s.RespondingPlayer)
-              .ThenInclude(p => p!.NhlTeam)
-      .Where(r =>
-          r.RespondingFantasyTeamId == myTeamId &&
-          r.TradeOffer.Status == TradeOfferStatus.Active &&
-          (r.Status == TradeOfferResponseStatus.Pending ||
-           r.Status == TradeOfferResponseStatus.Accepted))
-      .OrderByDescending(r => r.CreatedAt)
-      .ToListAsync(ct);
+.AsNoTracking()
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.Slots)
+   .ThenInclude(s => s.OfferingPlayer)
+       .ThenInclude(p => p!.NhlTeam)
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.CreatedByFantasyTeam)
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.Season)
+.Include(r => r.RespondingFantasyTeam)
+.Include(r => r.Slots)
+.ThenInclude(s => s.RespondingPlayer)
+   .ThenInclude(p => p!.NhlTeam)
+.Where(r =>
+r.RespondingFantasyTeamId == myTeamId &&
+r.TradeOffer.Status == TradeOfferStatus.Active &&
+(r.Status == TradeOfferResponseStatus.Pending ||
+r.Status == TradeOfferResponseStatus.Accepted))
+.OrderByDescending(r => r.CreatedAt)
+.ToListAsync(ct);
 
             if (responses.Count == 0)
             {
@@ -1113,11 +1129,23 @@ offeredPlayerIds, ct);
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 playerIds, ct);
 
+            // Cap info for both sides of every response. One query,
+            // covers every team that appears.
+            var teamIds = responses
+                .Select(r => r.TradeOffer.CreatedByFantasyTeamId)
+                .Concat(responses.Select(r => r.RespondingFantasyTeamId))
+                .Distinct()
+                .ToList();
+
+            var teamCapInfo = await LoadCreatorTeamCapInfoAsync(
+                teamIds, ct);
+
             return responses
      .Select(r => ToResponseDto(
          r,
          contractsByPlayerId,
-         statsByPlayerId))
+         statsByPlayerId,
+         teamCapInfo))
      .ToList();
         }
 
@@ -1483,12 +1511,13 @@ offeredPlayerIds, ct);
                 .FirstOrDefaultAsync(u => u.Id == userId, ct);
 
             var offer = await _dbContext.TradeOffers
-                .AsNoTracking()
-                .Include(o => o.CreatedByFantasyTeam)
-                .Include(o => o.Slots)
-                    .ThenInclude(s => s.OfferingPlayer)
-                        .ThenInclude(p => p!.NhlTeam)
-                .FirstOrDefaultAsync(o => o.Id == offerId, ct);
+     .AsNoTracking()
+     .Include(o => o.CreatedByFantasyTeam)
+     .Include(o => o.Season)
+     .Include(o => o.Slots)
+         .ThenInclude(s => s.OfferingPlayer)
+             .ThenInclude(p => p!.NhlTeam)
+     .FirstOrDefaultAsync(o => o.Id == offerId, ct);
 
             if (offer == null)
             {
@@ -1525,18 +1554,20 @@ offeredPlayerIds, ct);
      CancellationToken ct)
         {
             var response = await _dbContext.TradeOfferResponses
-                .AsNoTracking()
-                .Include(r => r.TradeOffer)
-                    .ThenInclude(o => o.Slots)
-                        .ThenInclude(s => s.OfferingPlayer)
-                            .ThenInclude(p => p!.NhlTeam)
-                .Include(r => r.TradeOffer)
-                    .ThenInclude(o => o.CreatedByFantasyTeam)
-                .Include(r => r.RespondingFantasyTeam)
-                .Include(r => r.Slots)
-                    .ThenInclude(s => s.RespondingPlayer)
-                        .ThenInclude(p => p!.NhlTeam)
-                .FirstOrDefaultAsync(r => r.Id == responseId, ct);
+     .AsNoTracking()
+     .Include(r => r.TradeOffer)
+         .ThenInclude(o => o.Slots)
+             .ThenInclude(s => s.OfferingPlayer)
+                 .ThenInclude(p => p!.NhlTeam)
+     .Include(r => r.TradeOffer)
+         .ThenInclude(o => o.CreatedByFantasyTeam)
+     .Include(r => r.TradeOffer)
+         .ThenInclude(o => o.Season)
+     .Include(r => r.RespondingFantasyTeam)
+     .Include(r => r.Slots)
+         .ThenInclude(s => s.RespondingPlayer)
+             .ThenInclude(p => p!.NhlTeam)
+     .FirstOrDefaultAsync(r => r.Id == responseId, ct);
 
             if (response == null)
             {
@@ -1547,13 +1578,13 @@ offeredPlayerIds, ct);
             // the offering player from the original offer, and the
             // responding player.
             var playerIds = response.Slots
-                .Select(s => s.RespondingPlayerId)
-                .Concat(
-                    response.TradeOffer.Slots
-                        .Where(s => s.OfferingPlayerId.HasValue)
-                        .Select(s => s.OfferingPlayerId!.Value))
-                .Distinct()
-                .ToList();
+     .Select(s => s.RespondingPlayerId)
+     .Concat(
+         response.TradeOffer.Slots
+             .Where(s => s.OfferingPlayerId.HasValue)
+             .Select(s => s.OfferingPlayerId!.Value))
+     .Distinct()
+     .ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
                 playerIds, ct);
@@ -1561,10 +1592,19 @@ offeredPlayerIds, ct);
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 playerIds, ct);
 
+            var teamCapInfo = await LoadCreatorTeamCapInfoAsync(
+                new[]
+                {
+                    response.TradeOffer.CreatedByFantasyTeamId,
+                    response.RespondingFantasyTeamId,
+                },
+                ct);
+
             return ToResponseDto(
                 response,
                 contractsByPlayerId,
-                statsByPlayerId);
+                statsByPlayerId,
+                teamCapInfo);
         }
 
         private async Task<Dictionary<int, List<PlayerContract>>>
@@ -1692,8 +1732,9 @@ offeredPlayerIds, ct);
                 Id = offer.Id,
                 CreatedByFantasyTeamId = offer.CreatedByFantasyTeamId,
                 CreatedByFantasyTeamName =
-                    offer.CreatedByFantasyTeam?.Name ?? string.Empty,
+             offer.CreatedByFantasyTeam?.Name ?? string.Empty,
                 CreatedByFantasyTeamCapSalary = createdByCap,
+                SeasonSalaryCap = offer.Season?.SalaryCap ?? 0m,
                 CreatedAt = offer.CreatedAt,
                 Note = offer.Note,
                 Status = offer.Status.ToString(),
@@ -1771,10 +1812,33 @@ offeredPlayerIds, ct);
         private static TradeOfferResponseDto ToResponseDto(
 TradeOfferResponse response,
 IReadOnlyDictionary<int, List<PlayerContract>> contractsByPlayerId,
-IReadOnlyDictionary<int, PlayerStatLines> statsByPlayerId)
+IReadOnlyDictionary<int, PlayerStatLines> statsByPlayerId,
+CreatorTeamCapInfo? teamCapInfo = null)
         {
             var offerSlotsByIndex = response.TradeOffer.Slots
                 .ToDictionary(s => s.SlotIndex);
+
+            // Resolve both sides' cap hits from the loaded cap map.
+            // Null when the caller did not provide cap info.
+            decimal? creatorCap = null;
+            decimal? responderCap = null;
+
+            if (teamCapInfo != null)
+            {
+                if (teamCapInfo.CapByTeamId.TryGetValue(
+                        response.TradeOffer.CreatedByFantasyTeamId,
+                        out var c))
+                {
+                    creatorCap = c;
+                }
+
+                if (teamCapInfo.CapByTeamId.TryGetValue(
+                        response.RespondingFantasyTeamId,
+                        out var r))
+                {
+                    responderCap = r;
+                }
+            }
 
             return new TradeOfferResponseDto
             {
@@ -1786,9 +1850,13 @@ IReadOnlyDictionary<int, PlayerStatLines> statsByPlayerId)
                 TradeOfferCreatedByFantasyTeamName =
                     response.TradeOffer.CreatedByFantasyTeam?.Name
                     ?? string.Empty,
+                TradeOfferCreatedByFantasyTeamCapSalary = creatorCap,
                 RespondingFantasyTeamId = response.RespondingFantasyTeamId,
                 RespondingFantasyTeamName =
                     response.RespondingFantasyTeam?.Name ?? string.Empty,
+                RespondingFantasyTeamCapSalary = responderCap,
+                SeasonSalaryCap =
+                    response.TradeOffer.Season?.SalaryCap ?? 0m,
                 CreatedAt = response.CreatedAt,
                 Status = response.Status.ToString(),
                 Slots = response.Slots

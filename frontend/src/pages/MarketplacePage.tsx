@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
@@ -532,6 +532,37 @@ const SLOT_ARROW_COL = 'w-5 md:w-12';
  */
 const MARK_SEEN_DELAY_MS = 2000;
 
+/**
+ * Shared style for the two team-name buttons on the offer card
+ * header (creator on the left, responder on the right). Both are
+ * single buttons — not a segmented toggle — that open the roster
+ * popup. They size to their content, so a short team name gets a
+ * compact pill and a longer one still fits within the column with
+ * an ellipsis.
+ *
+ * Colors mirror the "Marché" active segment on the main
+ * marketplace toggle: solid fill, dark navy text, glow chain.
+ * Fill uses the FP gold from ClassementPage (#FFC72C) so the two
+ * header buttons read as part of the "highlighted" family, the
+ * same accent the standings table uses for its FP column.
+ *
+ * Same object is reused on all four call sites (clickable and
+ * non-clickable variants of both sides) so tuning the look is a
+ * one-spot change.
+ */
+const TEAM_NAME_BUTTON_STYLE: React.CSSProperties = {
+    backgroundColor: '#14B8A6',
+    color: '#F2F5FA',
+    border: '1px solid #5EEAD4',
+    boxShadow: [
+        '0 0 3px rgba(20, 184, 166, 0.9)',
+        '0 0 7px rgba(20, 184, 166, 0.65)',
+        '0 0 13px rgba(20, 184, 166, 0.3)',
+        '0 0 20px rgba(20, 184, 166, 0.1)',
+        'inset 0 0 2px rgba(20, 184, 166, 0.35)',
+    ].join(', '),
+};
+
 // ---------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------
@@ -735,8 +766,8 @@ export default function MarketplacePage() {
                                         setBrowseSubView('view')
                                     }
                                     className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'view'
-                                            ? 'bg-[#00E5FF] text-[#080D1A]'
-                                            : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                        ? 'bg-[#00E5FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
                                     Voir les offres
@@ -748,8 +779,8 @@ export default function MarketplacePage() {
                                         setBrowseSubView('mine')
                                     }
                                     className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'mine'
-                                            ? 'bg-[#00E5FF] text-[#080D1A]'
-                                            : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                        ? 'bg-[#00E5FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
                                     Vos offres actives
@@ -761,8 +792,8 @@ export default function MarketplacePage() {
                                         setBrowseSubView('publish')
                                     }
                                     className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${browseSubView === 'publish'
-                                            ? 'bg-[#00E5FF] text-[#080D1A]'
-                                            : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                        ? 'bg-[#00E5FF] text-[#080D1A]'
+                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                         }`}
                                 >
                                     Publier une annonce
@@ -922,6 +953,13 @@ function AddOfferPanel({
             id: 0,
             createdByFantasyTeamId: teamId ?? 0,
             createdByFantasyTeamName: teamName ?? 'Mon équipe',
+            // Preview is a read-only rendering of the offer the user
+            // is about to publish. The card still renders fine
+            // without cap info: the cap-space line simply does not
+            // appear because seasonSalaryCap is 0 and the per-team
+            // cap hits are null.
+            createdByFantasyTeamCapSalary: null,
+            seasonSalaryCap: 0,
             createdAt: new Date().toISOString(),
             note: note.trim() === '' ? null : note.trim(),
             status: 'Active',
@@ -1354,11 +1392,11 @@ function AddOfferPanel({
                         />
                     </div>
                 ) : (
-                        <button
-                            type='button'
-                            onClick={() => setShowNote(true)}
-                            className='w-full cursor-pointer rounded-lg border border-dotted border-white/70 bg-transparent px-3 py-2 text-xs font-semibold transition-colors hover:bg-white/5'
-                        >
+                    <button
+                        type='button'
+                        onClick={() => setShowNote(true)}
+                        className='w-full cursor-pointer rounded-lg border border-dotted border-white/70 bg-transparent px-3 py-2 text-xs font-semibold transition-colors hover:bg-white/5'
+                    >
                         <span className='italic text-zinc-400'>
                             Ajouter un message (
                             <span className='font-bold not-italic text-emerald-400'>
@@ -1847,17 +1885,17 @@ function SlotEditor({
                                     setFilterExpanded(false)
                                 }
                             />
-                    ) : (
-                        <button
-                            type='button'
-                            onClick={() => {
-                                setFilterExpanded(true);
-                                scrollElementIntoView(
-                                    `filter-form-${index}`,
-                                );
-                            }}
-                            className='mt-2 w-full cursor-pointer rounded-lg border border-dashed border-[#00A8FF]/60 bg-transparent px-3 py-2 text-xs font-semibold transition-colors hover:bg-[#00A8FF]/10'
-                        >
+                        ) : (
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    setFilterExpanded(true);
+                                    scrollElementIntoView(
+                                        `filter-form-${index}`,
+                                    );
+                                }}
+                                className='mt-2 w-full cursor-pointer rounded-lg border border-dashed border-[#00A8FF]/60 bg-transparent px-3 py-2 text-xs font-semibold transition-colors hover:bg-[#00A8FF]/10'
+                            >
                                 {(() => {
                                     const summary =
                                         filterSummary(slot);
@@ -2303,8 +2341,13 @@ function responseToOfferShape(
         id: response.id,
         createdByFantasyTeamId: response.tradeOfferCreatedByFantasyTeamId,
         createdByFantasyTeamName: response.tradeOfferCreatedByFantasyTeamName,
+        createdByFantasyTeamCapSalary:
+            response.tradeOfferCreatedByFantasyTeamCapSalary,
         respondingFantasyTeamId: response.respondingFantasyTeamId,
         respondingFantasyTeamName: response.respondingFantasyTeamName,
+        respondingFantasyTeamCapSalary:
+            response.respondingFantasyTeamCapSalary,
+        seasonSalaryCap: response.seasonSalaryCap,
         createdAt: response.createdAt,
         note: response.tradeOfferNote,
         status: response.status,
@@ -2673,8 +2716,8 @@ function StatLinesTable({
     return (
         <table
             className={`mt-1 w-full table-fixed border-collapse leading-tight tabular-nums ${size === 'md'
-                    ? 'text-[0.7rem] md:text-xs'
-                    : 'text-[0.55rem] md:text-[0.6rem]'
+                ? 'text-[0.7rem] md:text-xs'
+                : 'text-[0.55rem] md:text-[0.6rem]'
                 }`}
         >
             {/*
@@ -2755,6 +2798,284 @@ function StatLinesTable({
                 </tr>
             </tbody>
         </table>
+    );
+}
+
+// ---------------------------------------------------------------------
+// Custom player dropdown
+//
+// A native <select> element cannot render per-option layout: every
+// <option> is a plain string, there is no way to align one piece of
+// text to the left and another to the right inside the same row, and
+// there is no way to style the option list beyond a couple of
+// browser-supported properties.
+//
+// This custom dropdown gives us a full flex row per option so the
+// player name can be pushed to the far left and his contract salary
+// to the far right, matching the "PlayerName ---------- Salary"
+// layout you asked for.
+//
+// The panel is rendered with createPortal to document.body so it is
+// never clipped by the OfferCard's `overflow-hidden`, and it is
+// positioned with `position: fixed` using the trigger's bounding
+// rect. It closes on outside click, on Escape, and on scroll (same
+// behavior as a native select on the desktop web).
+// ---------------------------------------------------------------------
+
+function PlayerDropdownPanel({
+    anchorRef,
+    panelRef,
+    matches,
+    currentPick,
+    onPick,
+    onClose,
+    slotIndex,
+    wouldBustCap,
+}: {
+    /**
+     * Trigger element. The panel is anchored under its bottom edge.
+     */
+    anchorRef: React.RefObject<HTMLElement | null>;
+    /**
+     * Assigned to the portaled panel root so the parent's outside-
+     * click check can test whether the click landed inside it.
+     */
+    panelRef: React.RefObject<HTMLUListElement | null>;
+    matches: RosterEntry[];
+    currentPick: number | null;
+    onPick: (playerId: number | null) => void;
+    onClose: () => void;
+    /**
+     * Slot this dropdown is picking a player for. Forwarded from
+     * the parent so `wouldBustCap` can simulate the effect of a
+     * candidate in exactly this slot.
+     */
+    slotIndex: number;
+    /**
+     * Cap simulation helper from OfferCard. Returns true when a
+     * candidate player's salary would push either team below
+     * zero cap space if selected in the given slot.
+     */
+    wouldBustCap: (
+        candidateSalary: number,
+        forSlotIndex: number,
+    ) => boolean;
+}) {
+    // Snapshot the anchor's rect at first render. The parent closes
+    // the panel on scroll, so there is nothing to recompute later.
+    const [rect] = useState<DOMRect | null>(() =>
+        anchorRef.current
+            ? anchorRef.current.getBoundingClientRect()
+            : null,
+    );
+
+    if (!rect) {
+        return null;
+    }
+
+    // Panel is at least as wide as the trigger, and never narrower
+    // than 180px so long names have room to breathe.
+    const panelWidth = Math.max(rect.width, 180);
+
+    // Keep the panel inside the viewport horizontally. 8px margin
+    // on each side.
+    const left = Math.max(
+        8,
+        Math.min(rect.left, window.innerWidth - panelWidth - 8),
+    );
+
+    // If there isn't enough room below the trigger for a useful
+    // amount of the panel, cap the height so it scrolls internally.
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    const maxHeight = Math.max(140, Math.min(256, spaceBelow));
+
+    return createPortal(
+        <ul
+            ref={panelRef}
+            role='listbox'
+            style={{
+                position: 'fixed',
+                top: rect.bottom + 4,
+                left,
+                width: panelWidth,
+                maxHeight,
+                zIndex: 200,
+            }}
+            className='overflow-y-auto rounded border border-[#00E5FF]/60 bg-[#080D1A] py-1 shadow-lg'
+        >
+            <li>
+                <button
+                    type='button'
+                    onClick={() => {
+                        onPick(null);
+                        onClose();
+                    }}
+                    className='flex w-full cursor-pointer items-center px-2 py-1 text-left text-xs font-semibold text-[#F2F5FA] transition-colors hover:bg-[#00A8FF]/15'
+                >
+                    {matches.length === 0
+                        ? 'Aucun joueur admissible'
+                        : '— Choisir un joueur —'}
+                </button>
+            </li>
+
+            {matches.map((m) => {
+                const isSelected = currentPick === m.playerId;
+
+                const salary =
+                    m.currentContract?.salary ?? m.fantasySalary;
+
+                // Simulate picking this player in this slot: if
+                // either team would end up below zero cap space,
+                // flag the salary in red so the user can see it's
+                // off-limits before clicking. Same simulation the
+                // "Offrir" button uses, but per candidate.
+                const busts = wouldBustCap(salary, slotIndex);
+
+                return (
+                    <li key={m.playerId}>
+                        <button
+                            type='button'
+                            onClick={() => {
+                                onPick(m.playerId);
+                                onClose();
+                            }}
+                            className={`flex w-full cursor-pointer items-center justify-between gap-2 px-2 py-1 text-left text-xs transition-colors hover:bg-[#00A8FF]/15 ${isSelected
+                                ? 'bg-[#00A8FF]/10 font-semibold text-[#00E5FF]'
+                                : 'text-[#F2F5FA]'
+                                }`}
+                        >
+                            {/* Player name — pushed to the far left,
+                                truncates when the row is too narrow. */}
+                            <span className='min-w-0 truncate font-semibold'>
+                                {m.firstName} {m.lastName}
+                            </span>
+
+                            {/* Salary — pushed to the far right,
+                                never truncates. Red when picking
+                                this player would bust either
+                                team's cap. */}
+                            <span
+                                className={`shrink-0 tabular-nums ${busts
+                                    ? 'text-[#EF4444]'
+                                    : 'text-[#7DD3FC]'
+                                    }`}
+                            >
+                                {compactSalary(salary)}
+                            </span>
+                        </button>
+                    </li>
+                );
+            })}
+        </ul>,
+        document.body,
+    );
+}
+
+/**
+ * Standalone "choose a player" picker used inside the demand block
+ * of an offer card (the plain select-looking box shown before any
+ * pick has been made). Same open/close mechanics as the trigger in
+ * RespondingPlayerBlock, but a simpler trigger since the closed
+ * state only ever shows the placeholder.
+ */
+function EmptyPlayerPicker({
+    matches,
+    onPick,
+    slotIndex,
+    wouldBustCap,
+}: {
+    matches: RosterEntry[];
+    onPick: (playerId: number | null) => void;
+    /**
+     * Slot this picker belongs to. Forwarded to the dropdown panel
+     * so its cap simulation targets the right slot.
+     */
+    slotIndex: number;
+    /**
+     * Cap simulation helper from OfferCard.
+     */
+    wouldBustCap: (
+        candidateSalary: number,
+        forSlotIndex: number,
+    ) => boolean;
+}) {
+    const [open, setOpen] = useState(false);
+    const triggerRef = useRef<HTMLButtonElement | null>(null);
+    const panelRef = useRef<HTMLUListElement | null>(null);
+
+    useEffect(() => {
+        if (!open) return;
+
+        function onDocMouseDown(e: MouseEvent) {
+            const target = e.target as Node;
+
+            if (triggerRef.current?.contains(target)) return;
+            if (panelRef.current?.contains(target)) return;
+
+            setOpen(false);
+        }
+
+        function onDocKeyDown(e: KeyboardEvent) {
+            if (e.key === 'Escape') {
+                setOpen(false);
+            }
+        }
+
+        function onWindowScroll() {
+            setOpen(false);
+        }
+
+        document.addEventListener('mousedown', onDocMouseDown);
+        document.addEventListener('keydown', onDocKeyDown);
+        // No capture phase (no `true`): the scroll event does not
+        // bubble, so without capture this listener only fires for
+        // the page itself, never for the panel's own internal
+        // scroll. With capture=true it caught the panel's scroll
+        // too and closed the dropdown the moment the user tried
+        // to scroll through the option list.
+        window.addEventListener('scroll', onWindowScroll);
+
+        return () => {
+            document.removeEventListener('mousedown', onDocMouseDown);
+            document.removeEventListener('keydown', onDocKeyDown);
+            window.removeEventListener('scroll', onWindowScroll);
+        };
+    }, [open]);
+
+    const disabled = matches.length === 0;
+
+    return (
+        <div className='relative mt-1 w-full'>
+            <button
+                ref={triggerRef}
+                type='button'
+                disabled={disabled}
+                onClick={() => setOpen((v) => !v)}
+                aria-haspopup='listbox'
+                aria-expanded={open}
+                className='w-full cursor-pointer rounded border bg-[#080D1A] px-1 py-0.5 text-left text-[0.6rem] font-semibold text-[#7DD3FC] focus:outline-none disabled:cursor-not-allowed md:text-[0.7rem]'
+                style={{
+                    borderColor: 'rgba(0, 229, 255, 0.4)',
+                }}
+            >
+                {disabled
+                    ? 'Aucun joueur admissible'
+                    : '— Choisir un joueur —'}
+            </button>
+
+            {open && !disabled && (
+                <PlayerDropdownPanel
+                    anchorRef={triggerRef}
+                    panelRef={panelRef}
+                    matches={matches}
+                    currentPick={null}
+                    onPick={onPick}
+                    onClose={() => setOpen(false)}
+                    slotIndex={slotIndex}
+                    wouldBustCap={wouldBustCap}
+                />
+            )}
+        </div>
     );
 }
 
@@ -2888,11 +3209,25 @@ function RespondingPlayerBlock({
     matches,
     currentPick,
     onPick,
+    slotIndex,
+    wouldBustCap,
 }: {
     entry: RosterEntry | null;
     matches: RosterEntry[];
     currentPick: number | null;
     onPick: (playerId: number | null) => void;
+    /**
+     * Slot this block renders on. Forwarded to the dropdown panel
+     * so its cap simulation targets the right slot.
+     */
+    slotIndex: number;
+    /**
+     * Cap simulation helper from OfferCard.
+     */
+    wouldBustCap: (
+        candidateSalary: number,
+        forSlotIndex: number,
+    ) => boolean;
 }) {
     const isGoalie = entry
         ? toPositionGroup(entry.position) === 'G'
@@ -2907,108 +3242,154 @@ function RespondingPlayerBlock({
         ? contractLabel(entry.secondContract)
         : null;
 
+    /**
+     * Custom dropdown state. Replaces the previous native-select
+     * overlay so the option rows can push the player name to the
+     * far left and the contract salary to the far right.
+     */
+    const [open, setOpen] = useState(false);
+    const triggerRef = useRef<HTMLButtonElement | null>(null);
+    const panelRef = useRef<HTMLUListElement | null>(null);
+
+    useEffect(() => {
+        if (!open) return;
+
+        function onDocMouseDown(e: MouseEvent) {
+            const target = e.target as Node;
+
+            if (triggerRef.current?.contains(target)) return;
+            if (panelRef.current?.contains(target)) return;
+
+            setOpen(false);
+        }
+
+        function onDocKeyDown(e: KeyboardEvent) {
+            if (e.key === 'Escape') {
+                setOpen(false);
+            }
+        }
+
+        function onWindowScroll() {
+            setOpen(false);
+        }
+
+        document.addEventListener('mousedown', onDocMouseDown);
+        document.addEventListener('keydown', onDocKeyDown);
+        // No capture phase (no `true`): the scroll event does not
+        // bubble, so without capture this listener only fires for
+        // the page itself, never for the panel's own internal
+        // scroll. With capture=true it caught the panel's scroll
+        // too and closed the dropdown the moment the user tried
+        // to scroll through the option list.
+        window.addEventListener('scroll', onWindowScroll);
+
+        return () => {
+            document.removeEventListener('mousedown', onDocMouseDown);
+            document.removeEventListener('keydown', onDocKeyDown);
+            window.removeEventListener('scroll', onWindowScroll);
+        };
+    }, [open]);
+
+    const disabled = matches.length === 0 && currentPick == null;
+
     return (
         <>
             <div className='flex flex-nowrap items-center justify-center text-xs text-foreground md:text-sm'>
                 {/*
-                 * Wrapper approach for the "dropdown with a logo
-                 * inside" look.
-                 *
-                 * A native <select> cannot hold HTML inside its
-                 * closed state or inside its <option> rows. So the
-                 * visible rectangle is a plain <div> that renders
-                 * the picked player's name and logo side by side,
-                 * and the actual <select> sits on top, fully
-                 * transparent, to capture the click and open the
-                 * OS dropdown list. The user sees the div; the
-                 * browser still drives the interaction.
-                 *
-                 * The div owns the border and background so the
-                 * rectangle stays green / cyan and dark-themed.
-                 * The select only carries `colorScheme: 'dark'`
-                 * so the popup list itself stays dark.
+                 * The trigger is now a real <button> that opens the
+                 * custom dropdown panel. The rectangle styling
+                 * (border, background, padding, rounded corners)
+                 * moves onto the button, keeping the exact same
+                 * appearance as before.
                  */}
-                <div
-                    className='relative inline-flex max-w-[12rem] min-w-0 items-center justify-center rounded border bg-[#080D1A] px-2 py-0.5 md:max-w-[16rem]'
-                    style={{
-                        borderColor:
-                            currentPick != null
-                                ? '#22C55E'
-                                : 'rgba(0, 229, 255, 0.4)',
-                    }}
-                >
-                    {/* Visible content: centered logo + name + age,
-                        logo on the left, age on the right. Truncated
-                        when the name is too long.
-
-                        `pr-2` nudges the whole group slightly left
-                        so the age reads as sitting on the right
-                        rather than pushing the name off-center. */}
-                    <span className='flex min-w-0 items-center justify-center gap-x-1.5 truncate pr-2 text-xs font-semibold text-foreground md:text-sm'>
-                        {entry?.nhlTeamAbbreviation && (
-                            <NhlTeamLogo
-                                abbreviation={entry.nhlTeamAbbreviation}
-                                size={20}
-                            />
-                        )}
-
-                        <span className='truncate'>
-                            {entry
-                                ? `${entry.firstName} ${entry.lastName}`
-                                : matches.length === 0
-                                    ? 'Aucun joueur admissible'
-                                    : '— Choisir un joueur —'}
-                        </span>
-
-                        {entry?.age != null && (
-                            <span className='shrink-0 text-[0.65rem] font-normal text-white md:text-xs'>
-                                {entry.age} ans
-                            </span>
-                        )}
-                    </span>
-
-                    {/* Transparent overlay: the actual <select> that
-                        drives the interaction. `opacity-0` hides it
-                        visually; pointer events still hit it, so
-                        clicking anywhere on the div opens the
-                        native dropdown. `appearance-none` removes
-                        the browser's own arrow so it does not
-                        render inside the transparent area. */}
-                    <select
-                        value={currentPick ?? ''}
-                        onChange={(e) => {
-                            const v = e.target.value;
-                            onPick(v === '' ? null : Number(v));
-                        }}
-                        disabled={matches.length === 0 && currentPick == null}
-                        className='absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0 focus:outline-none disabled:cursor-not-allowed'
-                        style={{ colorScheme: 'dark' }}
+                <div className='relative inline-flex max-w-[12rem] min-w-0 md:max-w-[16rem]'>
+                    <button
+                        ref={triggerRef}
+                        type='button'
+                        disabled={disabled}
+                        onClick={() => setOpen((v) => !v)}
+                        aria-haspopup='listbox'
+                        aria-expanded={open}
                         aria-label='Choisir un joueur'
+                        className='flex w-full min-w-0 cursor-pointer items-center justify-center rounded border bg-[#080D1A] px-2 py-0.5 disabled:cursor-not-allowed'
+                        style={{
+                            borderColor:
+                                currentPick != null
+                                    ? '#22C55E'
+                                    : 'rgba(0, 229, 255, 0.4)',
+                        }}
                     >
-                        <option
-                            value=''
-                            style={{
-                                backgroundColor: '#080D1A',
-                                color: '#F2F5FA',
-                            }}
-                        >
-                            {matches.length === 0
-                                ? 'Aucun joueur admissible'
-                                : '— Choisir un joueur —'}
-                        </option>
-                        {matches.map((m) => (
-                            <option
-                                key={m.playerId}
-                                value={m.playerId}
-                                style={{
-                                    backgroundColor: '#080D1A',
-                                    color: '#F2F5FA',
-                                }}
-                            >
-                                {m.firstName} {m.lastName}
-                            </option>
-                        ))}
-                    </select>
+                        {/*
+                         * Visible content: centered logo + name +
+                         * age, logo on the left, age on the right.
+                         * Truncated when the name is too long.
+                         *
+                         * `pr-2` nudges the whole group slightly
+                         * left so the age reads as sitting on the
+                         * right rather than pushing the name
+                         * off-center.
+                         */}
+                        <span className='flex min-w-0 items-center justify-center gap-x-1.5 truncate pr-2 text-xs font-semibold text-foreground md:text-sm'>
+                            {entry?.nhlTeamAbbreviation && (
+                                /*
+                                 * Wrapper holds the layout box at
+                                 * 14x14 so the dropdown height stays
+                                 * unchanged, and the inner span is
+                                 * scaled 1.25x so the rendered logo
+                                 * is ~17.5px. The transform never
+                                 * affects layout, so the wrapper's
+                                 * border-box is still 14x14 and the
+                                 * button's total height is identical
+                                 * to before.
+                                 */
+                                <span
+                                    aria-hidden='true'
+                                    className='shrink-0'
+                                    style={{
+                                        width: 14,
+                                        height: 14,
+                                        display: 'inline-block',
+                                        transform: 'scale(1.25)',
+                                        transformOrigin: 'center',
+                                    }}
+                                >
+                                    <NhlTeamLogo
+                                        abbreviation={
+                                            entry.nhlTeamAbbreviation
+                                        }
+                                        size={14}
+                                    />
+                                </span>
+                            )}
+
+                            <span className='truncate'>
+                                {entry
+                                    ? `${entry.firstName} ${entry.lastName}`
+                                    : matches.length === 0
+                                        ? 'Aucun joueur admissible'
+                                        : '— Choisir un joueur —'}
+                            </span>
+
+                            {entry?.age != null && (
+                                <span className='shrink-0 text-[0.65rem] font-normal text-white md:text-xs'>
+                                    {entry.age} ans
+                                </span>
+                            )}
+                        </span>
+                    </button>
+
+                    {open && !disabled && (
+                        <PlayerDropdownPanel
+                            anchorRef={triggerRef}
+                            panelRef={panelRef}
+                            matches={matches}
+                            currentPick={null}
+                            onPick={onPick}
+                            onClose={() => setOpen(false)}
+                            slotIndex={slotIndex}
+                            wouldBustCap={wouldBustCap}
+                        />
+                    )}
                 </div>
             </div>
 
@@ -3044,6 +3425,61 @@ function RespondingPlayerBlock({
                 </>
             )}
         </>
+    );
+}
+
+// ---------------------------------------------------------------------
+// Team cap line
+//
+// Renders, under a team name on the trade card header, the team's
+// space under the salary cap: base value (today, without the trade)
+// on the left, adjusted value (after the trade) on the right.
+//
+// The base value is always present when the card has enough data.
+// The adjusted value depends on the picks the user has made on the
+// card, so on a fresh card it equals the base value and the arrow
+// reads as "no change".
+//
+// Everything is expressed as "X.XM $" to match the format used by
+// the Masse salariale tab on Mon équipe.
+// ---------------------------------------------------------------------
+
+function TeamCapLine({
+    baseCapSpace,
+    adjustedCapSpace,
+}: {
+    baseCapSpace: number;
+    adjustedCapSpace: number;
+}) {
+    // Only flag the adjusted value when it goes negative, i.e. the
+    // team would be over the salary cap after the trade. A change in
+    // either direction that stays within the cap is not interesting
+    // for the user, so the value stays in the same cyan as the base.
+    const busted = adjustedCapSpace < 0;
+
+    return (
+        <div className='flex items-center justify-center gap-x-1 text-[0.6rem] font-semibold tabular-nums md:text-xs'>
+            <span className='text-[#7DD3FC]'>
+                {compactSalary(baseCapSpace)} $
+            </span>
+
+            <span
+                aria-hidden='true'
+                className='text-[#7DD3FC]'
+            >
+                →
+            </span>
+
+            <span
+                className={
+                    busted
+                        ? 'text-[#EF4444]'
+                        : 'text-[#7DD3FC]'
+                }
+            >
+                {compactSalary(adjustedCapSpace)} $
+            </span>
+        </div>
     );
 }
 
@@ -3239,15 +3675,281 @@ function OfferCard({
     }
 
     /**
-   * Local state for the "Offrir" submit. Resets when the card
-   * unmounts or the user picks a different offer.
-   */
+* Local state for the "Offrir" submit. Resets when the card
+* unmounts or the user picks a different offer.
+*/
     const [respondBusy, setRespondBusy] = useState(false);
     const [respondSuccess, setRespondSuccess] = useState<string | null>(null);
     const [respondError, setRespondError] = useState<string | null>(null);
 
+    // -----------------------------------------------------------------
+    // Cap-space display
+    //
+    // Each side of the card shows its team's space under cap, first
+    // as it stands today (base) and then as it would be after the
+    // current trade (adjusted). Both sides share the same season
+    // cap, which comes from the backend DTO.
+    //
+    // Base space under cap is (seasonCap - teamCapHit). The
+    // teamCapHit comes from the backend for the creator, and from
+    // the local userRoster for the responder when the card is a
+    // browse card (the responder is the connected user in that
+    // case). On synthesized response cards the backend supplies
+    // both cap hits.
+    //
+    // Adjusted space under cap is (base + what the team gives up -
+    // what the team receives). The current season contract salary
+    // of each player on the card's "offering" side is what the
+    // offering team gives up; the salary on the "responding" side
+    // is what the responder gives up, which the offering team
+    // receives.
+    // -----------------------------------------------------------------
+
+    const seasonCap = offer.seasonSalaryCap;
+
+    /**
+     * Sum of the current-season contract salaries the LEFT side is
+     * offering. Zero when no slot on that side has a contract
+     * covering the current season, or when there are no offering
+     * players at all.
+     */
+    const creatorOfferedSalary = useMemo(() => {
+        let sum = 0;
+
+        for (const slot of offer.slots) {
+            const salary = slot.offeringPlayerCurrentContract?.salary;
+            if (salary != null) {
+                sum += salary;
+            }
+        }
+
+        return sum;
+    }, [offer.slots]);
+
+    /**
+     * Sum of the current-season contract salaries the RIGHT side is
+     * offering.
+     *
+     * Two cases:
+     *   - Saved-response card: the DTO already carries each
+     *     responding player's contract, so we read it off the slot.
+     *   - Interactive browse card: the user's pick is a local
+     *     playerId. We look the picked player up in userRoster and
+     *     read his current contract.
+     */
+    const responderOfferedSalary = useMemo(() => {
+        let sum = 0;
+
+        for (const slot of offer.slots) {
+            const savedSalary =
+                slot.respondingPlayerCurrentContract?.salary;
+
+            if (savedSalary != null) {
+                sum += savedSalary;
+                continue;
+            }
+
+            const pick = picks[slot.slotIndex];
+            if (pick == null) continue;
+
+            const entry = userRoster?.entries.find(
+                (e) => e.playerId === pick,
+            );
+
+            const salary = entry?.currentContract?.salary;
+            if (salary != null) {
+                sum += salary;
+            }
+        }
+
+        return sum;
+    }, [offer.slots, picks, userRoster]);
+
+    // Creator's base and adjusted cap space. Null when either the
+    // season cap or the creator's cap hit is unknown.
+    const creatorBaseCapSpace =
+        seasonCap > 0 &&
+            offer.createdByFantasyTeamCapSalary != null
+            ? seasonCap - offer.createdByFantasyTeamCapSalary
+            : null;
+
+    const creatorAdjustedCapSpace =
+        creatorBaseCapSpace != null
+            ? creatorBaseCapSpace +
+            creatorOfferedSalary -
+            responderOfferedSalary
+            : null;
+
+    // Responder's base and adjusted cap space. Base cap hit comes
+    // from the backend when available (synthesized response cards),
+    // otherwise from the connected user's own roster (browse cards).
+    const responderCapHit =
+        offer.respondingFantasyTeamCapSalary ??
+        userRoster?.capSalary ??
+        null;
+
+    const responderBaseCapSpace =
+        seasonCap > 0 && responderCapHit != null
+            ? seasonCap - responderCapHit
+            : null;
+
+    const responderAdjustedCapSpace =
+        responderBaseCapSpace != null
+            ? responderBaseCapSpace +
+            responderOfferedSalary -
+            creatorOfferedSalary
+            : null;
+
+    const showCreatorCapLine =
+        creatorBaseCapSpace != null &&
+        creatorAdjustedCapSpace != null;
+
+    const showResponderCapLine =
+        responderBaseCapSpace != null &&
+        responderAdjustedCapSpace != null;
+
+    /**
+     * True when either side of the trade would push a team below
+     * zero cap space. When true, the offer is refused outright: the
+     * "Offrir" button is disabled AND handleOffer() bails out
+     * defensively so a stray click cannot slip a submission through.
+     *
+     * Only flags a bust when the adjusted value is actually known
+     * (i.e. not null). If the backend did not send cap info — for
+     * example a card rendered inside the publish preview popup —
+     * both adjusted values are null, and we silently allow the
+     * offer rather than block on data we don't have.
+     *
+     * The math itself is unchanged: creatorAdjustedCapSpace and
+     * responderAdjustedCapSpace already incorporate the current-
+     * season contract salaries of the players picked on each side.
+     * A simple sign check is all that is needed here.
+     */
+    const creatorBustsCap =
+        creatorAdjustedCapSpace != null &&
+        creatorAdjustedCapSpace < 0;
+
+    const responderBustsCap =
+        responderAdjustedCapSpace != null &&
+        responderAdjustedCapSpace < 0;
+
+    /**
+     * True when at least one dropdown on this card has a pick.
+     *
+     * The cap-violation check is only meaningful once the user has
+     * started building the trade: before any pick, the "adjusted"
+     * space on one side is nothing but (base - creatorOfferedSalary),
+     * which can read as a bust even though the user hasn't chosen
+     * anything yet. Suppressing the warning in that state keeps the
+     * card quiet until the user actually does something.
+     */
+    const hasAnyPick = useMemo(
+        () => Object.values(picks).some((v) => v != null),
+        [picks],
+    );
+
+    const capViolation =
+        hasAnyPick && (creatorBustsCap || responderBustsCap);
+
+    /**
+     * Simulates picking the given player in the given slot and
+     * returns true when either team would end up below zero cap
+     * space with that pick in place.
+     *
+     * Used by the player dropdown to color a would-be-busting
+     * option's salary in red, so the user can see before clicking
+     * which picks are off-limits. The math mirrors the live cap
+     * display: swap the current pick in this slot (if any) for the
+     * candidate, recompute both sides, and check the sign.
+     *
+     * Returns false when cap data is incomplete (missing season
+     * cap, missing base cap hit) — never flags a bust we cannot
+     * prove.
+     *
+     * Plain function (not useCallback): the panel is short-lived
+     * and only rendered while open, so re-creating the closure on
+     * every render is cheaper than keeping a stale one in sync
+     * with `offer`, `picks` and `userRoster`.
+     */
+    const wouldBustCap = (
+        candidateSalary: number,
+        forSlotIndex: number,
+    ): boolean => {
+        // Existing pick in this exact slot — its salary needs to
+        // be removed from the total before adding the candidate,
+        // so the simulation reflects "swap this pick", not "add
+        // another pick on top".
+        const existingPick = picks[forSlotIndex];
+        let existingPickSalary = 0;
+
+        if (existingPick != null) {
+            const entry = userRoster?.entries.find(
+                (e) => e.playerId === existingPick,
+            );
+            existingPickSalary =
+                entry?.currentContract?.salary ??
+                entry?.fantasySalary ??
+                0;
+        }
+
+        const hypotheticalResponderTotal =
+            responderOfferedSalary -
+            existingPickSalary +
+            candidateSalary;
+
+        const hypotheticalCreatorAdjusted =
+            creatorBaseCapSpace != null
+                ? creatorBaseCapSpace +
+                creatorOfferedSalary -
+                hypotheticalResponderTotal
+                : null;
+
+        const hypotheticalResponderAdjusted =
+            responderBaseCapSpace != null
+                ? responderBaseCapSpace +
+                hypotheticalResponderTotal -
+                creatorOfferedSalary
+                : null;
+
+        return (
+            (hypotheticalCreatorAdjusted != null &&
+                hypotheticalCreatorAdjusted < 0) ||
+            (hypotheticalResponderAdjusted != null &&
+                hypotheticalResponderAdjusted < 0)
+        );
+    };
+
+    /**
+     * Clears every pick on this card (state + module-level store)
+     * and wipes the success and error banners. Bound to the
+     * "Réinitialiser" button in the action row.
+     *
+     * The store clear matters: without it, a later mount of the
+     * same card would restore the picks we just cleared, since
+     * OfferCard initializes `picks` from
+     * `getPicksForOffer(offer.id)` on mount.
+     */
+    function handleResetPicks() {
+        setPicks({});
+        clearPicksForOffer(offer.id);
+        setRespondSuccess(null);
+        setRespondError(null);
+    }
+
     async function handleOffer() {
-        if (!canRespond || !allSlotsFilled || respondBusy) return;
+        // `capViolation` is included in the guard so a submission
+        // cannot slip through if the button's disabled state is ever
+        // bypassed (keyboard activation, automation, a future change
+        // that re-wires the click handler). Belt and suspenders: the
+        // disabled attribute on the button is the primary defense.
+        if (
+            !canRespond ||
+            !allSlotsFilled ||
+            respondBusy ||
+            capViolation
+        ) {
+            return;
+        }
 
         // Convert the picks-by-slot map into the flat list the API
         // expects. Every slot in the offer must be present, otherwise
@@ -3342,24 +4044,6 @@ function OfferCard({
                 ].join(', '),
             }}
         >
-            {/* Top-left badge. Only the "Nouvelle offre" case is
-                rendered here. The accepted state is signalled by
-                the gold frame and the gold "OFFRE ACCEPTÉE" label
-                at the bottom, so a second green badge would just
-                be visual noise. */}
-            {offer.isNew && !offer.isMine ? (
-                <span
-                    className='absolute left-3 top-3 z-20 rounded px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-wider'
-                    style={{
-                        backgroundColor: '#22C55E',
-                        color: '#04160A',
-                        boxShadow: 'inset 0 0 0 1px #86EFAC',
-                    }}
-                >
-                    Nouvelle offre
-                </span>
-            ) : null}
-
             {offer.isMine && !hideInternalCancel && (
                 <div
                     className='relative border-b px-3 py-2'
@@ -3417,46 +4101,111 @@ function OfferCard({
                             borderColor: 'rgba(0, 168, 255, 0.2)',
                         }}
                     >
-                        {onOpenTeamRoster ? (
-                            <button
-                                type='button'
-                                onClick={() =>
-                                    onOpenTeamRoster(
-                                        offer.createdByFantasyTeamId,
-                                        offer.createdByFantasyTeamName,
-                                    )
-                                }
-                                className='flex-1 cursor-pointer truncate px-2 text-center text-[0.6rem] font-bold uppercase tracking-wider text-[#00E5FF] transition-colors hover:text-white md:text-xs'
-                            >
-                                {offer.createdByFantasyTeamName}
-                            </button>
-                        ) : (
-                            <div className='flex-1 truncate px-2 text-center text-[0.6rem] font-bold uppercase tracking-wider text-[#00E5FF] md:text-xs'>
-                                {offer.createdByFantasyTeamName}
-                            </div>
-                        )}
-                        {showRightTeam ? (
-                            onOpenTeamRoster && rightTeamId != null ? (
+                        {/* Left side: creator's team name, with the
+                            cap line under it when we have the data.
+                            The whole block is flex-1 so the two
+                            sides split the row evenly and the badge
+                            in the middle stays centered. */}
+                        <div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-y-2'>
+                            {onOpenTeamRoster ? (
                                 <button
                                     type='button'
                                     onClick={() =>
                                         onOpenTeamRoster(
-                                            rightTeamId,
-                                            rightTeamName,
+                                            offer.createdByFantasyTeamId,
+                                            offer.createdByFantasyTeamName,
                                         )
                                     }
-                                    className='flex-1 cursor-pointer truncate px-2 text-center text-[0.6rem] font-bold uppercase tracking-wider text-[#00E5FF] transition-colors hover:text-white md:text-xs'
+                                    className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                                    style={TEAM_NAME_BUTTON_STYLE}
                                 >
-                                    {rightTeamName}
+                                    {offer.createdByFantasyTeamName}
                                 </button>
                             ) : (
-                                <div className='flex-1 truncate px-2 text-center text-[0.6rem] font-bold uppercase tracking-wider text-[#00E5FF] md:text-xs'>
-                                    {rightTeamName}
+                                <div
+                                    className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
+                                    style={TEAM_NAME_BUTTON_STYLE}
+                                >
+                                    {offer.createdByFantasyTeamName}
                                 </div>
-                            )
-                        ) : (
-                            <div className='flex-1' aria-hidden='true' />
+                            )}
+
+                            {showCreatorCapLine && (
+                                <TeamCapLine
+                                    baseCapSpace={creatorBaseCapSpace!}
+                                    adjustedCapSpace={
+                                        creatorAdjustedCapSpace!
+                                    }
+                                />
+                            )}
+                        </div>
+
+                        {/* Nouvelle offre badge, centered between the
+                            two team names inside the card header.
+                            Rendered only for offers the user has not
+                            created and has never seen before. The two
+                            team-name sides are flex-1, so this
+                            shrink-0 middle element ends up exactly at
+                            the horizontal center of the header row. */}
+                        {offer.isNew && !offer.isMine && (
+                            <span
+                                className='shrink-0 rounded px-1 py-0.5 text-[0.5rem] font-bold uppercase tracking-wider'
+                                style={{
+                                    backgroundColor: '#22C55E',
+                                    color: '#04160A',
+                                    boxShadow: 'inset 0 0 0 1px #86EFAC',
+                                }}
+                            >
+                                Nouvelle offre
+                            </span>
                         )}
+
+                        {/* Right side: responder's team name, with
+                            the cap line under it. Only rendered when
+                            the right team is shown (i.e. the card is
+                            not the viewer's own offer). */}
+                        <div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-y-2'>
+                            {showRightTeam ? (
+                                onOpenTeamRoster && rightTeamId != null ? (
+                                    <button
+                                        type='button'
+                                        onClick={() =>
+                                            onOpenTeamRoster(
+                                                rightTeamId,
+                                                rightTeamName,
+                                            )
+                                        }
+                                        className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                                        style={TEAM_NAME_BUTTON_STYLE}
+                                    >
+                                        {rightTeamName}
+                                    </button>
+                                ) : (
+                                    <div
+                                        className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
+                                        style={TEAM_NAME_BUTTON_STYLE}
+                                    >
+                                        {rightTeamName}
+                                    </div>
+                                )
+                            ) : (
+                                <div
+                                    className='w-full'
+                                    aria-hidden='true'
+                                />
+                            )}
+
+                            {showRightTeam && showResponderCapLine && (
+                                <TeamCapLine
+                                    baseCapSpace={
+                                        responderBaseCapSpace!
+                                    }
+                                    adjustedCapSpace={
+                                        responderAdjustedCapSpace!
+                                    }
+                                />
+                            )}
+                        </div>
                     </div>
 
                     <div className='relative'>
@@ -3621,6 +4370,8 @@ function OfferCard({
                                                         id,
                                                     )
                                                 }
+                                                slotIndex={slot.slotIndex}
+                                                wouldBustCap={wouldBustCap}
                                             />
                                         ) : (
                                             <>
@@ -3687,47 +4438,21 @@ function OfferCard({
                                                     user's own and his roster
                                                     is loaded. */}
                                                 {canRespond && (
-                                                    <select
-                                                        value={
-                                                            currentPick ?? ''
-                                                        }
-                                                        onChange={(e) => {
-                                                            const v =
-                                                                e.target.value;
+                                                    <EmptyPlayerPicker
+                                                        matches={matches}
+                                                        onPick={(id) =>
                                                             setPick(
                                                                 slot.slotIndex,
-                                                                v === ''
-                                                                    ? null
-                                                                    : Number(v),
-                                                            );
-                                                        }}
-                                                        disabled={
-                                                            matches.length === 0 &&
-                                                            currentPick == null
+                                                                id,
+                                                            )
                                                         }
-                                                        className='mt-1 w-full cursor-pointer rounded border bg-[#080D1A] px-1 py-0.5 text-[0.6rem] font-semibold text-[#7DD3FC] focus:outline-none md:text-[0.7rem]'
-                                                        style={{
-                                                            borderColor:
-                                                                currentPick != null
-                                                                    ? '#22C55E'
-                                                                    : 'rgba(0, 229, 255, 0.4)',
-                                                        }}
-                                                    >
-                                                        <option value=''>
-                                                            {matches.length === 0
-                                                                ? 'Aucun joueur admissible'
-                                                                : '— Choisir un joueur —'}
-                                                        </option>
-                                                        {matches.map((entry) => (
-                                                            <option
-                                                                key={entry.playerId}
-                                                                value={entry.playerId}
-                                                            >
-                                                                {entry.firstName}{' '}
-                                                                {entry.lastName}
-                                                            </option>
-                                                        ))}
-                                                    </select>
+                                                        slotIndex={
+                                                            slot.slotIndex
+                                                        }
+                                                        wouldBustCap={
+                                                            wouldBustCap
+                                                        }
+                                                    />
                                                 )}
                                             </>
                                         )}
@@ -3762,7 +4487,16 @@ function OfferCard({
                             </p>
                         )}
 
-                        <div className='flex items-center gap-2'>
+                        <div className='flex flex-wrap items-center justify-center gap-1.5'>
+                            <button
+                                type='button'
+                                disabled={respondBusy || !hasAnyPick}
+                                onClick={handleResetPicks}
+                                className='w-[7.2rem] cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40'
+                            >
+                                Réinitialiser
+                            </button>
+
                             <button
                                 type='button'
                                 disabled={respondBusy}
@@ -3771,16 +4505,22 @@ function OfferCard({
                                     // Modifier action should do. Kept
                                     // as a no-op for now on purpose.
                                 }}
-                                className='w-32 cursor-pointer rounded-lg border-2 border-[#00C8FF] bg-transparent px-4 py-2 text-sm font-bold uppercase tracking-wider text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
+                                className='w-24 cursor-pointer rounded-md border border-[#00C8FF] bg-transparent px-2 py-1 text-xs font-bold uppercase tracking-wide text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
                             >
                                 Modifier
                             </button>
 
                             <button
                                 type='button'
-                                disabled={!allSlotsFilled || respondBusy}
+                                disabled={
+                                    !allSlotsFilled ||
+                                    respondBusy ||
+                                    capViolation
+                                }
                                 onClick={handleOffer}
-                                className={`w-32 rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider transition-colors ${allSlotsFilled && !respondBusy
+                                className={`w-24 rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${allSlotsFilled &&
+                                    !respondBusy &&
+                                    !capViolation
                                     ? 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
                                     : 'cursor-not-allowed bg-zinc-800 text-zinc-500'
                                     }`}
@@ -3912,7 +4652,7 @@ function RosterPlayerRow({
                 backgroundColor: 'rgba(0, 168, 255, 0.03)',
             }}
         >
-                      <div className='flex min-w-0 flex-col items-center text-center'>
+            <div className='flex min-w-0 flex-col items-center text-center'>
                 <div className='flex flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 text-sm leading-none text-foreground md:text-base'>
                     {entry.nhlTeamAbbreviation && (
                         /*
@@ -4250,8 +4990,8 @@ function ManagerRosterPopup({
                                 type='button'
                                 onClick={() => setPositionFilter('F')}
                                 className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${positionFilter === 'F'
-                                        ? 'bg-[#00E5FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                    ? 'bg-[#00E5FF] text-[#080D1A]'
+                                    : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                     }`}
                             >
                                 Attaquants
@@ -4261,8 +5001,8 @@ function ManagerRosterPopup({
                                 type='button'
                                 onClick={() => setPositionFilter('D')}
                                 className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${positionFilter === 'D'
-                                        ? 'bg-[#00E5FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                    ? 'bg-[#00E5FF] text-[#080D1A]'
+                                    : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                     }`}
                             >
                                 Défenseurs
@@ -4272,8 +5012,8 @@ function ManagerRosterPopup({
                                 type='button'
                                 onClick={() => setPositionFilter('G')}
                                 className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${positionFilter === 'G'
-                                        ? 'bg-[#00E5FF] text-[#080D1A]'
-                                        : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                    ? 'bg-[#00E5FF] text-[#080D1A]'
+                                    : 'bg-transparent text-[#A6ECFF] hover:text-white'
                                     }`}
                             >
                                 Gardiens

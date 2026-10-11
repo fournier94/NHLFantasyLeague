@@ -1642,6 +1642,31 @@ export interface TradeOffer {
     id: number;
     createdByFantasyTeamId: number;
     createdByFantasyTeamName: string;
+
+    /**
+     * Creator's current cap hit for the season. Null when the
+     * backend did not load cap info for this DTO (e.g. a response
+     * synthesized on the client side where the creator's cap was
+     * not provided).
+     */
+    createdByFantasyTeamCapSalary: number | null;
+
+    /**
+     * Responding team's current cap hit for the season. Only set
+     * on shapes synthesized from a TradeOfferResponse; on real
+     * browse offers the responder is the connected user, so his
+     * cap comes from his own roster on the client.
+     */
+    respondingFantasyTeamCapSalary?: number | null;
+
+    /**
+     * Salary cap for the season this offer belongs to, in dollars.
+     * Same value for both teams. 0 when the backend could not
+     * resolve the season — the frontend hides the cap line in that
+     * case.
+     */
+    seasonSalaryCap: number;
+
     createdAt: string;
     note: string | null;
 
@@ -1823,8 +1848,29 @@ export interface TradeOfferResponse {
     tradeOfferNote: string | null;
     tradeOfferCreatedByFantasyTeamId: number;
     tradeOfferCreatedByFantasyTeamName: string;
+
+    /**
+     * Creator's cap hit for the season. Null when the backend did
+     * not load cap info.
+     */
+    tradeOfferCreatedByFantasyTeamCapSalary: number | null;
+
     respondingFantasyTeamId: number;
     respondingFantasyTeamName: string;
+
+    /**
+     * Responding team's cap hit for the season. Null when the
+     * backend did not load cap info.
+     */
+    respondingFantasyTeamCapSalary: number | null;
+
+    /**
+     * Salary cap for the season this response belongs to. 0 when
+     * the backend could not resolve the season — the frontend hides
+     * the cap line in that case.
+     */
+    seasonSalaryCap: number;
+
     createdAt: string;
     status: string;
     slots: TradeOfferResponseSlot[];

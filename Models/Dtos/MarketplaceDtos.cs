@@ -28,13 +28,22 @@
         /// current season. Prospects are excluded, matching the
         /// rule used by GET /api/Roster/team/{id} (CapSalary).
         ///
-        /// Used by the frontend to display the creator's projected
-        /// cap space under his name on the trade offer card. Null
-        /// when the DTO is synthesized from a response (received /
-        /// sent panels), where the responding team's or the
-        /// original creator's cap is not loaded.
+        /// Used by the frontend together with <see cref="SeasonSalaryCap"/>
+        /// to compute the creator's space under cap on the trade
+        /// offer card. Null when the DTO is synthesized from a
+        /// response (received / sent panels), where the responding
+        /// team's or the original creator's cap is not loaded.
         /// </summary>
         public decimal? CreatedByFantasyTeamCapSalary { get; set; }
+
+        /// <summary>
+        /// Salary cap for the season this offer belongs to, in
+        /// dollars. Same value for both teams on the card since
+        /// they play in the same league and season. Used by the
+        /// frontend with the per-team cap hit to display each
+        /// side's space under cap on the offer card.
+        /// </summary>
+        public decimal SeasonSalaryCap { get; set; }
 
         public DateTime CreatedAt { get; set; }
         public string? Note { get; set; }
@@ -172,10 +181,36 @@
         public string TradeOfferCreatedByFantasyTeamName { get; set; } =
             string.Empty;
 
+        /// <summary>
+        /// Original offer creator's cap hit for the season the
+        /// response was made in. Null when cap info was not loaded
+        /// (e.g. the offer's season could not be resolved). Used
+        /// by the frontend together with SeasonSalaryCap to
+        /// display the creator's space under cap on the response
+        /// card.
+        /// </summary>
+        public decimal? TradeOfferCreatedByFantasyTeamCapSalary { get; set; }
+
         // --- Responding team (right header column) ---
 
         public int RespondingFantasyTeamId { get; set; }
         public string RespondingFantasyTeamName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Responding team's cap hit for the season the response
+        /// was made in. Null when cap info was not loaded. Used by
+        /// the frontend together with SeasonSalaryCap to display
+        /// the responder's space under cap on the response card.
+        /// </summary>
+        public decimal? RespondingFantasyTeamCapSalary { get; set; }
+
+        /// <summary>
+        /// Salary cap for the season this response belongs to, in
+        /// dollars. Same value for both teams. Used by the frontend
+        /// with the per-team cap hit to display each side's space
+        /// under cap.
+        /// </summary>
+        public decimal SeasonSalaryCap { get; set; }
 
         public DateTime CreatedAt { get; set; }
         public string Status { get; set; } = string.Empty;
