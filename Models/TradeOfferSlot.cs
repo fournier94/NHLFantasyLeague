@@ -43,26 +43,29 @@
         /// <summary>Minimum points produced last NHL season.</summary>
         public int? DemandMinPointsLastYear { get; set; }
 
-        /// <summary>
-        /// Whether the responder's player dropdown is filtered by the
-        /// demand criteria above.
-        ///
-        /// true  (default) → only players that satisfy every demand
-        ///                    filter are offered for this slot. This
-        ///                    is the behavior every existing offer
-        ///                    has had since the marketplace shipped.
-        ///
-        /// false           → every player of the matching position
-        ///                    group is offered, ignoring the demand
-        ///                    filters. The position group itself is
-        ///                    always enforced regardless of this flag,
-        ///                    because it is what defines the slot.
-        ///
-        /// Set per slot by the offer creator through the "Critères
-        /// recherchés" form's checkbox. The responder never sees or
-        /// edits it — it only governs which players appear in his
-        /// dropdown.
-        /// </summary>
-        public bool EnforceDemandCriteria { get; set; } = true;
+        // -------------------------------------------------------------
+        // Per-criterion strict flags.
+        //
+        // A criterion is only enforced as a hard filter on the
+        // responder's dropdown when BOTH its flag is true AND the
+        // corresponding demand value is set (non-null). A criterion
+        // set but not strict is displayed to the responder as a
+        // preference but does not filter his dropdown.
+        //
+        // Position is always enforced regardless of these flags — it
+        // is what defines the slot.
+        //
+        // Every flag defaults to true, preserving the
+        // strict-by-default behavior every offer had before this
+        // granularity was introduced.
+        // -------------------------------------------------------------
+
+        public bool EnforceDemandMinContractYears { get; set; } = true;
+
+        public bool EnforceDemandMaxSalary { get; set; } = true;
+
+        public bool EnforceDemandMaxAge { get; set; } = true;
+
+        public bool EnforceDemandMinPointsLastYear { get; set; } = true;
     }
 }

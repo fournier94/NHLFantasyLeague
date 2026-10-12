@@ -13,6 +13,24 @@
  * reopen the popup with the same team and the same position
  * filter the user had selected when he left.
  *
+ * PICK MODES
+ *
+ * Two distinct pick modes can be carried through the restore:
+ *
+ *   - pickContext: the popup was opened from a "Voir les offres"
+ *     offer slot. Carries the offer id, the slot, the slot
+ *     index, and the cap context. MarketplacePage rebuilds a
+ *     fresh onPick backed by the pick store.
+ *
+ *   - directPickContext: the popup was opened from a "Créer"
+ *     slot. Carries the slot index and the side ('offering' or
+ *     'target'), plus the cap context. MarketplacePage rebuilds
+ *     a fresh onPick backed by the direct-offer draft store.
+ *
+ * Only one of the two is set at a time. If both are undefined,
+ * the popup was opened by clicking a team name — no pick mode,
+ * just a plain roster browse.
+ *
  * Lifecycle:
  *   - Set by the player Link's onClick, right before navigating.
  *   - Consumed by MarketplacePage on mount (read + clear).
@@ -27,12 +45,111 @@
  * that is deliberate.
  */
 
+import type { TradeOfferSlot } from '@/api/client';
+
 export type MarketplacePopupPosition = 'F' | 'D' | 'G';
+
+/**
+ * Snapshot of the two teams' cap situation at the moment the
+ * pick popup is opened, plus the season's salary cap. Carried on
+ * the pick context so the roster popup can show, under each
+ * player's contract row, what each side's cap space would be if
+ * the trade closed with that player picked in the current slot.
+ *
+ * Fields are read by RosterPlayerRow as follows:
+ *
+ *   leftTeamCapHit  -> the left team's cap hit BEFORE the trade
+ *   rightTeamCapHit -> the right team's cap hit BEFORE the trade
+ *
+ *   creatorOfferedSalary
+ *     -> the sum of the current-season salaries the LEFT side
+ *        is offering, EXCLUDING the current slot's pick when the
+ *        candidate is being picked for the LEFT side.
+ *
+ *   responderOfferedSalaryExcludingCurrentSlot
+ *     -> the sum of the current-season salaries the RIGHT side
+ *        is offering, EXCLUDING the current slot's pick when the
+ *        candidate is being picked for the RIGHT side.
+ *
+ *   candidateSide
+ *     -> which side the candidate is being picked for. Defaults
+ *        to 'right', which is the Voir les offres case (the
+ *        responder is on the right side of the offer card).
+ *        Créer passes 'left' when the user is picking on the
+ *        connected team's side of a slot, and 'right' when he is
+ *        picking on the target team's side.
+ *
+ * For Voir les offres the names map directly:
+ *   - "creator" is the offer creator (left side of the card)
+ *   - "responder" is the current user (right side of the card)
+ *
+ * For Créer:
+ *   - "creator" / "left"    = the connected user's team
+ *   - "responder" / "right" = the target team
+ */
+export interface TradeCapContext {
+    leftTeamName: string;
+    leftTeamCapHit: number;
+    rightTeamName: string;
+    rightTeamCapHit: number;
+    seasonSalaryCap: number;
+    creatorOfferedSalary: number;
+    responderOfferedSalaryExcludingCurrentSlot: number;
+    candidateSide?: 'left' | 'right';
+}
+
+/**
+ * Pick context for the "Voir les offres" tab. When set, the popup
+ * was opened in pick mode from an offer slot. MarketplacePage
+ * rebuilds the full pick context (slot, cap context, and a fresh
+ * onPick backed by the offer picks store) from this on mount.
+ */
+export interface PendingPickContext {
+    offerId: number;
+    slotIndex: number;
+    slot: TradeOfferSlot;
+    capContext?: TradeCapContext;
+}
+
+/**
+ * Pick context for the "Créer" tab. When set, the popup was
+ * opened in pick mode from a DirectOfferCard slot. MarketplacePage
+ * rebuilds a fresh onPick backed by the direct-offer draft store
+ * from this on mount.
+ */
+export interface PendingDirectPickContext {
+    slotIndex: number;
+    side: 'offering' | 'target';
+    lockedPosition?: MarketplacePopupPosition;
+    /**
+     * Cap projection context for the two teams, carried through
+     * the PlayerPage round-trip so the popup reopens with the
+     * same cap rows it had before the user navigated away.
+     */
+    capContext?: TradeCapContext;
+    /**
+     * Player id of the current pick in the slot, or null when the
+     * slot is empty on that side. Carried through the round-trip
+     * so the popup reopens with the "Retirer" button still
+     * visible if the user had one.
+     */
+    currentPickedPlayerId?: number | null;
+}
 
 export interface PendingMarketplacePopup {
     teamId: number;
     teamName: string;
     positionFilter: MarketplacePopupPosition;
+    /**
+     * Set when the popup was in pick mode for a Voir les offres
+     * slot. Mutually exclusive with directPickContext.
+     */
+    pickContext?: PendingPickContext;
+    /**
+     * Set when the popup was in pick mode for a Créer slot.
+     * Mutually exclusive with pickContext.
+     */
+    directPickContext?: PendingDirectPickContext;
 }
 
 let pending: PendingMarketplacePopup | null = null;

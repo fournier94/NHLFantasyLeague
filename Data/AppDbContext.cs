@@ -620,14 +620,27 @@ namespace NhlFantasyLeague.api.Data
          .Property(s => s.DemandMaxSalary)
          .HasPrecision(18, 2);
 
-            // Defaults to true, which is what every existing row gets
-            // when this column is added by the migration. It also
-            // means an omitted field in the create-offer JSON body
-            // keeps the strict behavior the marketplace has always
-            // had. Only an explicit false flips a slot to "show every
-            // player of the matching position".
+            // Every per-criterion strict flag defaults to true, which
+            // is what every existing row gets when these columns are
+            // added by the migration. It also means an omitted field
+            // in the create-offer JSON body keeps the strict
+            // behavior. An explicit false flips that one criterion to
+            // "display as a preference, do not filter the responder's
+            // dropdown".
             modelBuilder.Entity<TradeOfferSlot>()
-                .Property(s => s.EnforceDemandCriteria)
+                .Property(s => s.EnforceDemandMinContractYears)
+                .HasDefaultValue(true);
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .Property(s => s.EnforceDemandMaxSalary)
+                .HasDefaultValue(true);
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .Property(s => s.EnforceDemandMaxAge)
+                .HasDefaultValue(true);
+
+            modelBuilder.Entity<TradeOfferSlot>()
+                .Property(s => s.EnforceDemandMinPointsLastYear)
                 .HasDefaultValue(true);
 
             modelBuilder.Entity<TradeOfferSlot>()

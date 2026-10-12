@@ -1866,7 +1866,22 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int?>("DemandMinPointsLastYear")
                         .HasColumnType("integer");
 
-                    b.Property<bool>("EnforceDemandCriteria")
+                    b.Property<bool>("EnforceDemandMaxAge")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnforceDemandMaxSalary")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnforceDemandMinContractYears")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnforceDemandMinPointsLastYear")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(true);

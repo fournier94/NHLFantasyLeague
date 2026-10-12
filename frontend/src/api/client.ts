@@ -1594,13 +1594,18 @@ export interface TradeOfferSlot {
     positionGroup: string;
 
     /**
-     * When true, the responder's player dropdown is filtered by the
-     * demand criteria below — the strict behavior the marketplace
-     * has always had. When false, the dropdown shows every player of
-     * the matching position, ignoring the other criteria. The
-     * position group itself is always enforced regardless.
+     * Per-criterion strict flags. A criterion is enforced as a hard
+     * filter on the responder's dropdown only when its flag is true
+     * AND the corresponding demand value is set (non-null). A
+     * criterion set but not strict is displayed to the responder as
+     * a preference but does not filter his dropdown.
+     *
+     * Position is always enforced regardless of these flags.
      */
-    enforceDemandCriteria: boolean;
+    enforceDemandMinContractYears: boolean;
+    enforceDemandMaxSalary: boolean;
+    enforceDemandMaxAge: boolean;
+    enforceDemandMinPointsLastYear: boolean;
 
     /** Optional player the creator is offering. */
     offeringPlayerId: number | null;
@@ -1742,12 +1747,16 @@ export interface CreateTradeOfferSlotRequest {
     demandMaxAge?: number | null;
     demandMinPointsLastYear?: number | null;
     /**
-     * When true, the responder only sees his players that satisfy
-     * the demand criteria above. When false, he sees every player
-     * of the matching position (position is always enforced).
-     * Defaults to true on the backend when omitted.
+     * Per-criterion strict flags. A criterion is enforced as a hard
+     * filter only when its flag is true AND the corresponding value
+     * is set. Position is always enforced regardless.
+     *
+     * Each flag defaults to true on the backend when omitted.
      */
-    enforceDemandCriteria?: boolean;
+    enforceDemandMinContractYears?: boolean;
+    enforceDemandMaxSalary?: boolean;
+    enforceDemandMaxAge?: boolean;
+    enforceDemandMinPointsLastYear?: boolean;
 }
 
 /** Body of POST /api/Marketplace/offers. */

@@ -631,13 +631,21 @@ namespace NhlFantasyLeague.api.Services
                 {
                     SlotIndex = i,
                     PositionGroup = slot.PositionGroup
-                        .Trim()
-                        .ToUpperInvariant(),
+           .Trim()
+           .ToUpperInvariant(),
                     OfferingPlayerId = slot.OfferingPlayerId,
                     DemandMinContractYears = slot.DemandMinContractYears,
                     DemandMaxSalary = slot.DemandMaxSalary,
                     DemandMaxAge = slot.DemandMaxAge,
                     DemandMinPointsLastYear = slot.DemandMinPointsLastYear,
+                    EnforceDemandMinContractYears =
+           slot.EnforceDemandMinContractYears,
+                    EnforceDemandMaxSalary =
+           slot.EnforceDemandMaxSalary,
+                    EnforceDemandMaxAge =
+           slot.EnforceDemandMaxAge,
+                    EnforceDemandMinPointsLastYear =
+           slot.EnforceDemandMinPointsLastYear,
                 });
             }
 
@@ -779,14 +787,21 @@ namespace NhlFantasyLeague.api.Services
                 {
                     SlotIndex = i,
                     PositionGroup = slot.PositionGroup
-          .Trim()
-          .ToUpperInvariant(),
+           .Trim()
+           .ToUpperInvariant(),
                     OfferingPlayerId = slot.OfferingPlayerId,
                     DemandMinContractYears = slot.DemandMinContractYears,
                     DemandMaxSalary = slot.DemandMaxSalary,
                     DemandMaxAge = slot.DemandMaxAge,
                     DemandMinPointsLastYear = slot.DemandMinPointsLastYear,
-                    EnforceDemandCriteria = slot.EnforceDemandCriteria,
+                    EnforceDemandMinContractYears =
+           slot.EnforceDemandMinContractYears,
+                    EnforceDemandMaxSalary =
+           slot.EnforceDemandMaxSalary,
+                    EnforceDemandMaxAge =
+           slot.EnforceDemandMaxAge,
+                    EnforceDemandMinPointsLastYear =
+           slot.EnforceDemandMinPointsLastYear,
                 });
             }
 
@@ -1979,8 +1994,14 @@ offeredPlayerIds, ct);
                             DemandMaxAge = s.DemandMaxAge,
                             DemandMinPointsLastYear =
                                 s.DemandMinPointsLastYear,
-                            EnforceDemandCriteria =
-                                s.EnforceDemandCriteria,
+                            EnforceDemandMinContractYears =
+                                s.EnforceDemandMinContractYears,
+                            EnforceDemandMaxSalary =
+                                s.EnforceDemandMaxSalary,
+                            EnforceDemandMaxAge =
+                                s.EnforceDemandMaxAge,
+                            EnforceDemandMinPointsLastYear =
+                                s.EnforceDemandMinPointsLastYear,
                         };
                     })
                     .ToList(),

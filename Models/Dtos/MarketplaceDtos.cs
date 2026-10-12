@@ -16,20 +16,24 @@
         public int? DemandMinPointsLastYear { get; set; }
 
         /// <summary>
-        /// Whether the responder's player dropdown should be filtered
-        /// by the demand criteria above.
+        /// Per-criterion strict flags. A criterion is only enforced
+        /// as a hard filter on the responder's dropdown when its
+        /// flag is true AND the corresponding demand value is set.
+        /// A criterion set but not strict is a preference.
         ///
-        /// true  (default) → only players that satisfy every demand
-        ///                    filter are offered for this slot.
-        /// false           → every player of the matching position
-        ///                    group is offered, ignoring the other
-        ///                    filters. Position is always enforced.
+        /// Position is always enforced regardless.
         ///
-        /// Defaults to true when omitted from the JSON body, so an
-        /// old client that does not send the field keeps the strict
-        /// behavior.
+        /// Each flag defaults to true when omitted from the JSON
+        /// body, so an old client that does not send them keeps the
+        /// strict behavior.
         /// </summary>
-        public bool EnforceDemandCriteria { get; set; } = true;
+        public bool EnforceDemandMinContractYears { get; set; } = true;
+
+        public bool EnforceDemandMaxSalary { get; set; } = true;
+
+        public bool EnforceDemandMaxAge { get; set; } = true;
+
+        public bool EnforceDemandMinPointsLastYear { get; set; } = true;
     }
 
     public class TradeOfferDto
@@ -137,12 +141,19 @@
         public int? DemandMinPointsLastYear { get; set; }
 
         /// <summary>
-        /// Whether the responder's player dropdown should be filtered
-        /// by the demand criteria above. true = strict (the default
-        /// and current behavior), false = show every player of the
-        /// matching position. Position is always enforced regardless.
+        /// Per-criterion strict flags. A criterion is enforced as a
+        /// hard filter on the responder's dropdown only when its
+        /// flag is true AND the corresponding demand value is set.
+        /// A criterion set but not strict is a preference.
+        /// Position is always enforced regardless.
         /// </summary>
-        public bool EnforceDemandCriteria { get; set; } = true;
+        public bool EnforceDemandMinContractYears { get; set; } = true;
+
+        public bool EnforceDemandMaxSalary { get; set; } = true;
+
+        public bool EnforceDemandMaxAge { get; set; } = true;
+
+        public bool EnforceDemandMinPointsLastYear { get; set; } = true;
     }
 
     public class TradeOfferActionResultDto

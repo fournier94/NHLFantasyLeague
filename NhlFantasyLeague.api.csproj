@@ -23,6 +23,7 @@
     <None Remove="frontend\src\lib\auraConfig.ts" />
     <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\AuthContext.tsx" />
+    <None Remove="frontend\src\lib\directOfferState.ts" />
     <None Remove="frontend\src\lib\marketplacePopupRestoration.ts" />
     <None Remove="frontend\src\lib\marketplaceTradeState.ts" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
@@ -59,6 +60,7 @@
     <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />
+    <TypeScriptCompile Include="frontend\src\lib\directOfferState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplacePopupRestoration.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceTradeState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />
