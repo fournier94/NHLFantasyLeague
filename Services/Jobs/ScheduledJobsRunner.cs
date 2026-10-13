@@ -2014,14 +2014,13 @@ namespace NhlFantasyLeague.api.Services.Jobs
 
 
         private static async Task<int?> GetCurrentSeasonCodeAsync(
-            IServiceScope scope)
+        IServiceScope scope)
         {
             var db = scope.ServiceProvider
                 .GetRequiredService<NhlFantasyLeague.api.Data.AppDbContext>();
 
-            var season = await db.Seasons
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync();
+            var season = await NhlFantasyLeague.api.Data.SeasonQueries
+                .GetCurrentSeasonAsync(db);
 
             return season?.NhlSeasonCode;
         }

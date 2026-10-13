@@ -183,6 +183,43 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
+        /// Creates a direct trade offer from the calling user's team
+        /// to the given target team. Both sides of the exchange are
+        /// already specified in the request.
+        ///
+        /// Creates a TradeOffer owned by the target team plus a
+        /// TradeOfferResponse from the calling user's team in a
+        /// single transaction, so the proposal lands in the target
+        /// manager's "Offres reçues" ready to be accepted or
+        /// rejected, and in the calling user's "Offres envoyées"
+        /// ready to be cancelled.
+        ///
+        /// Used by the "Créer" tab of the Marketplace.
+        /// </summary>
+        [HttpPost("direct-offers")]
+        public async Task<IActionResult> CreateDirectOffer(
+            [FromBody] CreateDirectOfferRequest request,
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var result = await _marketplaceService
+                .CreateDirectOfferAsync(uid, request, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(new { message = result.Message });
+            }
+
+            return Ok(result);
+        }
+
+        /// <summary>
         /// Lists every Pending response to a still-active offer that
         /// the calling user created. This is the "Offres reçues"
         /// section.

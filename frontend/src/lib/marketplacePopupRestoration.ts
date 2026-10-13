@@ -45,7 +45,7 @@
  * that is deliberate.
  */
 
-import type { TradeOfferSlot } from '@/api/client';
+import type { RosterEntry, TradeOfferSlot } from '@/api/client';
 
 export type MarketplacePopupPosition = 'F' | 'D' | 'G';
 
@@ -79,6 +79,18 @@ export type MarketplacePopupPosition = 'F' | 'D' | 'G';
  *        connected team's side of a slot, and 'right' when he is
  *        picking on the target team's side.
  *
+ *   swapSides
+ *     -> when true, the offer card that opened this popup is
+ *        rendering the responder on the LEFT and the creator on
+ *        the RIGHT (Voir les offres tab). The popup's cap
+ *        projection row mirrors that layout: the responder's
+ *        name and projected space render on the left, the
+ *        creator's on the right.
+ *
+ *        Purely a visual flag. The math is unchanged: the
+ *        "creator" fields still describe the offer creator, the
+ *        "responder" fields still describe the responding team.
+ *
  * For Voir les offres the names map directly:
  *   - "creator" is the offer creator (left side of the card)
  *   - "responder" is the current user (right side of the card)
@@ -96,6 +108,7 @@ export interface TradeCapContext {
     creatorOfferedSalary: number;
     responderOfferedSalaryExcludingCurrentSlot: number;
     candidateSide?: 'left' | 'right';
+    swapSides?: boolean;
 }
 
 /**
@@ -150,6 +163,13 @@ export interface PendingMarketplacePopup {
      * Mutually exclusive with pickContext.
      */
     directPickContext?: PendingDirectPickContext;
+    /**
+     * Full RosterEntry-shaped snapshot of the player on the OTHER
+     * side of the trade slot, kept so the popup reopens with its
+     * sticky reference card still rendered. Null when the other
+     * side of the slot had no player picked.
+     */
+    referencePlayer?: RosterEntry | null;
 }
 
 let pending: PendingMarketplacePopup | null = null;

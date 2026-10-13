@@ -1557,10 +1557,13 @@ namespace NhlFantasyLeague.api.Services
                     .FirstOrDefaultAsync(s => s.Id == seasonId.Value);
             }
 
-            return await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync();
+            // Explicitly target SeasonCodes.Current rather than relying on
+            // "latest StartDate". The draft-seeding step creates future
+            // seasons (2027-2028) whose StartDate is later than the
+            // current season's, so the "latest StartDate" heuristic would
+            // silently return one of those.
+            return await Data.SeasonQueries.GetCurrentSeasonAsync(
+                _dbContext);
         }
 
         private static bool TryParseRosterStatus(string? value, out RosterStatus status)

@@ -13,6 +13,7 @@ import {
     acceptTradeOfferResponse,
     cancelTradeOffer,
     cancelTradeOfferResponse,
+    createDirectOffer,
     createTradeOffer,
     rejectTradeOfferResponse,
     getLeagueTeams,
@@ -55,6 +56,7 @@ import {
     getPicksForOffer,
     pickForSlot,
     subscribeToPicks,
+    type PicksBySlot,
 } from '@/lib/marketplaceTradeState';
 
 // ---------------------------------------------------------------------
@@ -164,16 +166,9 @@ function groupLabel(g: PositionGroup): string {
     }
 }
 
-function groupLabelPlural(g: PositionGroup): string {
-    switch (g) {
-        case 'F':
-            return 'Attaquants';
-        case 'D':
-            return 'Défenseurs';
-        case 'G':
-            return 'Gardiens';
-    }
-}
+// `groupLabelPlural` used to render the <optgroup> labels of the
+// offering-player dropdown that SlotEditor used before the roster
+// popup replaced it. Kept removed to avoid a dead-code warning.
 
 function parseOptionalInt(raw: string): number | null {
     const trimmed = raw.trim();
@@ -494,6 +489,67 @@ function scrollElementIntoView(elementId: string): void {
     }, 0);
 }
 
+/**
+ * Builds a RosterEntry-shaped snapshot of the offering player on
+ * a "Voir les offres" slot, so the roster popup can render it as a
+ * sticky reference card while the responder browses his own roster.
+ *
+ * The offer DTO already carries every field the reference card
+ * actually renders (logo, name, position, age, stats, contracts),
+ * so we just pack them into the RosterEntry shape. Fields the
+ * reference card never reads (roster slot, roster status, injury,
+ * yesterday/today FP) get safe defaults.
+ *
+ * Returns null when the slot has no offering player — in that
+ * case there is nothing to reference, and the popup opens exactly
+ * like before.
+ */
+function buildReferenceFromSlot(
+    slot: TradeOfferSlot,
+): RosterEntry | null {
+    if (slot.offeringPlayerId == null) {
+        return null;
+    }
+
+    return {
+        id: -1,
+        fantasyTeamId: 0,
+        playerId: slot.offeringPlayerId,
+        nhlPlayerId: slot.offeringPlayerNhlPlayerId ?? 0,
+        firstName: slot.offeringPlayerFirstName ?? '',
+        lastName: slot.offeringPlayerLastName ?? '',
+        position: slot.offeringPlayerPosition ?? '',
+        age: slot.offeringPlayerAge,
+        nhlTeamAbbreviation:
+            slot.offeringPlayerNhlTeam ?? '',
+        rosterStatus: 'Active',
+        rosterSlot: 0,
+        fantasySalary:
+            slot.offeringPlayerCurrentContract?.salary ?? 0,
+        headshotUrl: null,
+        twoSeasonsAgo: null,
+        lastSeason: slot.offeringPlayerLastSeasonStats,
+        currentSeason: slot.offeringPlayerCurrentSeasonStats,
+        currentContract:
+            slot.offeringPlayerCurrentContract,
+        secondContract:
+            slot.offeringPlayerSecondContract,
+        rosterLocation: null,
+        yesterdayFantasyPoints: null,
+        todayFantasyPoints: null,
+        isInjured: false,
+        injuryStatus: null,
+        injuryKind: 'None',
+        injuryShortDescription: null,
+        injuryLongDescription: null,
+        injuryType: null,
+        injuryDetail: null,
+        injurySide: null,
+        injuryReturnDate: null,
+        injuryFantasyStatus: null,
+    };
+}
+
 // ---------------------------------------------------------------------
 // Shared inline styles
 // ---------------------------------------------------------------------
@@ -518,7 +574,11 @@ const HEADER_GRADIENT =
  * default foreground color.
  */
 const STAT_COLUMN_COLORS: Record<string, string> = {
+    GP: '#00F0FF',
+    G: '#FFFFFF',
+    A: '#FFFFFF',
     PTS: '#00F0FF',
+    TOI: '#FFFFFF',
     FP: '#FFC72C',
 };
 
@@ -771,6 +831,43 @@ export default function MarketplacePage() {
              */
             onClearPick?: () => void;
         };
+        /**
+         * Pick context for the "Publier une annonce" flow. Set when
+         * the popup was opened from a SlotEditor's "Choisir un
+         * joueur" button.
+         *
+         * Different from `directPickContext`:
+         *
+         *   - No `side` (there is only one side to pick — the
+         *     user's own player, on the user's own team).
+         *   - No `capContext` (a public announcement does not
+         *     know who will respond, so no cap projection is
+         *     possible).
+         *   - `excludedPlayerIds` is carried on the context
+         *     because the AddOfferPanel that owns the slot state
+         *     lives in local React state and cannot be read live
+         *     by MarketplacePage.
+         *
+         * Since the popup closes on every pick / clear, the
+         * snapshot taken at open time stays valid for the
+         * popup's whole lifetime.
+         */
+        publishPickContext?: {
+            slotIndex: number;
+            currentPickedPlayerId: number | null;
+            lockedPosition?: PositionGroup;
+            excludedPlayerIds: number[];
+            onPick: (playerId: number) => void;
+            onClearPick: () => void;
+        };
+        /**
+         * Player from the OTHER side of the trade slot, rendered as
+         * a sticky reference card at the top of the popup so the
+         * user can see his stats and contracts while browsing the
+         * other team's roster. Null when the other side of the slot
+         * has no player picked (nothing to reference).
+         */
+        referencePlayer?: RosterEntry | null;
     } | null>(null);
 
     /**
@@ -805,6 +902,136 @@ export default function MarketplacePage() {
     })();
 
     /**
+     * Players already committed to another slot of the SAME trade
+     * on the same side, so the popup can hide them and the user
+     * cannot pick the same player twice.
+     *
+     * Scope:
+     *   - Only the side being picked. Offering picks are on the
+     *     connected user's roster, target picks are on the target
+     *     team's roster. The popup shows one roster at a time, so
+     *     only the picks from that side matter.
+     *
+     *   - Excludes the CURRENT slot's own pick. The popup still
+     *     needs to display that player (pinned card, Retirer
+     *     button), so it must not be filtered out.
+     *
+     * Undefined when the popup is not in Créer pick mode, or when
+     * no other slot contributes a pick. Memoized so the popup's
+     * own memos stay stable across re-renders of this component.
+     */
+    const directPopupExcludedPlayerIds = useMemo(() => {
+        const ctx = rosterPopupTeam?.directPickContext;
+        if (ctx == null) return undefined;
+
+        const excluded: number[] = [];
+
+        for (let i = 0; i < directOfferDraft.slots.length; i++) {
+            if (i === ctx.slotIndex) continue;
+
+            const slot = directOfferDraft.slots[i];
+            const pick =
+                ctx.side === 'offering'
+                    ? slot.offeringPlayerId
+                    : slot.targetPlayerId;
+
+            if (pick != null) excluded.push(pick);
+        }
+
+        return excluded.length === 0 ? undefined : excluded;
+    }, [rosterPopupTeam, directOfferDraft]);
+
+    /**
+     * Offer id and slot index for the Voir les offres pick mode,
+     * or null when the popup is not in that mode.
+     */
+    const viewOffersOfferId =
+        rosterPopupTeam?.pickContext?.offerId ?? null;
+    const viewOffersSlotIndex =
+        rosterPopupTeam?.pickContext?.slotIndex ?? null;
+
+    /**
+     * Live picks for the Voir les offres pick mode's offer.
+     * Subscribed via useSyncExternalStore so the popup re-renders
+     * the moment the user clicks "Retirer" or "Ajouter", without
+     * needing to close and reopen.
+     */
+    const viewOffersPicks = useSyncExternalStore(
+        subscribeToPicks,
+        () =>
+            getPicksForOffer(viewOffersOfferId ?? -1),
+    );
+
+    /**
+     * Player id of the current pick in the Voir les offres slot
+     * being picked, or null when that slot has no pick. Undefined
+     * when the popup is not in Voir les offres pick mode.
+     */
+    const viewOffersPickedPlayerId =
+        viewOffersSlotIndex == null
+            ? undefined
+            : viewOffersPicks[viewOffersSlotIndex] ?? null;
+
+    /**
+     * Synthesized onClearPick for Voir les offres. Writes null to
+     * the same slot in the same pick store that onPick writes to.
+     * The popup wraps this to also close itself, so from the user's
+     * point of view clicking "Retirer" clears the pick and closes
+     * the popup.
+     */
+    const viewOffersOnClearPick = (() => {
+        const ctx = rosterPopupTeam?.pickContext;
+        if (ctx == null) return undefined;
+
+        return () => pickForSlot(ctx.offerId, ctx.slotIndex, null);
+    })();
+
+    /**
+ * Player id of the current pick for the "Publier une annonce"
+ * pick mode. Undefined when the popup is not in that mode.
+ *
+ * Unlike the Créer pick context, this value is a frozen
+ * snapshot taken when the popup was opened: the AddOfferPanel
+ * that owns the actual slot state lives in local React state
+ * and does not survive a MarketplacePage remount, so there is
+ * nothing to derive live from.
+ */
+    const publishPopupPickedPlayerId =
+        rosterPopupTeam?.publishPickContext != null
+            ? rosterPopupTeam.publishPickContext
+                .currentPickedPlayerId
+            : undefined;
+
+    /**
+     * Unified picked-player id for the popup: Voir les offres when
+     * that path is active, then Créer, then Publier une annonce.
+     * Undefined when no pick mode is active (plain roster browse,
+     * or the popup is closed).
+     *
+     * Note: `null` is a meaningful value here (pick mode active,
+     * side currently empty) and is passed through to the popup,
+     * which then does not render the pinned card or the Retirer
+     * button.
+     */
+    const popupPickedPlayerId =
+        viewOffersPickedPlayerId !== undefined
+            ? viewOffersPickedPlayerId
+            : directPopupPickedPlayerId !== undefined
+                ? directPopupPickedPlayerId
+                : publishPopupPickedPlayerId;
+
+    /**
+  * Unified clear-pick callback for the popup: Voir les offres
+  * writes to the offer-picks store, Créer writes to the
+  * direct-offer draft store, Publier une annonce writes to the
+  * AddOfferPanel's local slot state. Only one is ever set.
+  */
+    const popupOnClearPick =
+        viewOffersOnClearPick ??
+        rosterPopupTeam?.directPickContext?.onClearPick ??
+        rosterPopupTeam?.publishPickContext?.onClearPick;
+
+    /**
      * If the user just came back from a PlayerPage he reached by
      * clicking a player name inside the popup, reopen the popup on
      * the same team and with the same position filter. Consumes
@@ -829,18 +1056,13 @@ export default function MarketplacePage() {
             id: pending.teamId,
             name: pending.teamName,
             initialPositionFilter: pending.positionFilter,
+            referencePlayer: pending.referencePlayer ?? null,
             pickContext: pick
                 ? {
                     slot: pick.slot,
                     offerId: pick.offerId,
                     slotIndex: pick.slotIndex,
                     capContext: pick.capContext,
-                    // Rebuild a fresh onPick that writes directly
-                    // to the module-level pick store. This is what
-                    // makes the "Ajouter" button work after the
-                    // original OfferCard instance has been
-                    // unmounted: the store is the source of truth
-                    // and every mounted OfferCard subscribes to it.
                     onPick: (playerId) =>
                         pickForSlot(
                             pick.offerId,
@@ -857,8 +1079,6 @@ export default function MarketplacePage() {
                     capContext: directPick.capContext,
                     currentPickedPlayerId:
                         directPick.currentPickedPlayerId ?? null,
-                    // Same idea as above, but writing to the
-                    // direct-offer draft store instead.
                     onPick: (playerId) => {
                         updateDirectOfferDraft((d) => ({
                             ...d,
@@ -881,11 +1101,6 @@ export default function MarketplacePage() {
                             }),
                         }));
                     },
-                    // Clears the current pick on the same slot
-                    // side. Rebuilt from the store the same way
-                    // onPick is, so it works after a PlayerPage
-                    // round-trip even though the original
-                    // DirectOfferCard is gone.
                     onClearPick: () => {
                         updateDirectOfferDraft((d) => ({
                             ...d,
@@ -971,6 +1186,65 @@ export default function MarketplacePage() {
     // option ("Envoyer une offre", not built yet) renders directly.
     // The old "Publier une annonce" sub-view now lives in the Marché
     // tab.
+
+    /**
+     * "Utiliser comme base" handler. Copies the offer's players
+     * and the user's current picks into the Créer draft, sets the
+     * offer creator as the target team, and switches the page to
+     * the "Créer" tab.
+     *
+     * Mapping (per slot):
+     *   - draft.selectedTargetTeamId = the offer creator's team
+     *   - draft slot i:
+     *       offeringPlayerId = the user's pick in offer slot i
+     *                          (null when the user had not
+     *                          picked yet)
+     *       targetPlayerId   = the offer's offered player in
+     *                          slot i (null when the offer only
+     *                          announced a demand with no
+     *                          specific player attached)
+     *
+     * The demand criteria (position + filters) are NOT carried
+     * over: Créer has no place to store them, and the whole point
+     * of "use as base" is to start from the offer's players
+     * without being bound by the criteria.
+     *
+     * The draft's note is also reset, because the offer's note is
+     * a message from the OTHER manager to the world, not a
+     * message from the current user to him.
+     */
+    function handleUseOfferAsBase(
+        offer: TradeOffer,
+        picks: PicksBySlot,
+    ): void {
+        const sortedSlots = [...offer.slots].sort(
+            (a, b) => a.slotIndex - b.slotIndex,
+        );
+
+        const draftSlots = sortedSlots.map((slot) => ({
+            offeringPlayerId: picks[slot.slotIndex] ?? null,
+            targetPlayerId: slot.offeringPlayerId ?? null,
+        }));
+
+        updateDirectOfferDraft((d) => ({
+            ...d,
+            selectedTargetTeamId: String(
+                offer.createdByFantasyTeamId,
+            ),
+            slots:
+                draftSlots.length > 0
+                    ? draftSlots
+                    : [
+                        {
+                            offeringPlayerId: null,
+                            targetPlayerId: null,
+                        },
+                    ],
+            note: '',
+        }));
+
+        setView('add');
+    }
 
     return (
         <section className='-mt-4 space-y-4 sm:-mt-6'>
@@ -1151,7 +1425,7 @@ export default function MarketplacePage() {
                      * direct offer to himself.
                      */}
                     {view === 'add' && (
-                        <div className='flex w-full items-center gap-2'>
+                        <div className='flex w-full items-center justify-center gap-2'>
                             <label
                                 htmlFor='direct-offer-team'
                                 className='shrink-0 text-sm font-semibold uppercase tracking-wider text-[#00E5FF]'
@@ -1225,6 +1499,8 @@ export default function MarketplacePage() {
                                 onPick: req.onPick,
                                 onClearPick: req.onClearPick,
                             },
+                            referencePlayer:
+                                req.referencePlayer ?? null,
                         })
                     }
                     onRequestTargetTeam={() =>
@@ -1257,6 +1533,8 @@ export default function MarketplacePage() {
                                         playerId,
                                     ),
                             },
+                            referencePlayer:
+                                buildReferenceFromSlot(pick.slot),
                         })
                     }
                     onEditOffer={
@@ -1272,6 +1550,7 @@ export default function MarketplacePage() {
                             }
                             : undefined
                     }
+                    onUseAsBase={handleUseOfferAsBase}
                 />
             )}
 
@@ -1295,6 +1574,27 @@ export default function MarketplacePage() {
                     initialOffer={editingOffer}
                     teamId={user?.fantasyTeamId ?? null}
                     teamName={user?.fantasyTeamName ?? null}
+                    onRequestPlayerPick={(req) => {
+                        if (user?.fantasyTeamId == null) return;
+
+                        setRosterPopupTeam({
+                            id: user.fantasyTeamId,
+                            name:
+                                user.fantasyTeamName ??
+                                'Mon équipe',
+                            publishPickContext: {
+                                slotIndex: req.slotIndex,
+                                currentPickedPlayerId:
+                                    req.currentPickedPlayerId,
+                                lockedPosition:
+                                    req.lockedPosition,
+                                excludedPlayerIds:
+                                    req.excludedPlayerIds,
+                                onPick: req.onPick,
+                                onClearPick: req.onClearPick,
+                            },
+                        });
+                    }}
                 />
             )}
 
@@ -1323,12 +1623,15 @@ export default function MarketplacePage() {
                     initialPositionFilter={
                         rosterPopupTeam.initialPositionFilter
                     }
+                    referencePlayer={rosterPopupTeam.referencePlayer}
                     lockedPosition={
                         rosterPopupTeam.pickContext
                             ? (rosterPopupTeam.pickContext.slot
                                 .positionGroup as PositionGroup)
-                            : rosterPopupTeam.directPickContext
-                                ?.lockedPosition
+                            : (rosterPopupTeam.directPickContext
+                                ?.lockedPosition ??
+                                rosterPopupTeam.publishPickContext
+                                    ?.lockedPosition)
                     }
                     filterSlot={
                         rosterPopupTeam.pickContext?.slot
@@ -1359,16 +1662,19 @@ export default function MarketplacePage() {
                             }
                             : undefined
                     }
-                    currentPickedPlayerId={
-                        directPopupPickedPlayerId
+                    currentPickedPlayerId={popupPickedPlayerId}
+                    pinnedPlayerId={popupPickedPlayerId}
+                    excludedPlayerIds={
+                        rosterPopupTeam.publishPickContext
+                            ?.excludedPlayerIds ??
+                        directPopupExcludedPlayerIds
                     }
                     onPlayerPick={
                         rosterPopupTeam.pickContext?.onPick ??
-                        rosterPopupTeam.directPickContext?.onPick
+                        rosterPopupTeam.directPickContext?.onPick ??
+                        rosterPopupTeam.publishPickContext?.onPick
                     }
-                    onClearPick={
-                        rosterPopupTeam.directPickContext?.onClearPick
-                    }
+                    onClearPick={popupOnClearPick}
                     onClose={() => setRosterPopupTeam(null)}
                 />
             )}
@@ -1380,12 +1686,49 @@ export default function MarketplacePage() {
 // Add offer panel
 // ---------------------------------------------------------------------
 
+/**
+ * Payload the AddOfferPanel sends up when the user clicks a
+ * "Choisir un joueur" button in a slot. MarketplacePage stores it
+ * on `rosterPopupTeam.publishPickContext` so the roster popup
+ * opens in pick mode for the given slot.
+ *
+ * Unlike the Créer tab's DirectOfferPickRequest, this shape has no
+ * `side` (there is only one side to pick — the user's own player)
+ * and no cap context (a public announcement does not know who will
+ * respond, so no cap projection is possible).
+ */
+interface PublishPickRequest {
+    slotIndex: number;
+    /**
+     * Player id of the current pick in this slot, or null when the
+     * slot has no pick. Drives the "Retirer" button in the popup.
+     */
+    currentPickedPlayerId: number | null;
+    /**
+     * When the slot already has a demanded position (F / D / G),
+     * the popup's segmented control is locked to it, so the user
+     * cannot pick a player of another position. Matches the
+     * backend rule that the offered player's position must match
+     * the demanded position.
+     */
+    lockedPosition?: PositionGroup;
+    /**
+     * Player ids already picked in OTHER slots of the same form,
+     * so the popup hides them and the user cannot pick the same
+     * player twice.
+     */
+    excludedPlayerIds: number[];
+    onPick: (playerId: number) => void;
+    onClearPick: () => void;
+}
+
 function AddOfferPanel({
     teamId,
     teamName,
     onPublished,
     onCancelEdit,
     initialOffer,
+    onRequestPlayerPick,
 }: {
     teamId: number | null;
     teamName: string | null;
@@ -1410,6 +1753,12 @@ function AddOfferPanel({
      * with whatever initialOffer is current at that moment.
      */
     initialOffer?: TradeOffer | null;
+    /**
+     * Called when the user clicks a "Choisir un joueur" button on
+     * any slot. The parent opens the roster popup in pick mode for
+     * the given slot.
+     */
+    onRequestPlayerPick: (req: PublishPickRequest) => void;
 }) {
     const [roster, setRoster] = useState<TeamRoster | null>(null);
     const [loading, setLoading] = useState(true);
@@ -1634,14 +1983,6 @@ function AddOfferPanel({
         };
     }, [teamId]);
 
-    const usedPlayerIds = useMemo(() => {
-        const set = new Set<number>();
-        for (const s of slots) {
-            if (s.offeringPlayerId != null) set.add(s.offeringPlayerId);
-        }
-        return set;
-    }, [slots]);
-
     function updateSlot(index: number, patch: Partial<SlotState>) {
         setSlots((current) =>
             current.map((s, i) => (i === index ? { ...s, ...patch } : s)),
@@ -1654,18 +1995,17 @@ function AddOfferPanel({
         );
     }
 
-    function handlePlayerChange(index: number, playerIdRaw: string) {
-        const playerId = playerIdRaw === '' ? null : Number(playerIdRaw);
-        const slot = slots[index];
-
-        if (playerId == null) {
-            updateSlot(index, {
-                offeringPlayerId: null,
-                firstHandled: slot.positionGroup !== '' ? 'position' : null,
-            });
-            return;
-        }
-
+    /**
+     * Picks the given player for the given slot and syncs the
+     * slot's demanded position to the player's position, matching
+     * the behaviour of the old dropdown: picking a defenseman
+     * locks the slot's demand to D, and picking a forward locks it
+     * to F.
+     *
+     * Called by the roster popup's `onPick` when the user clicks
+     * "Ajouter" on a player row.
+     */
+    function pickPlayerForSlot(index: number, playerId: number) {
         const entry = entries.find((e) => e.playerId === playerId);
         const group = entry ? toPositionGroup(entry.position) : '';
 
@@ -1674,6 +2014,43 @@ function AddOfferPanel({
             positionGroup: group,
             firstHandled: 'player',
         });
+    }
+
+    /**
+     * Clears the picked player for the given slot. Keeps the
+     * demanded position (if any) — the user cleared the player,
+     * not the whole slot. Same behaviour as the "Ne pas offrir de
+     * joueur" option in the old dropdown.
+     *
+     * Called by the roster popup's `onClearPick` when the user
+     * clicks "Retirer" on the pinned card.
+     */
+    function clearPlayerForSlot(index: number) {
+        const slot = slots[index];
+
+        updateSlot(index, {
+            offeringPlayerId: null,
+            firstHandled:
+                slot.positionGroup !== '' ? 'position' : null,
+        });
+    }
+
+    /**
+     * Returns the player ids picked in every OTHER slot of this
+     * form, so the popup can hide them and the user cannot pick
+     * the same player twice.
+     */
+    function excludedPlayerIdsForSlot(index: number): number[] {
+        const excluded: number[] = [];
+
+        for (let i = 0; i < slots.length; i++) {
+            if (i === index) continue;
+
+            const pick = slots[i].offeringPlayerId;
+            if (pick != null) excluded.push(pick);
+        }
+
+        return excluded;
     }
 
     function handlePositionChange(index: number, positionRaw: string) {
@@ -1942,7 +2319,6 @@ function AddOfferPanel({
                     index={index}
                     slot={slot}
                     entries={entries}
-                    usedPlayerIds={usedPlayerIds}
                     canRemove={slots.length > 1}
                     isExpanded={
                         slots.length === 1 ||
@@ -1952,7 +2328,23 @@ function AddOfferPanel({
                         setExpandedSlotIndex(index);
                         scrollToSlot(index);
                     }}
-                    onPlayerChange={(id) => handlePlayerChange(index, id)}
+                    onRequestPlayerPick={() =>
+                        onRequestPlayerPick({
+                            slotIndex: index,
+                            currentPickedPlayerId:
+                                slot.offeringPlayerId,
+                            lockedPosition:
+                                slot.positionGroup !== ''
+                                    ? (slot.positionGroup as PositionGroup)
+                                    : undefined,
+                            excludedPlayerIds:
+                                excludedPlayerIdsForSlot(index),
+                            onPick: (playerId) =>
+                                pickPlayerForSlot(index, playerId),
+                            onClearPick: () =>
+                                clearPlayerForSlot(index),
+                        })
+                    }
                     onPositionChange={(p) => handlePositionChange(index, p)}
                     onFieldChange={(patch) => updateSlot(index, patch)}
                     onResetSlot={() => resetSlot(index)}
@@ -2239,11 +2631,10 @@ function SlotEditor({
     index,
     slot,
     entries,
-    usedPlayerIds,
     canRemove,
     isExpanded,
     onToggle,
-    onPlayerChange,
+    onRequestPlayerPick,
     onPositionChange,
     onFieldChange,
     onResetSlot,
@@ -2253,11 +2644,16 @@ function SlotEditor({
     index: number;
     slot: SlotState;
     entries: RosterEntry[];
-    usedPlayerIds: Set<number>;
     canRemove: boolean;
     isExpanded: boolean;
     onToggle: () => void;
-    onPlayerChange: (playerIdRaw: string) => void;
+    /**
+     * Opens the roster popup in pick mode for this slot. The
+     * parent builds the full pick request (current picked player,
+     * excluded player ids from other slots, locked position) and
+     * manages the popup's lifecycle.
+     */
+    onRequestPlayerPick: () => void;
     onPositionChange: (positionRaw: string) => void;
     onFieldChange: (patch: Partial<SlotState>) => void;
     onResetSlot: () => void;
@@ -2290,51 +2686,6 @@ function SlotEditor({
             setFilterExpanded(true);
         }
     }, [forceOpenFilterToken]);
-
-    /**
-     * Roster entries eligible for the "Offre" dropdown, grouped by
-     * position group (F / D / G) and sorted alphabetically inside
-     * each group.
-     */
-    const availablePlayersByGroup = useMemo(() => {
-        const filtered = entries.filter((e) => {
-            if (
-                usedPlayerIds.has(e.playerId) &&
-                e.playerId !== slot.offeringPlayerId
-            ) {
-                return false;
-            }
-
-            if (slot.positionGroup === '') return true;
-
-            return toPositionGroup(e.position) === slot.positionGroup;
-        });
-
-        const groups: Record<PositionGroup, RosterEntry[]> = {
-            F: [],
-            D: [],
-            G: [],
-        };
-
-        for (const entry of filtered) {
-            groups[toPositionGroup(entry.position)].push(entry);
-        }
-
-        for (const key of ['F', 'D', 'G'] as const) {
-            groups[key].sort((a, b) => {
-                const byLast = a.lastName.localeCompare(b.lastName);
-                if (byLast !== 0) return byLast;
-                return a.firstName.localeCompare(b.firstName);
-            });
-        }
-
-        return groups;
-    }, [
-        entries,
-        usedPlayerIds,
-        slot.positionGroup,
-        slot.offeringPlayerId,
-    ]);
 
     const showFilterForm = slot.positionGroup !== '';
 
@@ -2437,42 +2788,67 @@ function SlotEditor({
                         )
                     </p>
 
-                    <select
-                        value={slot.offeringPlayerId ?? ''}
-                        onChange={(e) => onPlayerChange(e.target.value)}
-                        className={inputClass}
-                    >
-                        <option value=''>
-                            — Ne pas offrir de joueur —
-                        </option>
+                    {slot.offeringPlayerId != null ? (
+                        (() => {
+                            const pickedEntry = entries.find(
+                                (e) =>
+                                    e.playerId ===
+                                    slot.offeringPlayerId,
+                            );
 
-                        {(['F', 'D', 'G'] as const).map((groupKey) => {
-                            const groupEntries =
-                                availablePlayersByGroup[groupKey];
+                            const name = pickedEntry
+                                ? `${pickedEntry.firstName} ${pickedEntry.lastName}`
+                                : 'Joueur inconnu';
 
-                            if (groupEntries.length === 0) {
-                                return null;
-                            }
+                            const position = pickedEntry
+                                ? toPositionGroup(
+                                    pickedEntry.position,
+                                )
+                                : '';
+
+                            const team =
+                                pickedEntry?.nhlTeamAbbreviation ??
+                                '';
 
                             return (
-                                <optgroup
-                                    key={groupKey}
-                                    label={groupLabelPlural(groupKey)}
-                                >
-                                    {groupEntries.map((entry) => (
-                                        <option
-                                            key={entry.playerId}
-                                            value={entry.playerId}
-                                        >
-                                            {entry.firstName}{' '}
-                                            {entry.lastName} · {groupKey} ·{' '}
-                                            {entry.nhlTeamAbbreviation}
-                                        </option>
-                                    ))}
-                                </optgroup>
+                                <div className='flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2'>
+                                    <span className='min-w-0 truncate text-sm text-foreground'>
+                                        <span className='font-semibold'>
+                                            {name}
+                                        </span>
+                                        {position && ` · ${position}`}
+                                        {team && ` · ${team}`}
+                                    </span>
+
+                                    <button
+                                        type='button'
+                                        onClick={
+                                            onRequestPlayerPick
+                                        }
+                                        className='shrink-0 cursor-pointer rounded border border-[#00C8FF] px-2 py-0.5 text-xs font-semibold text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10'
+                                    >
+                                        Changer
+                                    </button>
+                                </div>
                             );
-                        })}
-                    </select>
+                        })()
+                    ) : (
+                        <button
+                            type='button'
+                            onClick={onRequestPlayerPick}
+                            className='w-full cursor-pointer rounded-lg bg-[#00E5FF] px-3 py-1.5 text-xs font-semibold text-black transition-colors hover:brightness-110'
+                            style={{
+                                boxShadow: [
+                                    '0 0 4px rgba(0, 229, 255, 0.9)',
+                                    '0 0 10px rgba(0, 229, 255, 0.5)',
+                                    '0 0 18px rgba(0, 229, 255, 0.2)',
+                                    'inset 0 0 2px rgba(0, 229, 255, 0.4)',
+                                ].join(', '),
+                            }}
+                        >
+                            Choisir un joueur
+                        </button>
+                    )}
                 </div>
 
                 <div className='space-y-2'>
@@ -2852,6 +3228,7 @@ function BrowseOffersPanel({
     onOpenTeamRoster,
     onEditOffer,
     onRequestPlayerPick,
+    onUseAsBase,
 }: {
     refreshTick: number;
     teamId: number | null;
@@ -2891,6 +3268,17 @@ function BrowseOffersPanel({
         teamId: number,
         teamName: string,
         pick: PendingPickContext,
+    ) => void;
+    /**
+     * Called when the responder clicks "Utiliser comme base" on
+     * another manager's offer. The parent copies the offer's
+     * players and the responder's picks into the Créer draft and
+     * switches to the Créer tab. Only set on the "Voir les
+     * offres" side.
+     */
+    onUseAsBase?: (
+        offer: TradeOffer,
+        picks: PicksBySlot,
     ) => void;
 }) {
     const [offers, setOffers] = useState<TradeOffer[]>([]);
@@ -3029,6 +3417,8 @@ function BrowseOffersPanel({
                     userRoster={userRoster}
                     onOpenTeamRoster={onOpenTeamRoster}
                     onRequestPlayerPick={onRequestPlayerPick}
+                    onUseAsBase={onUseAsBase}
+                    swapSides
                 />
             ))}
         </div>
@@ -3451,9 +3841,9 @@ function StatLinesTable({
 
     return (
         <table
-            className={`mt-1 w-full table-fixed border-collapse leading-tight tabular-nums ${size === 'md'
-                ? 'text-[0.7rem] md:text-xs'
-                : 'text-[0.55rem] md:text-[0.6rem]'
+            className={`w-full table-fixed border-collapse tabular-nums ${size === 'md'
+                ? 'mt-0.5 text-sm md:text-base leading-none'
+                : 'mt-1 text-[0.6rem] md:text-[0.7rem] leading-tight'
                 }`}
         >
             {/*
@@ -3781,7 +4171,7 @@ function SlotPlayerBlock({
 
     return (
         <>
-            <div className='flex h-7 w-full items-center justify-start gap-x-1.5 text-xs text-foreground md:text-sm'>
+            <div className='flex h-7 w-full items-center justify-start gap-x-1.5 text-sm text-foreground md:text-[0.9rem]'>
                 {nhlTeam && (
                     <NhlTeamLogo abbreviation={nhlTeam} size={20} />
                 )}
@@ -3801,7 +4191,7 @@ function SlotPlayerBlock({
                 )}
 
                 {age != null && (
-                    <span className='shrink-0 text-[0.65rem] font-normal text-white md:text-xs'>
+                    <span className='shrink-0 text-[0.6rem] font-normal text-white md:text-xs'>
                         {age} ans
                     </span>
                 )}
@@ -3952,7 +4342,7 @@ function RespondingPlayerBlock({
 
     return (
         <>
-            <div className='flex h-7 flex-nowrap items-center justify-center text-xs text-foreground md:text-sm'>
+            <div className='flex h-7 flex-nowrap items-center justify-center text-sm text-foreground md:text-[0.9rem]'>
                 {/*
                  * The trigger is now a real <button> that opens the
                  * custom dropdown panel. The rectangle styling
@@ -4005,7 +4395,7 @@ function RespondingPlayerBlock({
                          * right rather than pushing the name
                          * off-center.
                          */}
-                        <span className='flex min-w-0 items-center justify-center gap-x-1.5 truncate pr-2 text-xs font-semibold text-foreground md:text-sm'>
+                        <span className='flex min-w-0 items-center justify-center gap-x-1.5 truncate pr-2 text-sm font-semibold text-foreground md:text-[0.9rem]'>
                             {entry?.nhlTeamAbbreviation && (
                                 /*
                                  * Wrapper holds the layout box at
@@ -4047,7 +4437,7 @@ function RespondingPlayerBlock({
                             </span>
 
                             {entry?.age != null && (
-                                <span className='shrink-0 text-[0.65rem] font-normal text-white md:text-xs'>
+                                <span className='shrink-0 text-[0.6rem] font-normal text-white md:text-xs'>
                                     {entry.age} ans
                                 </span>
                             )}
@@ -4078,7 +4468,7 @@ function RespondingPlayerBlock({
                     />
 
                     {currentContractLabel && (
-                        <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.6rem] font-semibold text-emerald-400 md:text-xs'>
+                        <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-sm leading-none font-semibold text-emerald-400 md:text-base'>
                             <span className='whitespace-nowrap'>
                                 {currentContractLabel}
                             </span>
@@ -4177,6 +4567,8 @@ function OfferCard({
     onCancelResponse,
     onOpenTeamRoster,
     onRequestPlayerPick,
+    onUseAsBase,
+    swapSides = false,
 }: {
     offer: TradeOffer;
     busy: boolean;
@@ -4246,17 +4638,56 @@ function OfferCard({
   */
     onOpenTeamRoster?: (teamId: number, teamName: string) => void;
     /**
-     * When provided, the responder's picker is a "Choisir un
-     * joueur" button that opens the roster popup in pick mode,
-     * instead of an inline player dropdown. The callback also
-     * receives an `onPick` closure the popup calls when the
-     * responder clicks "Ajouter" on a player row.
-     */
+  * When provided, the responder's picker is a "Choisir un
+  * joueur" button that opens the roster popup in pick mode,
+  * instead of an inline player dropdown. The callback also
+  * receives an `onPick` closure the popup calls when the
+  * responder clicks "Ajouter" on a player row.
+  */
     onRequestPlayerPick?: (
         teamId: number,
         teamName: string,
         pick: PendingPickContext,
     ) => void;
+    /**
+     * When provided, the "Utiliser comme base" button copies the
+     * offer's players and the user's current picks into the Créer
+     * draft, and switches the page to the Créer tab. The `picks`
+     * argument is the current offer-picks snapshot for this
+     * offer — the same object the responder-side dropdowns are
+     * bound to.
+     *
+     * Only the "Voir les offres" panel passes this: on the user's
+     * own offers the button is not rendered anyway, because
+     * canRespond is false.
+     */
+    onUseAsBase?: (
+        offer: TradeOffer,
+        picks: PicksBySlot,
+    ) => void;
+    /**
+     * When true, the two sides of the card are rendered in the
+     * opposite order:
+     *
+     *   - header:  the responder's team name goes on the LEFT,
+     *              the creator's on the RIGHT.
+     *   - slots:   the responding column (pick UI) goes on the
+     *              LEFT, the offering column on the RIGHT.
+     *
+     * Used only by the "Voir les offres" tab so the connected
+     * user — who is the responder in that context — sees his own
+     * team on the left, matching the convention used everywhere
+     * else in the app ("me" on the left, "other" on the right).
+     *
+     * Purely visual. The cap math, the pick store keys, the
+     * responder/creator semantics, and every team-name click
+     * handler are tied to identity, not to position, so none of
+     * them need to change.
+     *
+     * Defaults to false, which is what Reçues / Envoyées / the
+     * publish preview expect.
+     */
+    swapSides?: boolean;
 }) {
     // Name shown over the "Demande" column when the viewer is not
     // the offer's creator. The right column of the header represents
@@ -4787,6 +5218,7 @@ function OfferCard({
                     seasonSalaryCap: seasonCap,
                     creatorOfferedSalary,
                     responderOfferedSalaryExcludingCurrentSlot,
+                    swapSides,
                 }
                 : undefined;
 
@@ -4797,6 +5229,89 @@ function OfferCard({
             capContext,
         });
     };
+
+    // ------------------------------------------------------------------
+    // Header blocks
+    //
+    // The creator block and the responder block are declared as
+    // standalone JSX values so the header row can render them in
+    // either order without duplicating the markup. `swapSides` only
+    // changes the order in which they appear. Both blocks are
+    // declared as flex-1 so the "Nouvelle offre" badge stays
+    // horizontally centered either way.
+    // ------------------------------------------------------------------
+
+    const creatorHeaderBlock = (
+        <div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-y-2'>
+            {onOpenTeamRoster ? (
+                <button
+                    type='button'
+                    onClick={() =>
+                        onOpenTeamRoster(
+                            offer.createdByFantasyTeamId,
+                            offer.createdByFantasyTeamName,
+                        )
+                    }
+                    className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                    style={TEAM_NAME_BUTTON_STYLE}
+                >
+                    {offer.createdByFantasyTeamName}
+                </button>
+            ) : (
+                <div
+                    className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
+                    style={TEAM_NAME_BUTTON_STYLE}
+                >
+                    {offer.createdByFantasyTeamName}
+                </div>
+            )}
+
+            {showCreatorCapLine && (
+                <TeamCapLine
+                    baseCapSpace={creatorBaseCapSpace!}
+                    adjustedCapSpace={creatorAdjustedCapSpace!}
+                />
+            )}
+        </div>
+    );
+
+    const responderHeaderBlock = (
+        <div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-y-2'>
+            {showRightTeam ? (
+                onOpenTeamRoster && rightTeamId != null ? (
+                    <button
+                        type='button'
+                        onClick={() =>
+                            onOpenTeamRoster(
+                                rightTeamId,
+                                rightTeamName,
+                            )
+                        }
+                        className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                        style={TEAM_NAME_BUTTON_STYLE}
+                    >
+                        {rightTeamName}
+                    </button>
+                ) : (
+                    <div
+                        className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
+                        style={TEAM_NAME_BUTTON_STYLE}
+                    >
+                        {rightTeamName}
+                    </div>
+                )
+            ) : (
+                <div className='w-full' aria-hidden='true' />
+            )}
+
+            {showRightTeam && showResponderCapLine && (
+                <TeamCapLine
+                    baseCapSpace={responderBaseCapSpace!}
+                    adjustedCapSpace={responderAdjustedCapSpace!}
+                />
+            )}
+        </div>
+    );
 
     return (
         <article
@@ -4881,44 +5396,27 @@ function OfferCard({
                             borderColor: 'rgba(0, 168, 255, 0.2)',
                         }}
                     >
-                        {/* Left side: creator's team name, with the
-                            cap line under it when we have the data.
-                            The whole block is flex-1 so the two
-                            sides split the row evenly and the badge
-                            in the middle stays centered. */}
-                        <div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-y-2'>
-                            {onOpenTeamRoster ? (
-                                <button
-                                    type='button'
-                                    onClick={() =>
-                                        onOpenTeamRoster(
-                                            offer.createdByFantasyTeamId,
-                                            offer.createdByFantasyTeamName,
-                                        )
-                                    }
-                                    className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
-                                    style={TEAM_NAME_BUTTON_STYLE}
-                                >
-                                    {offer.createdByFantasyTeamName}
-                                </button>
-                            ) : (
-                                <div
-                                    className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
-                                    style={TEAM_NAME_BUTTON_STYLE}
-                                >
-                                    {offer.createdByFantasyTeamName}
-                                </div>
-                            )}
-
-                            {showCreatorCapLine && (
-                                <TeamCapLine
-                                    baseCapSpace={creatorBaseCapSpace!}
-                                    adjustedCapSpace={
-                                        creatorAdjustedCapSpace!
-                                    }
-                                />
-                            )}
-                        </div>
+                        {/*
+                         * Left side.
+                         *
+                         * Default layout (swapSides = false):
+                         *   creator on the left, responder on the
+                         *   right — matches Reçues / Envoyées /
+                         *   publish preview.
+                         *
+                         * Voir les offres (swapSides = true):
+                         *   responder on the left, creator on the
+                         *   right, so the connected user (the
+                         *   responder in that context) sees his
+                         *   own team on the left.
+                         *
+                         * Both blocks are declared above the
+                         * return statement; only their render
+                         * order changes.
+                         */}
+                        {swapSides
+                            ? responderHeaderBlock
+                            : creatorHeaderBlock}
 
                         {/* Nouvelle offre badge, centered between the
                             two team names inside the card header.
@@ -4940,52 +5438,10 @@ function OfferCard({
                             </span>
                         )}
 
-                        {/* Right side: responder's team name, with
-                            the cap line under it. Only rendered when
-                            the right team is shown (i.e. the card is
-                            not the viewer's own offer). */}
-                        <div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-y-2'>
-                            {showRightTeam ? (
-                                onOpenTeamRoster && rightTeamId != null ? (
-                                    <button
-                                        type='button'
-                                        onClick={() =>
-                                            onOpenTeamRoster(
-                                                rightTeamId,
-                                                rightTeamName,
-                                            )
-                                        }
-                                        className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
-                                        style={TEAM_NAME_BUTTON_STYLE}
-                                    >
-                                        {rightTeamName}
-                                    </button>
-                                ) : (
-                                    <div
-                                        className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
-                                        style={TEAM_NAME_BUTTON_STYLE}
-                                    >
-                                        {rightTeamName}
-                                    </div>
-                                )
-                            ) : (
-                                <div
-                                    className='w-full'
-                                    aria-hidden='true'
-                                />
-                            )}
-
-                            {showRightTeam && showResponderCapLine && (
-                                <TeamCapLine
-                                    baseCapSpace={
-                                        responderBaseCapSpace!
-                                    }
-                                    adjustedCapSpace={
-                                        responderAdjustedCapSpace!
-                                    }
-                                />
-                            )}
-                        </div>
+                        {/* Right side: the opposite of the left side. */}
+                        {swapSides
+                            ? creatorHeaderBlock
+                            : responderHeaderBlock}
                     </div>
 
                     <div className='relative'>
@@ -5013,6 +5469,292 @@ function OfferCard({
 
                             const currentPick =
                                 picks[slot.slotIndex] ?? null;
+
+                            /*
+                             * The two columns are declared as local
+                             * JSX values so the row can render them
+                             * in either order based on `swapSides`.
+                             *
+                             * Default (swapSides = false): offering
+                             * column on the left, responding column
+                             * on the right — matches the historical
+                             * layout used by Reçues / Envoyées /
+                             * publish preview.
+                             *
+                             * Voir les offres (swapSides = true):
+                             * responding column on the left so the
+                             * connected user (the responder) picks
+                             * on the left side, offering column on
+                             * the right.
+                             */
+                            const offeringColumn = (
+                                <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                                    <SlotPlayerBlock
+                                        playerId={slot.offeringPlayerId}
+                                        nhlPlayerId={
+                                            slot.offeringPlayerNhlPlayerId
+                                        }
+                                        firstName={
+                                            slot.offeringPlayerFirstName
+                                        }
+                                        lastName={
+                                            slot.offeringPlayerLastName
+                                        }
+                                        nhlTeam={
+                                            slot.offeringPlayerNhlTeam
+                                        }
+                                        position={
+                                            slot.offeringPlayerPosition
+                                        }
+                                        age={slot.offeringPlayerAge}
+                                        currentContract={
+                                            slot.offeringPlayerCurrentContract
+                                        }
+                                        secondContract={
+                                            slot.offeringPlayerSecondContract
+                                        }
+                                        currentSeasonStats={
+                                            slot.offeringPlayerCurrentSeasonStats
+                                        }
+                                        lastSeasonStats={
+                                            slot.offeringPlayerLastSeasonStats
+                                        }
+                                        emptyLabel='Avis de recherche'
+                                    />
+                                </div>
+                            );
+
+                            const respondingColumn = (
+                                <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                                    {slot.respondingPlayerId != null ? (
+                                        <SlotPlayerBlock
+                                            playerId={
+                                                slot.respondingPlayerId
+                                            }
+                                            nhlPlayerId={
+                                                slot.respondingPlayerNhlPlayerId
+                                            }
+                                            firstName={
+                                                slot.respondingPlayerFirstName
+                                            }
+                                            lastName={
+                                                slot.respondingPlayerLastName
+                                            }
+                                            nhlTeam={
+                                                slot.respondingPlayerNhlTeam
+                                            }
+                                            position={
+                                                slot.respondingPlayerPosition
+                                            }
+                                            age={
+                                                slot.respondingPlayerAge
+                                            }
+                                            currentContract={
+                                                slot.respondingPlayerCurrentContract
+                                            }
+                                            secondContract={
+                                                slot.respondingPlayerSecondContract
+                                            }
+                                            currentSeasonStats={
+                                                slot.respondingPlayerCurrentSeasonStats
+                                            }
+                                            lastSeasonStats={
+                                                slot.respondingPlayerLastSeasonStats
+                                            }
+                                            emptyLabel='Aucune réponse'
+                                        />
+                                    ) : canRespond && currentPick != null ? (
+                                        <RespondingPlayerBlock
+                                            entry={
+                                                userRoster?.entries.find(
+                                                    (e) =>
+                                                        e.playerId ===
+                                                        currentPick,
+                                                ) ?? null
+                                            }
+                                            matches={matches}
+                                            currentPick={currentPick}
+                                            onPick={(id) =>
+                                                setPick(
+                                                    slot.slotIndex,
+                                                    id,
+                                                )
+                                            }
+                                            slotIndex={slot.slotIndex}
+                                            wouldBustCap={wouldBustCap}
+                                            onChangeRequest={
+                                                onRequestPlayerPick &&
+                                                    rightTeamId != null
+                                                    ? () =>
+                                                        requestPickForSlot(
+                                                            slot,
+                                                        )
+                                                    : undefined
+                                            }
+                                        />
+                                    ) : (
+                                        <>
+                                            <p className='text-xs font-semibold text-foreground md:text-sm'>
+                                                {groupLabel(
+                                                    slot.positionGroup as PositionGroup,
+                                                )}
+                                            </p>
+
+                                            <ul className='mt-1 inline-block text-left text-[0.6rem] text-[#7DD3FC] md:text-[0.7rem]'>
+                                                {slot.demandMinContractYears !=
+                                                    null && (
+                                                        <li className='flex items-center gap-1'>
+                                                            <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
+                                                                {slot.enforceDemandMinContractYears && (
+                                                                    <svg
+                                                                        viewBox='0 0 20 16'
+                                                                        className='h-2.5 w-3'
+                                                                        aria-hidden='true'
+                                                                    >
+                                                                        <path
+                                                                            d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
+                                                                            fill='#EF4444'
+                                                                        />
+                                                                    </svg>
+                                                                )}
+                                                            </span>
+                                                            <span>
+                                                                Contrat min :{' '}
+                                                                {
+                                                                    slot.demandMinContractYears
+                                                                }{' '}
+                                                                an
+                                                                {slot.demandMinContractYears >
+                                                                    1
+                                                                    ? 's'
+                                                                    : ''}
+                                                            </span>
+                                                        </li>
+                                                    )}
+                                                {slot.demandMaxSalary != null && (
+                                                    <li className='flex items-center gap-1'>
+                                                        <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
+                                                            {slot.enforceDemandMaxSalary && (
+                                                                <svg
+                                                                    viewBox='0 0 20 16'
+                                                                    className='h-2.5 w-3'
+                                                                    aria-hidden='true'
+                                                                >
+                                                                    <path
+                                                                        d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
+                                                                        fill='#EF4444'
+                                                                    />
+                                                                </svg>
+                                                            )}
+                                                        </span>
+                                                        <span>
+                                                            Salaire max :{' '}
+                                                            {compactSalary(
+                                                                slot.demandMaxSalary,
+                                                            )}
+                                                        </span>
+                                                    </li>
+                                                )}
+                                                {slot.demandMaxAge != null && (
+                                                    <li className='flex items-center gap-1'>
+                                                        <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
+                                                            {slot.enforceDemandMaxAge && (
+                                                                <svg
+                                                                    viewBox='0 0 20 16'
+                                                                    className='h-2.5 w-3'
+                                                                    aria-hidden='true'
+                                                                >
+                                                                    <path
+                                                                        d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
+                                                                        fill='#EF4444'
+                                                                    />
+                                                                </svg>
+                                                            )}
+                                                        </span>
+                                                        <span>
+                                                            Âge max :{' '}
+                                                            {slot.demandMaxAge}
+                                                        </span>
+                                                    </li>
+                                                )}
+                                                {slot.demandMinPointsLastYear !=
+                                                    null && (
+                                                        <li className='flex items-center gap-1'>
+                                                            <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
+                                                                {slot.enforceDemandMinPointsLastYear && (
+                                                                    <svg
+                                                                        viewBox='0 0 20 16'
+                                                                        className='h-2.5 w-3'
+                                                                        aria-hidden='true'
+                                                                    >
+                                                                        <path
+                                                                            d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
+                                                                            fill='#EF4444'
+                                                                        />
+                                                                    </svg>
+                                                                )}
+                                                            </span>
+                                                            <span>
+                                                                Points min (an dernier) :{' '}
+                                                                {
+                                                                    slot.demandMinPointsLastYear
+                                                                }
+                                                            </span>
+                                                        </li>
+                                                    )}
+                                                {slot.demandMinContractYears ==
+                                                    null &&
+                                                    slot.demandMaxSalary ==
+                                                    null &&
+                                                    slot.demandMaxAge == null &&
+                                                    slot.demandMinPointsLastYear ==
+                                                    null && (
+                                                        <li className='italic opacity-70'>
+                                                            Aucun critère
+                                                            particulier
+                                                        </li>
+                                                    )}
+                                            </ul>
+
+                                            {/* Response picker: a
+                                                single button that
+                                                opens the roster
+                                                popup in pick mode.
+                                                Only shown when the
+                                                offer is not the
+                                                user's own and his
+                                                roster is loaded. */}
+                                            {canRespond && (
+                                                <button
+                                                    type='button'
+                                                    onClick={() =>
+                                                        requestPickForSlot(
+                                                            slot,
+                                                        )
+                                                    }
+                                                    disabled={
+                                                        onRequestPlayerPick ==
+                                                        null ||
+                                                        rightTeamId ==
+                                                        null
+                                                    }
+                                                    className='mt-1 w-fit cursor-pointer rounded bg-[#00E5FF] px-3 py-1 text-left text-xs font-semibold text-black transition-colors hover:brightness-110 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 md:text-sm'
+                                                    style={{
+                                                        boxShadow: [
+                                                            '0 0 4px rgba(0, 229, 255, 0.9)',
+                                                            '0 0 10px rgba(0, 229, 255, 0.5)',
+                                                            '0 0 18px rgba(0, 229, 255, 0.2)',
+                                                            'inset 0 0 2px rgba(0, 229, 255, 0.4)',
+                                                        ].join(', '),
+                                                    }}
+                                                >
+                                                    Choisir un joueur
+                                                </button>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            );
 
                             return (
                                 <div
@@ -5055,275 +5797,18 @@ function OfferCard({
                                                 : undefined,
                                     }}
                                 >
-                                    <div className='flex min-w-0 flex-col items-center justify-start text-center'>
-                                        <SlotPlayerBlock
-                                            playerId={slot.offeringPlayerId}
-                                            nhlPlayerId={
-                                                slot.offeringPlayerNhlPlayerId
-                                            }
-                                            firstName={
-                                                slot.offeringPlayerFirstName
-                                            }
-                                            lastName={
-                                                slot.offeringPlayerLastName
-                                            }
-                                            nhlTeam={
-                                                slot.offeringPlayerNhlTeam
-                                            }
-                                            position={
-                                                slot.offeringPlayerPosition
-                                            }
-                                            age={slot.offeringPlayerAge}
-                                            currentContract={
-                                                slot.offeringPlayerCurrentContract
-                                            }
-                                            secondContract={
-                                                slot.offeringPlayerSecondContract
-                                            }
-                                            currentSeasonStats={
-                                                slot.offeringPlayerCurrentSeasonStats
-                                            }
-                                            lastSeasonStats={
-                                                slot.offeringPlayerLastSeasonStats
-                                            }
-                                            emptyLabel='Avis de recherche'
-                                        />
-                                    </div>
+                                    {swapSides
+                                        ? respondingColumn
+                                        : offeringColumn}
 
                                     <div
                                         aria-hidden='true'
                                         className={SLOT_ARROW_COL}
                                     />
 
-                                    <div className='flex min-w-0 flex-col items-center justify-start text-center'>
-                                        {slot.respondingPlayerId != null ? (
-                                            <SlotPlayerBlock
-                                                playerId={
-                                                    slot.respondingPlayerId
-                                                }
-                                                nhlPlayerId={
-                                                    slot.respondingPlayerNhlPlayerId
-                                                }
-                                                firstName={
-                                                    slot.respondingPlayerFirstName
-                                                }
-                                                lastName={
-                                                    slot.respondingPlayerLastName
-                                                }
-                                                nhlTeam={
-                                                    slot.respondingPlayerNhlTeam
-                                                }
-                                                position={
-                                                    slot.respondingPlayerPosition
-                                                }
-                                                age={
-                                                    slot.respondingPlayerAge
-                                                }
-                                                currentContract={
-                                                    slot.respondingPlayerCurrentContract
-                                                }
-                                                secondContract={
-                                                    slot.respondingPlayerSecondContract
-                                                }
-                                                currentSeasonStats={
-                                                    slot.respondingPlayerCurrentSeasonStats
-                                                }
-                                                lastSeasonStats={
-                                                    slot.respondingPlayerLastSeasonStats
-                                                }
-                                                emptyLabel='Aucune réponse'
-                                            />
-                                        ) : canRespond && currentPick != null ? (
-                                            <RespondingPlayerBlock
-                                                entry={
-                                                    userRoster?.entries.find(
-                                                        (e) =>
-                                                            e.playerId ===
-                                                            currentPick,
-                                                    ) ?? null
-                                                }
-                                                matches={matches}
-                                                currentPick={currentPick}
-                                                onPick={(id) =>
-                                                    setPick(
-                                                        slot.slotIndex,
-                                                        id,
-                                                    )
-                                                }
-                                                slotIndex={slot.slotIndex}
-                                                wouldBustCap={wouldBustCap}
-                                                    onChangeRequest={
-                                                        onRequestPlayerPick &&
-                                                            rightTeamId != null
-                                                            ? () =>
-                                                                requestPickForSlot(
-                                                                    slot,
-                                                                )
-                                                            : undefined
-                                                    }
-                                            />
-                                        ) : (
-                                            <>
-                                                        <p className='text-xs font-semibold text-foreground md:text-sm'>
-                                                            {groupLabel(
-                                                                slot.positionGroup as PositionGroup,
-                                                            )}
-                                                        </p>
-
-                                                        <ul className='mt-1 inline-block text-left text-[0.6rem] text-[#7DD3FC] md:text-[0.7rem]'>
-                                                            {slot.demandMinContractYears !=
-                                                                null && (
-                                                                    <li className='flex items-center gap-1'>
-                                                                        <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                                            {slot.enforceDemandMinContractYears && (
-                                                                                <svg
-                                                                                    viewBox='0 0 20 16'
-                                                                                    className='h-2.5 w-3'
-                                                                                    aria-hidden='true'
-                                                                                >
-                                                                                    <path
-                                                                                        d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                                        fill='#EF4444'
-                                                                                    />
-                                                                                </svg>
-                                                                            )}
-                                                                        </span>
-                                                                        <span>
-                                                                            Contrat min :{' '}
-                                                                            {
-                                                                                slot.demandMinContractYears
-                                                                            }{' '}
-                                                                            an
-                                                                            {slot.demandMinContractYears >
-                                                                                1
-                                                                                ? 's'
-                                                                                : ''}
-                                                                        </span>
-                                                                    </li>
-                                                                )}
-                                                            {slot.demandMaxSalary != null && (
-                                                                <li className='flex items-center gap-1'>
-                                                                    <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                                        {slot.enforceDemandMaxSalary && (
-                                                                            <svg
-                                                                                viewBox='0 0 20 16'
-                                                                                className='h-2.5 w-3'
-                                                                                aria-hidden='true'
-                                                                            >
-                                                                                <path
-                                                                                    d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                                    fill='#EF4444'
-                                                                                />
-                                                                            </svg>
-                                                                        )}
-                                                                    </span>
-                                                                    <span>
-                                                                        Salaire max :{' '}
-                                                                        {compactSalary(
-                                                                            slot.demandMaxSalary,
-                                                                        )}
-                                                                    </span>
-                                                                </li>
-                                                            )}
-                                                            {slot.demandMaxAge != null && (
-                                                                <li className='flex items-center gap-1'>
-                                                                    <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                                        {slot.enforceDemandMaxAge && (
-                                                                            <svg
-                                                                                viewBox='0 0 20 16'
-                                                                                className='h-2.5 w-3'
-                                                                                aria-hidden='true'
-                                                                            >
-                                                                                <path
-                                                                                    d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                                    fill='#EF4444'
-                                                                                />
-                                                                            </svg>
-                                                                        )}
-                                                                    </span>
-                                                                    <span>
-                                                                        Âge max :{' '}
-                                                                        {slot.demandMaxAge}
-                                                                    </span>
-                                                                </li>
-                                                            )}
-                                                            {slot.demandMinPointsLastYear !=
-                                                                null && (
-                                                                    <li className='flex items-center gap-1'>
-                                                                        <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                                            {slot.enforceDemandMinPointsLastYear && (
-                                                                                <svg
-                                                                                    viewBox='0 0 20 16'
-                                                                                    className='h-2.5 w-3'
-                                                                                    aria-hidden='true'
-                                                                                >
-                                                                                    <path
-                                                                                        d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                                        fill='#EF4444'
-                                                                                    />
-                                                                                </svg>
-                                                                            )}
-                                                                        </span>
-                                                                        <span>
-                                                                            Points min (an dernier) :{' '}
-                                                                            {
-                                                                                slot.demandMinPointsLastYear
-                                                                            }
-                                                                        </span>
-                                                                    </li>
-                                                                )}
-                                                            {slot.demandMinContractYears ==
-                                                                null &&
-                                                                slot.demandMaxSalary ==
-                                                                null &&
-                                                                slot.demandMaxAge == null &&
-                                                                slot.demandMinPointsLastYear ==
-                                                                null && (
-                                                                    <li className='italic opacity-70'>
-                                                                        Aucun critère
-                                                                        particulier
-                                                                    </li>
-                                                                )}
-                                                        </ul>
-
-                                                        {/* Response picker: a
-                                                    single button that
-                                                    opens the roster
-                                                    popup in pick mode.
-                                                    Only shown when the
-                                                    offer is not the
-                                                    user's own and his
-                                                    roster is loaded. */}
-                                                        {canRespond && (
-                                                            <button
-                                                                type='button'
-                                                                onClick={() =>
-                                                                    requestPickForSlot(
-                                                                        slot,
-                                                                    )
-                                                                }
-                                                                disabled={
-                                                                    onRequestPlayerPick ==
-                                                                    null ||
-                                                                    rightTeamId ==
-                                                                    null
-                                                                }
-                                                                className='mt-1 w-fit cursor-pointer rounded bg-[#00E5FF] px-3 py-1 text-left text-xs font-semibold text-black transition-colors hover:brightness-110 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 md:text-sm'
-                                                                style={{
-                                                                    boxShadow: [
-                                                                        '0 0 4px rgba(0, 229, 255, 0.9)',
-                                                                        '0 0 10px rgba(0, 229, 255, 0.5)',
-                                                                        '0 0 18px rgba(0, 229, 255, 0.2)',
-                                                                        'inset 0 0 2px rgba(0, 229, 255, 0.4)',
-                                                                    ].join(', '),
-                                                                }}
-                                                            >
-                                                                Choisir un joueur
-                                                            </button>
-                                                        )}
-                                            </>
-                                        )}
-                                    </div>
+                                    {swapSides
+                                        ? offeringColumn
+                                        : respondingColumn}
                                 </div>
                             );
                         })}
@@ -5358,11 +5843,9 @@ function OfferCard({
                             <button
                                 type='button'
                                 disabled={respondBusy}
-                                onClick={() => {
-                                    // TODO: wire this to whatever the
-                                    // Modifier action should do. Kept
-                                    // as a no-op for now on purpose.
-                                }}
+                                onClick={() =>
+                                    onUseAsBase?.(offer, picks)
+                                }
                                 className='min-w-0 flex-1 cursor-pointer rounded-md border border-[#00C8FF] bg-transparent px-2 py-1 text-xs font-bold uppercase tracking-wide text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
                             >
                                 Utiliser comme base
@@ -5494,17 +5977,13 @@ function RosterPlayerRow({
     capContext,
     pendingPickRestore,
     pendingDirectPickRestore,
+    referencePlayerForRestore,
     currentPickedPlayerId,
     onClearPick,
     onAdd,
+    isReference = false,
 }: {
     entry: RosterEntry;
-    /**
-     * The team this roster belongs to. Passed down so the player
-     * Link can record which popup the user left, allowing
-     * MarketplacePage to reopen it when the user comes back from
-     * PlayerPage.
-     */
     teamId: number;
     teamName: string;
     positionFilter: PositionGroup;
@@ -5531,6 +6010,13 @@ function RosterPlayerRow({
   */
     pendingDirectPickRestore?: PendingDirectPickContext;
     /**
+     * RosterEntry-shaped snapshot of the player on the OTHER side
+     * of the trade slot, if any. Carried through every player
+     * Link's restore payload so the popup reopens with its sticky
+     * reference card still rendered after a PlayerPage round-trip.
+     */
+    referencePlayerForRestore?: RosterEntry | null;
+    /**
      * Player id of the current pick in the slot on the side being
      * picked, or null when the side is empty. When this row's
      * player is the current pick, the green "Ajouter" button is
@@ -5547,11 +6033,18 @@ function RosterPlayerRow({
      */
     onClearPick?: () => void;
     /**
-     * When provided, renders a green "Ajouter" button on the left
-     * of the player content. Used by the roster popup's pick mode
-     * so the responder can add a player to the pending trade.
-     */
+  * When provided, renders a green "Ajouter" button on the left
+  * of the player content. Used by the roster popup's pick mode
+  * so the responder can add a player to the pending trade.
+  */
     onAdd?: () => void;
+    /**
+     * True when this row is the sticky reference card showing the
+     * player on the OTHER side of the trade slot. The row renders
+     * with a lighter blue background so it visually stands apart
+     * from the browsed team's own roster rows. Defaults to false.
+     */
+    isReference?: boolean;
 }) {
     const currentContractLabel =
         contractLabel(entry.currentContract) ??
@@ -5661,12 +6154,57 @@ function RosterPlayerRow({
     const rightOverCap =
         rightProjectedCapSpace != null && rightProjectedCapSpace < 0;
 
+    /**
+     * When the offer card that opened this popup is displaying the
+     * responder on the LEFT (swapSides = true on the cap context),
+     * the projection row must mirror that: the responder's team
+     * name and projected space go on the left, the creator's on
+     * the right.
+     *
+     * Only the visual positions flip. The math is unchanged —
+     * `leftProjectedCapSpace` is still the offer creator's
+     * projection, `rightProjectedCapSpace` is still the
+     * responder's — because those are derived from
+     * `capContext.leftTeamCapHit` / `capContext.rightTeamCapHit`
+     * and the creator/responder offered-salary fields, none of
+     * which change.
+     */
+    const swapSides = capContext?.swapSides === true;
+
+    const displayLeftTeamName = swapSides
+        ? capContext?.rightTeamName
+        : capContext?.leftTeamName;
+
+    const displayLeftSpace = swapSides
+        ? rightProjectedCapSpace
+        : leftProjectedCapSpace;
+
+    const displayLeftOver = swapSides
+        ? rightOverCap
+        : leftOverCap;
+
+    const displayRightTeamName = swapSides
+        ? capContext?.leftTeamName
+        : capContext?.rightTeamName;
+
+    const displayRightSpace = swapSides
+        ? leftProjectedCapSpace
+        : rightProjectedCapSpace;
+
+    const displayRightOver = swapSides
+        ? leftOverCap
+        : rightOverCap;
+
     return (
         <div
-            className='relative rounded-md border px-2 py-2'
+            className='relative rounded-md border px-2 py-1.5'
             style={{
-                borderColor: 'rgba(0, 168, 255, 0.2)',
-                backgroundColor: 'rgba(0, 168, 255, 0.03)',
+                borderColor: isReference
+                    ? 'rgba(239, 68, 68, 0.7)'
+                    : 'rgba(0, 168, 255, 0.2)',
+                backgroundColor: isReference
+                    ? 'rgba(0, 168, 255, 0.24)'
+                    : 'rgba(0, 168, 255, 0.03)',
             }}
         >
             {onClearPick != null &&
@@ -5710,7 +6248,7 @@ function RosterPlayerRow({
                  * width and the logo would drift with the name length.
                  */}
                 <div
-                    className='grid w-full items-start text-left text-sm leading-none text-foreground md:text-base'
+                    className='grid w-full items-start text-left text-sm leading-none text-foreground md:text-base mb-1'
                     style={{
                         gridTemplateColumns:
                             '18% 12% 11% 11% 15% 22% 11%',
@@ -5760,6 +6298,8 @@ function RosterPlayerRow({
                                     pickContext: pendingPickRestore,
                                     directPickContext:
                                         pendingDirectPickRestore,
+                                    referencePlayer:
+                                        referencePlayerForRestore,
                                 })
                             }
                             className='truncate font-semibold text-foreground transition-colors hover:text-[#00E5FF]'
@@ -5809,54 +6349,54 @@ function RosterPlayerRow({
                 )}
 
                 {capContext &&
-                    leftProjectedCapSpace != null &&
-                    rightProjectedCapSpace != null && (
-                        <div className='mt-1 flex w-full items-center justify-between gap-2 text-xs font-semibold tabular-nums md:text-sm'>
-                        <div className='flex min-w-0 items-center gap-1'>
-                            <span className='truncate text-[#00E5FF]'>
-                                {capContext.leftTeamName}
-                            </span>
-                            <span
-                                aria-hidden='true'
-                                className='shrink-0 text-white'
-                            >
-                                →
-                            </span>
-                            <span
-                                className={`shrink-0 ${leftOverCap
-                                    ? 'text-[#EF4444]'
-                                    : 'text-white'
-                                    }`}
-                            >
-                                {compactSalary(
-                                    leftProjectedCapSpace,
-                                )}{' '}
-                                $
-                            </span>
-                        </div>
+                    displayLeftSpace != null &&
+                    displayRightSpace != null && (
+                        <div className='mt-0.5 flex w-full items-center justify-between gap-2 text-sm font-semibold tabular-nums md:text-base'>
+                            <div className='flex min-w-0 items-center gap-1'>
+                                <span className='truncate text-[#00E5FF]'>
+                                    {displayLeftTeamName}
+                                </span>
+                                <span
+                                    aria-hidden='true'
+                                    className='shrink-0 text-white'
+                                >
+                                    →
+                                </span>
+                                <span
+                                    className={`shrink-0 ${displayLeftOver
+                                        ? 'text-[#EF4444]'
+                                        : 'text-white'
+                                        }`}
+                                >
+                                    {compactSalary(
+                                        displayLeftSpace,
+                                    )}{' '}
+                                    $
+                                </span>
+                            </div>
 
-                        <div className='flex min-w-0 items-center gap-1'>
-                            <span
-                                className={`shrink-0 ${rightOverCap
-                                    ? 'text-[#EF4444]'
-                                    : 'text-white'
-                                    }`}
-                            >
-                                {compactSalary(
-                                    rightProjectedCapSpace,
-                                )}{' '}
-                                $
-                            </span>
-                            <span
-                                aria-hidden='true'
-                                className='shrink-0 text-white'
-                            >
-                                ←
-                            </span>
-                            <span className='truncate text-[#00E5FF]'>
-                                {capContext.rightTeamName}
-                            </span>
-                        </div>
+                            <div className='flex min-w-0 items-center gap-1'>
+                                <span
+                                    className={`shrink-0 ${displayRightOver
+                                        ? 'text-[#EF4444]'
+                                        : 'text-white'
+                                        }`}
+                                >
+                                    {compactSalary(
+                                        displayRightSpace,
+                                    )}{' '}
+                                    $
+                                </span>
+                                <span
+                                    aria-hidden='true'
+                                    className='shrink-0 text-white'
+                                >
+                                    ←
+                                </span>
+                                <span className='truncate text-[#00E5FF]'>
+                                    {displayRightTeamName}
+                                </span>
+                            </div>
                         </div>
                     )}
             </div>
@@ -5888,6 +6428,9 @@ function ManagerRosterPopup({
     offerId,
     directPickInfo,
     currentPickedPlayerId,
+    pinnedPlayerId,
+    referencePlayer,
+    excludedPlayerIds,
     onPlayerPick,
     onClearPick,
     onClose,
@@ -5974,6 +6517,45 @@ function ManagerRosterPopup({
      * the current pick from the slot.
      */
     onClearPick?: () => void;
+    /**
+  * Player id to feature at the top of the roster list. When
+  * set, the popup:
+  *   - on first load, switches its position segmented control
+  *     to that player's position;
+  *   - renders that player's card above every section, while
+  *     the rest of the list keeps its normal sort by fantasy
+  *     points.
+  *
+  * Set by Créer to the currently picked player on the side
+  * being picked, so a user who clicked on a picked player to
+  * review or change the pick immediately sees that player.
+  *
+  * Undefined when the popup is not in a context that pins a
+  * player (Voir les offres, plain browse, or an empty slot).
+  */
+        pinnedPlayerId?: number | null;
+        /**
+         * Player from the OTHER side of the trade slot. When set, the
+         * popup renders his card in a fixed strip below the segmented
+         * position filter and above the scrollable roster, so the user
+         * can keep his stats and contracts in view while searching for
+         * a player to offer in return.
+         *
+         * Null when the other side of the slot has no player picked —
+         * the popup then opens exactly like before.
+         */
+        referencePlayer?: RosterEntry | null;
+    /**
+     * Player ids to hide from the roster list. Set by Créer to
+     * every player already committed to another slot of the same
+     * trade, on the same side, so the user cannot pick the same
+     * player twice.
+     *
+     * Undefined or empty when there is nothing to exclude. The
+     * pinned player is never included here by construction — the
+     * caller skips the current slot.
+     */
+    excludedPlayerIds?: number[];
     onClose: () => void;
 }) {
     const [roster, setRoster] = useState<TeamRoster | null>(null);
@@ -5990,6 +6572,78 @@ function ManagerRosterPopup({
         useState<PositionGroup>(
             lockedPosition ?? initialPositionFilter ?? 'F',
         );
+
+    /**
+     * Tracks which pinned player's initial position filter has
+     * already been applied, so the effect below only fires once
+     * per pinned player. Without this, a later manual change of
+     * the segmented control by the user would be overwritten.
+     */
+    const appliedPinnedFilterForRef = useRef<number | null>(null);
+
+    /**
+     * The player whose card is featured at the top of the list.
+     * Derived from the roster once it loads. Null when no
+     * pinnedPlayerId was passed, or when it does not match any
+     * roster entry.
+     */
+    const pinnedEntry = useMemo(() => {
+        if (pinnedPlayerId == null || !roster) return null;
+
+        return (
+            roster.entries.find(
+                (e) => e.playerId === pinnedPlayerId,
+            ) ?? null
+        );
+    }, [pinnedPlayerId, roster]);
+
+    /**
+     * Set form of excludedPlayerIds, for O(1) lookup inside the
+     * sections filter. Null when nothing is excluded, so the
+     * filter below can short-circuit on a plain reference check.
+     */
+    const excludedPlayerIdSet = useMemo(() => {
+        if (
+            excludedPlayerIds == null ||
+            excludedPlayerIds.length === 0
+        ) {
+            return null;
+        }
+
+        return new Set(excludedPlayerIds);
+    }, [excludedPlayerIds]);
+
+    /**
+     * On first load, switch the position segmented control to the
+     * pinned player's position, so the user immediately sees his
+     * group. If the popup is in pick mode and the slot dictated a
+     * locked position, that wins — by construction it is the same
+     * position as the pinned player, but using it keeps the
+     * popup's behaviour explicit.
+     *
+     * Fires only once per pinned player; a subsequent manual
+     * change of the segmented control by the user is respected.
+     */
+    useEffect(() => {
+        if (!pinnedEntry) return;
+        if (
+            appliedPinnedFilterForRef.current ===
+            pinnedEntry.playerId
+        ) {
+            return;
+        }
+
+        appliedPinnedFilterForRef.current =
+            pinnedEntry.playerId;
+
+        if (lockedPosition !== undefined) {
+            setPositionFilter(lockedPosition);
+        } else {
+            setPositionFilter(
+                toPositionGroup(pinnedEntry.position),
+            );
+        }
+    }, [pinnedEntry, lockedPosition]);
 
     /**
      * Close handler. Clears any pending restore so the popup does
@@ -6070,6 +6724,26 @@ function ManagerRosterPopup({
 
         const filteredEntries = roster.entries.filter(
             (entry) => {
+                // The pinned player is rendered separately at the
+                // top of the list, so exclude him here even when
+                // he would otherwise match the filter.
+                if (
+                    pinnedEntry != null &&
+                    entry.playerId === pinnedEntry.playerId
+                ) {
+                    return false;
+                }
+
+                // Hide players already committed to another slot
+                // of the same trade, on the same side, so the user
+                // cannot pick the same player twice.
+                if (
+                    excludedPlayerIdSet != null &&
+                    excludedPlayerIdSet.has(entry.playerId)
+                ) {
+                    return false;
+                }
+
                 if (
                     toPositionGroup(entry.position) !==
                     positionFilter
@@ -6128,7 +6802,13 @@ function ManagerRosterPopup({
         }
 
         return grouped;
-    }, [roster, positionFilter, filterSlot]);
+    }, [
+        roster,
+        positionFilter,
+        filterSlot,
+        pinnedEntry,
+        excludedPlayerIdSet,
+    ]);
 
     /**
      * What the player-name Link saves to the popup-restore store
@@ -6167,6 +6847,57 @@ function ManagerRosterPopup({
             }
             : undefined;
 
+    /**
+  * Renders one roster row with all the props shared by the
+  * pinned card and the section cards. Kept as a helper so the
+  * two render paths cannot drift apart.
+  *
+  * When `isReference` is true, the row is the sticky snapshot of
+  * the player on the other side of the trade slot. It suppresses
+  * the Ajouter/Retirer buttons (they only make sense for the
+  * browsed team's own candidates) and the cap projection row (it
+  * would simulate picking the reference player, which is
+  * meaningless — he is not a candidate).
+  */
+    const renderRosterRow = (
+        entry: RosterEntry,
+        isReference = false,
+    ) => (
+        <RosterPlayerRow
+            key={entry.id}
+            entry={entry}
+            teamId={teamId}
+            teamName={teamName}
+            positionFilter={positionFilter}
+            capContext={
+                isReference ? undefined : effectiveCapContext
+            }
+            pendingPickRestore={pendingPickRestore}
+            pendingDirectPickRestore={pendingDirectPickRestore}
+            referencePlayerForRestore={referencePlayer}
+            currentPickedPlayerId={
+                isReference ? undefined : currentPickedPlayerId
+            }
+            onClearPick={
+                !isReference && onClearPick
+                    ? () => {
+                        onClearPick();
+                        handleClose();
+                    }
+                    : undefined
+            }
+            onAdd={
+                !isReference && onPlayerPick
+                    ? () => {
+                        onPlayerPick(entry.playerId);
+                        handleClose();
+                    }
+                    : undefined
+            }
+            isReference={isReference}
+        />
+    );
+
     return createPortal(
         <div
             className='fixed inset-0 z-[100] flex items-center justify-center p-4'
@@ -6176,14 +6907,14 @@ function ManagerRosterPopup({
             aria-modal='true'
             aria-label={`Alignement de ${teamName}`}
         >
-                       <div
+            <div
                 className='relative flex flex-col overflow-hidden rounded-lg'
                 onClick={(e) => e.stopPropagation()}
                 style={{
                     width: '90vw',
-                    height: '90vh',
+                    height: '95vh',
                     maxWidth: '1400px',
-                    maxHeight: '1400px',
+                    maxHeight: '1500px',
                     backgroundColor: FRAME_BG,
                     border: `${OFFER_TUBE_PX}px solid ${OFFER_TUBE_COLOR}`,
                     boxShadow: [
@@ -6323,6 +7054,20 @@ function ManagerRosterPopup({
                     </div>
                 </div>
 
+                {referencePlayer && (
+                    <div
+                        className='shrink-0 border-b px-2 py-2 md:px-3'
+                        style={{
+                            borderColor: 'rgba(0, 168, 255, 0.2)',
+                        }}
+                    >
+                        <div className='mb-1 text-center text-[0.55rem] font-bold uppercase tracking-widest text-[#EF4444] md:text-[0.6rem]'>
+                            Joueur de l'autre équipe
+                        </div>
+                        {renderRosterRow(referencePlayer, true)}
+                    </div>
+                )}
+
                 <div className='flex-1 overflow-y-auto p-2 md:p-3'>
                     {loading && (
                         <p className='py-4 text-center text-sm text-muted-foreground'>
@@ -6336,12 +7081,22 @@ function ManagerRosterPopup({
                         </p>
                     )}
 
-                    {!loading && !error && sections.length === 0 && (
-                        <p className='py-4 text-center text-sm text-muted-foreground'>
-                            {roster != null && roster.entries.length > 0
-                                ? 'Aucun joueur à ce poste.'
-                                : 'Aucun joueur dans cette équipe.'}
-                        </p>
+                    {!loading &&
+                        !error &&
+                        sections.length === 0 &&
+                        pinnedEntry == null && (
+                            <p className='py-4 text-center text-sm text-muted-foreground'>
+                                {roster != null &&
+                                    roster.entries.length > 0
+                                    ? 'Aucun joueur à ce poste.'
+                                    : 'Aucun joueur dans cette équipe.'}
+                            </p>
+                        )}
+
+                    {pinnedEntry && (
+                        <div className='mb-3'>
+                            {renderRosterRow(pinnedEntry)}
+                        </div>
                     )}
 
                     {sections.map((section, sIdx) => (
@@ -6350,7 +7105,7 @@ function ManagerRosterPopup({
                             className={sIdx > 0 ? 'mt-3' : ''}
                         >
                             <div className='mb-2 flex justify-center'>
-                                <span className='px-3 py-0.5 text-[0.75rem] font-bold uppercase tracking-widest text-[#00E5FF] md:text-sm'>
+                                <span className='px-3 py-0.5 text-sm font-bold uppercase tracking-widest text-[#00E5FF] md:text-base'>
                                     {rosterStatusSectionLabel(
                                         section.status,
                                     )}
@@ -6358,43 +7113,9 @@ function ManagerRosterPopup({
                             </div>
 
                             <div className='space-y-2'>
-                                {section.entries.map((entry) => (
-                                    <RosterPlayerRow
-                                        key={entry.id}
-                                        entry={entry}
-                                        teamId={teamId}
-                                        teamName={teamName}
-                                        positionFilter={positionFilter}
-                                        capContext={effectiveCapContext}
-                                        pendingPickRestore={
-                                            pendingPickRestore
-                                        }
-                                        pendingDirectPickRestore={
-                                            pendingDirectPickRestore
-                                        }
-                                        currentPickedPlayerId={
-                                            currentPickedPlayerId
-                                        }
-                                        onClearPick={
-                                            onClearPick
-                                                ? () => {
-                                                    onClearPick();
-                                                    handleClose();
-                                                }
-                                                : undefined
-                                        }
-                                        onAdd={
-                                            onPlayerPick
-                                                ? () => {
-                                                    onPlayerPick(
-                                                        entry.playerId,
-                                                    );
-                                                    handleClose();
-                                                }
-                                                : undefined
-                                        }
-                                    />
-                                ))}
+                                {section.entries.map((entry) =>
+                                    renderRosterRow(entry),
+                                )}
                             </div>
                         </div>
                     ))}
@@ -6505,7 +7226,7 @@ function DirectOfferTeamPicker({
     return (
         <div
             ref={wrapperRef}
-            className='relative min-w-0 flex-1 scroll-mt-[calc(var(--header-height,4rem)+0.5rem)]'
+            className='relative w-full max-w-[10rem] min-w-0 scroll-mt-[calc(var(--header-height,4rem)+0.5rem)]'
         >
             <button
                 id='direct-offer-team'
@@ -6606,6 +7327,13 @@ interface DirectOfferPickRequest {
      */
     capContext?: TradeCapContext;
     /**
+     * Full roster entry of the player already picked on the OTHER
+     * side of this slot, if any. Forwarded to the roster popup so
+     * it can render a sticky reference card above the browsed
+     * team's list. Null when the other side of the slot is empty.
+     */
+    referencePlayer?: RosterEntry | null;
+    /**
      * Player id of the current pick in this slot on this side, or
      * null when the side is empty. Drives the "Retirer" button in
      * the popup.
@@ -6652,6 +7380,18 @@ function DirectOfferCard({
         useState<TeamRoster | null>(null);
     const [targetRoster, setTargetRoster] =
         useState<TeamRoster | null>(null);
+
+    /**
+     * Local submit state for the "Offrir" call. `submitting`
+     * disables the button while the request is in flight,
+     * `submitSuccess` / `submitError` render the small banner
+     * above the action row.
+     */
+    const [submitting, setSubmitting] = useState(false);
+    const [submitSuccess, setSubmitSuccess] =
+        useState<string | null>(null);
+    const [submitError, setSubmitError] =
+        useState<string | null>(null);
 
     /**
      * Slots and note come from the module-level draft store so
@@ -6778,6 +7518,85 @@ function DirectOfferCard({
         targetOfferedSalary -
         connectedOfferedSalary;
 
+    /**
+  * True when the connected team's post-trade cap space would
+  * be negative, i.e. the trade would push them over the salary
+  * cap.
+  *
+  * Guarded by `seasonSalaryCap > 0`: when the cap data has not
+  * loaded yet (fresh tab, roster still fetching), seasonSalaryCap
+  * is 0 and both base values collapse to (0 - 0) = 0, which would
+  * otherwise read as a bust if only one side was loaded. The
+  * guard keeps the button enabled until we actually have numbers
+  * to prove a violation.
+  */
+    const connectedBustsCap =
+        seasonSalaryCap > 0 && connectedAdjustedCapSpace < 0;
+
+    /**
+     * Same rule, for the target team.
+     */
+    const targetBustsCap =
+        seasonSalaryCap > 0 && targetAdjustedCapSpace < 0;
+
+    /**
+     * Number of slots with a player picked on the connected user's
+     * side, and on the target team's side. A direct offer must be
+     * a 1-for-1, 2-for-2, etc.: every player given up on one side
+     * must be matched by a player on the other.
+     */
+    const connectedPickedCount = useMemo(() => {
+        let count = 0;
+        for (const slot of slots) {
+            if (slot.offeringPlayerId != null) count++;
+        }
+        return count;
+    }, [slots]);
+
+    const targetPickedCount = useMemo(() => {
+        let count = 0;
+        for (const slot of slots) {
+            if (slot.targetPlayerId != null) count++;
+        }
+        return count;
+    }, [slots]);
+
+    /**
+     * True when the two sides of the draft do not have the same
+     * number of players picked. Includes the case where only one
+     * side has been filled so far.
+     */
+    const sidesUnbalanced =
+        connectedPickedCount !== targetPickedCount;
+
+    /**
+     * True when no player has been picked on either side. A trade
+     * with nothing in it is not offerable.
+     */
+    const noPlayersSelected =
+        connectedPickedCount === 0 && targetPickedCount === 0;
+
+    /**
+     * Single "cannot offer" flag, the OR of every blocking
+     * condition:
+     *
+     *   - capViolation      → the trade would push one side over
+     *                         the salary cap.
+     *   - noPlayersSelected → nothing has been drafted yet.
+     *   - sidesUnbalanced   → the number of players picked differs
+     *                         between the two sides (this also
+     *                         covers "one side empty, other side
+     *                         filled", which is not a valid trade).
+     *
+     * The "Offrir" button is disabled while this is true, and
+     * `handleOffer` re-checks it defensively so a stray activation
+     * can never slip a submission through.
+     */
+    const capViolation = connectedBustsCap || targetBustsCap;
+
+    const offerDisabled =
+        capViolation || noPlayersSelected || sidesUnbalanced;
+
     // NOTE: the "clear target picks on target team change" logic
     // used to live here as an effect on [targetTeamId]. It is now
     // handled inline by the picker's onSelect in MarketplacePage,
@@ -6818,10 +7637,69 @@ function DirectOfferCard({
         // new offer to the SAME manager he picked before. Only
         // the players and the message are cleared.
         resetDirectOfferSlotsAndNote();
+        setSubmitSuccess(null);
+        setSubmitError(null);
     }
 
-    function handleOffer() {
-        // TODO: send the offer to the backend.
+    async function handleOffer() {
+        // Defensive guard: the button is already disabled while
+        // `offerDisabled` is true, but a stray activation (keyboard,
+        // automation, or a future change that re-wires the click
+        // handler) must never be able to submit a trade that busts
+        // either team's cap, is empty, or has mismatched sides.
+        if (offerDisabled) return;
+        if (targetTeamId == null) return;
+        if (submitting) return;
+
+        // Build the request from the filled slots. Empty slots are
+        // already impossible here (the button is disabled unless
+        // both sides have the same, non-zero number of picks), but
+        // the filter keeps the request clean if that invariant ever
+        // changes.
+        const requestSlots = slots
+            .filter(
+                (s) =>
+                    s.offeringPlayerId != null &&
+                    s.targetPlayerId != null,
+            )
+            .map((s) => ({
+                connectedPlayerId: s.offeringPlayerId as number,
+                targetPlayerId: s.targetPlayerId as number,
+            }));
+
+        if (requestSlots.length === 0) return;
+
+        setSubmitting(true);
+        setSubmitError(null);
+        setSubmitSuccess(null);
+
+        try {
+            const result = await createDirectOffer({
+                targetTeamId,
+                slots: requestSlots,
+                note: note.trim() === '' ? null : note.trim(),
+            });
+
+            if (result.success) {
+                setSubmitSuccess(result.message);
+
+                // Reset the slots and the note. The selected target
+                // team is deliberately kept so the user can fire
+                // off another offer to the same manager without
+                // re-selecting him.
+                resetDirectOfferSlotsAndNote();
+            } else {
+                setSubmitError(result.message);
+            }
+        } catch (err) {
+            setSubmitError(
+                err instanceof Error
+                    ? err.message
+                    : 'Erreur lors de l\'envoi.',
+            );
+        } finally {
+            setSubmitting(false);
+        }
     }
 
     return (
@@ -7093,6 +7971,7 @@ function DirectOfferCard({
                                     lockedPosition,
                                     capContext:
                                         buildCapContext('left'),
+                                    referencePlayer: rightPicked,
                                     currentPickedPlayerId:
                                         slot.offeringPlayerId,
                                     onPick: (playerId) =>
@@ -7141,6 +8020,7 @@ function DirectOfferCard({
                                     lockedPosition,
                                     capContext:
                                         buildCapContext('right'),
+                                    referencePlayer: leftPicked,
                                     currentPickedPlayerId:
                                         slot.targetPlayerId,
                                     onPick: (playerId) =>
@@ -7354,22 +8234,41 @@ function DirectOfferCard({
                     />
                 </div>
 
+                {/* Success / error banners, matching the browse
+                    tab's "Offrir" feedback pattern. */}
+                {submitSuccess && (
+                    <p className='w-full rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-center text-xs text-emerald-400'>
+                        {submitSuccess}
+                    </p>
+                )}
+
+                {submitError && (
+                    <p className='w-full rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-center text-xs text-destructive'>
+                        {submitError}
+                    </p>
+                )}
+
                 {/* Action row — two buttons (no "Utiliser comme base") */}
                 <div className='flex flex-wrap items-stretch justify-center gap-1.5'>
                     <button
                         type='button'
+                        disabled={submitting}
                         onClick={handleReset}
-                        className='w-[7.2rem] self-stretch cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10'
+                        className='w-[7.2rem] self-stretch cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40'
                     >
                         Réinitialiser
                     </button>
 
                     <button
                         type='button'
+                        disabled={offerDisabled || submitting}
                         onClick={handleOffer}
-                        className='w-24 self-stretch cursor-pointer rounded-md bg-emerald-500 px-2 py-1 text-xs font-bold uppercase tracking-wide text-emerald-950 transition-colors hover:bg-emerald-400'
+                        className={`w-24 self-stretch rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${offerDisabled || submitting
+                            ? 'cursor-not-allowed bg-zinc-800 text-zinc-500'
+                            : 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
+                            }`}
                     >
-                        Offrir
+                        {submitting ? '...' : 'Offrir'}
                     </button>
                 </div>
             </div>

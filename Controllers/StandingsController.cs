@@ -60,15 +60,14 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         private async Task<List<StandingsRowDto>?> BuildStandingsAsync(
-            int? seasonId,
-            CancellationToken ct)
+        int? seasonId,
+        CancellationToken ct)
         {
             var season = seasonId.HasValue
                 ? await _dbContext.Seasons
                     .FirstOrDefaultAsync(s => s.Id == seasonId.Value, ct)
-                : await _dbContext.Seasons
-                    .OrderByDescending(s => s.StartDate)
-                    .FirstOrDefaultAsync(ct);
+                : await Data.SeasonQueries.GetCurrentSeasonAsync(
+                    _dbContext, ct);
 
             if (season == null)
             {

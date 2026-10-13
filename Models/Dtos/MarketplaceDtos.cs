@@ -327,6 +327,57 @@
     }
 
     // -----------------------------------------------------------------
+    // Direct offers ("Créer" tab)
+    //
+    // Unlike the marketplace flow (offer → response), a direct offer
+    // is a fully-specified trade proposal built by one manager and
+    // sent to another: BOTH sides of the exchange are already known
+    // at submit time.
+    //
+    // The backend models this as a TradeOffer owned by the TARGET
+    // team plus a TradeOfferResponse from the CONNECTED team, created
+    // in a single transaction. That way:
+    //   - the target manager sees it in his "Offres reçues" (the
+    //     only place he can Accept / Reject an offer), and
+    //   - the connected manager sees it in his "Offres envoyées"
+    //     (the only place he can Cancel it).
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// One slot of a direct offer. Both players are already chosen:
+    /// the connected user's player (what he offers) and the target
+    /// team's player (what he wants back).
+    /// </summary>
+    public class CreateDirectOfferSlotRequest
+    {
+        /// <summary>
+        /// Player on the calling user's roster. Becomes the responding
+        /// player on the synthesized TradeOfferResponse.
+        /// </summary>
+        public int ConnectedPlayerId { get; set; }
+
+        /// <summary>
+        /// Player on the target team's roster. Becomes the offering
+        /// player on the synthesized TradeOffer.
+        /// </summary>
+        public int TargetPlayerId { get; set; }
+    }
+
+    /// <summary>
+    /// Request body of POST /api/Marketplace/direct-offers.
+    /// </summary>
+    public class CreateDirectOfferRequest
+    {
+        /// <summary>The fantasy team the offer is addressed to.</summary>
+        public int TargetTeamId { get; set; }
+
+        /// <summary>One pair per slot. Order is preserved as SlotIndex.</summary>
+        public List<CreateDirectOfferSlotRequest> Slots { get; set; } = new();
+
+        public string? Note { get; set; }
+    }
+
+    // -----------------------------------------------------------------
     // Admin: accepted trades awaiting manual player swaps
     // -----------------------------------------------------------------
 

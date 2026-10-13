@@ -593,10 +593,8 @@ namespace NhlFantasyLeague.api.Services
 
             var teamId = user.FantasyTeamId.Value;
 
-            var season = await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync(ct);
+            var season = await Data.SeasonQueries.GetCurrentSeasonAsync(
+      _dbContext, ct);
 
             if (season == null)
             {
@@ -750,10 +748,8 @@ namespace NhlFantasyLeague.api.Services
                     "modifier.");
             }
 
-            var season = await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync(ct);
+            var season = await Data.SeasonQueries.GetCurrentSeasonAsync(
+       _dbContext, ct);
 
             if (season == null)
             {
@@ -1085,10 +1081,8 @@ offeredPlayerIds, ct);
                     $"{offerSlotsByIndex.Count} emplacement(s).");
             }
 
-            var season = await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync(ct);
+            var season = await Data.SeasonQueries.GetCurrentSeasonAsync(
+        _dbContext, ct);
 
             if (season == null)
             {
@@ -1170,6 +1164,255 @@ offeredPlayerIds, ct);
             await _dbContext.SaveChangesAsync(ct);
 
             var dto = await LoadResponseDtoAsync(response.Id, ct);
+
+            return new TradeOfferActionResultDto
+            {
+                Success = true,
+                Message = "Offre envoyee.",
+                Response = dto,
+            };
+        }
+
+        /// <summary>
+        /// Creates a direct offer from the calling user's team to a
+        /// specific target team. Unlike the marketplace flow, BOTH
+        /// sides of the trade are already decided at submit time.
+        ///
+        /// Implementation strategy: the target team is stored as the
+        /// TradeOffer's creator, and the calling user's team is
+        /// stored as the TradeOfferResponse's responder. This mapping
+        /// is the only one that makes the proposal actionable on
+        /// both ends:
+        ///
+        ///   - TradeOffer.CreatedByFantasyTeamId == target team
+        ///     ⟹ the offer shows up in the target team's
+        ///        "Offres reçues", which is where Accept / Reject
+        ///        live.
+        ///
+        ///   - TradeOfferResponse.RespondingFantasyTeamId ==
+        ///     calling user's team ⟹ the response shows up in the
+        ///     calling user's "Offres envoyées", which is where
+        ///     Cancel lives.
+        ///
+        /// The semantics are slightly off (the target manager
+        /// appears as the offer's creator even though he did not
+        /// create it), but the alternative — putting the calling
+        /// user as the creator — would leave the proposal stuck in
+        /// the wrong inbox on both sides.
+        ///
+        /// Everything is written in one SaveChanges for the offer
+        /// and one for the response, so a failure never leaves a
+        /// dangling offer with no response.
+        /// </summary>
+        public async Task<TradeOfferActionResultDto> CreateDirectOfferAsync(
+            int userId,
+            CreateDirectOfferRequest request,
+            CancellationToken ct = default)
+        {
+            // ---- 1. Resolve the calling user's team ------------------
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return Failure(
+                    "Vous devez avoir une equipe pour envoyer une offre.");
+            }
+
+            var connectedTeamId = user.FantasyTeamId.Value;
+
+            if (request.TargetTeamId == connectedTeamId)
+            {
+                return Failure(
+                    "Vous ne pouvez pas vous envoyer une offre a " +
+                    "vous-meme.");
+            }
+
+            // ---- 2. Target team must exist ---------------------------
+            var targetTeam = await _dbContext.FantasyTeams
+                .AsNoTracking()
+                .FirstOrDefaultAsync(
+                    t => t.Id == request.TargetTeamId, ct);
+
+            if (targetTeam == null)
+            {
+                return Failure("L'equipe cible est introuvable.");
+            }
+
+            // ---- 3. Slot shape ---------------------------------------
+            if (request.Slots == null || request.Slots.Count == 0)
+            {
+                return Failure(
+                    "Ajoutez au moins un joueur a votre offre.");
+            }
+
+            if (request.Slots.Count > 10)
+            {
+                return Failure("Maximum 10 joueurs par offre.");
+            }
+
+            // ---- 4. Current season -----------------------------------
+            var season = await Data.SeasonQueries.GetCurrentSeasonAsync(
+          _dbContext, ct);
+
+            if (season == null)
+            {
+                return Failure(
+                    "Aucune saison active. Lancez POST /api/League/setup.");
+            }
+
+            // ---- 5. Rosters for both sides ---------------------------
+            var connectedRoster = await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Include(e => e.Player)
+                .Where(e =>
+                    e.FantasyTeamId == connectedTeamId &&
+                    e.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            var targetRoster = await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Include(e => e.Player)
+                .Where(e =>
+                    e.FantasyTeamId == request.TargetTeamId &&
+                    e.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            var connectedByPlayerId = connectedRoster
+                .GroupBy(e => e.PlayerId)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var targetByPlayerId = targetRoster
+                .GroupBy(e => e.PlayerId)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            // ---- 6. Validate each slot -------------------------------
+            var seenConnected = new HashSet<int>();
+            var seenTarget = new HashSet<int>();
+
+            for (var i = 0; i < request.Slots.Count; i++)
+            {
+                var slot = request.Slots[i];
+
+                if (!seenConnected.Add(slot.ConnectedPlayerId))
+                {
+                    return Failure(
+                        "Le meme joueur ne peut pas apparaitre deux " +
+                        "fois dans votre offre.");
+                }
+
+                if (!seenTarget.Add(slot.TargetPlayerId))
+                {
+                    return Failure(
+                        "Le meme joueur de l'equipe cible ne peut pas " +
+                        "apparaitre deux fois dans l'offre.");
+                }
+
+                if (!connectedByPlayerId.TryGetValue(
+                        slot.ConnectedPlayerId, out var connectedEntry))
+                {
+                    return Failure(
+                        $"Le joueur {slot.ConnectedPlayerId} n'est " +
+                        "pas sur votre equipe pour la saison en cours.");
+                }
+
+                if (!targetByPlayerId.TryGetValue(
+                        slot.TargetPlayerId, out var targetEntry))
+                {
+                    return Failure(
+                        $"Le joueur {slot.TargetPlayerId} n'est pas " +
+                        "sur l'equipe cible pour la saison en cours.");
+                }
+
+                var connectedGroup = PositionGroupHelper.Classify(
+                    connectedEntry.Player?.Position);
+
+                var targetGroup = PositionGroupHelper.Classify(
+                    targetEntry.Player?.Position);
+
+                if (connectedGroup != targetGroup)
+                {
+                    return Failure(
+                        $"Les joueurs de l'emplacement {i + 1} ne " +
+                        "jouent pas a la meme position.");
+                }
+            }
+
+            // ---- 7. Create the TradeOffer ----------------------------
+            // Creator = target team (see the method doc for why).
+            // Offering players = the TARGET team's players, because
+            // they are what the offer's "left" side displays.
+            var offer = new TradeOffer
+            {
+                CreatedByFantasyTeamId = request.TargetTeamId,
+                SeasonId = season.Id,
+                CreatedAt = DateTime.UtcNow,
+                Note = string.IsNullOrWhiteSpace(request.Note)
+                    ? null
+                    : request.Note.Trim(),
+                Status = TradeOfferStatus.Active,
+            };
+
+            for (var i = 0; i < request.Slots.Count; i++)
+            {
+                var slot = request.Slots[i];
+                var targetEntry = targetByPlayerId[slot.TargetPlayerId];
+                var targetGroup = PositionGroupHelper.Classify(
+                    targetEntry.Player?.Position);
+
+                offer.Slots.Add(new TradeOfferSlot
+                {
+                    SlotIndex = i,
+                    PositionGroup = PositionGroupToCode(targetGroup),
+                    OfferingPlayerId = slot.TargetPlayerId,
+                    DemandMinContractYears = null,
+                    DemandMaxSalary = null,
+                    DemandMaxAge = null,
+                    DemandMinPointsLastYear = null,
+                    EnforceDemandMinContractYears = true,
+                    EnforceDemandMaxSalary = true,
+                    EnforceDemandMaxAge = true,
+                    EnforceDemandMinPointsLastYear = true,
+                });
+            }
+
+            _dbContext.TradeOffers.Add(offer);
+            await _dbContext.SaveChangesAsync(ct);
+
+            // ---- 8. Create the TradeOfferResponse --------------------
+            // Responder = connected user's team. Responding players =
+            // the CONNECTED user's players.
+            var response = new TradeOfferResponse
+            {
+                TradeOfferId = offer.Id,
+                RespondingFantasyTeamId = connectedTeamId,
+                CreatedAt = DateTime.UtcNow,
+                Status = TradeOfferResponseStatus.Pending,
+            };
+
+            for (var i = 0; i < request.Slots.Count; i++)
+            {
+                var slot = request.Slots[i];
+
+                response.Slots.Add(new TradeOfferResponseSlot
+                {
+                    SlotIndex = i,
+                    RespondingPlayerId = slot.ConnectedPlayerId,
+                });
+            }
+
+            _dbContext.TradeOfferResponses.Add(response);
+            await _dbContext.SaveChangesAsync(ct);
+
+            // ---- 9. Reload and return --------------------------------
+            var dto = await LoadResponseDtoAsync(response.Id, ct);
+
+            if (dto == null)
+            {
+                return Failure(
+                    "Offre creee mais impossible de la recharger.");
+            }
 
             return new TradeOfferActionResultDto
             {
@@ -2162,8 +2405,8 @@ CreatorTeamCapInfo? teamCapInfo = null)
         }
 
         private static bool PositionMatchesGroup(
-            PositionGroup group,
-            string pg)
+     PositionGroup group,
+     string pg)
         {
             var v = pg.Trim().ToUpperInvariant();
 
@@ -2173,6 +2416,25 @@ CreatorTeamCapInfo? teamCapInfo = null)
                 "D" => group == PositionGroup.Defense,
                 "G" => group == PositionGroup.Goalie,
                 _ => false,
+            };
+        }
+
+        /// <summary>
+        /// Inverse of <see cref="PositionMatchesGroup"/>: converts a
+        /// classified <see cref="PositionGroup"/> back to the single
+        /// character code stored on TradeOfferSlot.PositionGroup.
+        ///
+        /// Unknown positions collapse to "F", matching the frontend's
+        /// default and the PositionGroupHelper.Classify convention
+        /// that treats unclassifiable skaters as forwards.
+        /// </summary>
+        private static string PositionGroupToCode(PositionGroup group)
+        {
+            return group switch
+            {
+                PositionGroup.Defense => "D",
+                PositionGroup.Goalie => "G",
+                _ => "F",
             };
         }
 
@@ -2228,10 +2490,8 @@ CreatorTeamCapInfo? teamCapInfo = null)
                 return result;
             }
 
-            var season = await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync(ct);
+            var season = await Data.SeasonQueries.GetCurrentSeasonAsync(
+      _dbContext, ct);
 
             if (season == null)
             {

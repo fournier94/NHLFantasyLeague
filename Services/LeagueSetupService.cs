@@ -10,6 +10,11 @@ namespace NhlFantasyLeague.api.Services
     /// fantasy seasons, the fantasy teams and their active-season links.
     /// Every operation is idempotent: running the setup twice never creates
     /// duplicates and never crashes on the unique season code index.
+    ///
+    /// Also seeds the two tradeable drafts (for the 2026-2027 and
+    /// 2027-2028 seasons) and their picks. Every team starts with one
+    /// pick in each of five rounds, in team-id order. The real lottery
+    /// order can be applied later.
     /// </summary>
     public class LeagueSetupService
     {
@@ -69,8 +74,15 @@ namespace NhlFantasyLeague.api.Services
 
         // ----- OPTIONAL: next season (2027-2028) -----
         // Set CreateNextSeason to true and fill in the real 2027-2028 salary
-        // cap and floor when they are known. While false, the block below is
-        // completely skipped and no 2027-2028 season is created.
+        // cap and floor when they are known. While false, the block below
+        // is skipped in Step 2.
+        //
+        // NOTE: even when this is false, the 2027-2028 season is still
+        // created by the draft-seeding step at the bottom of this file,
+        // but with SalaryCap = 0 and SalaryFloor = 0. Anywhere the UI
+        // needs a number, a 0 cap falls back to the current season's cap,
+        // so nothing breaks. Flipping this to true is only about having
+        // the real cap/floor on file for the projection table.
         private static readonly bool CreateNextSeason = false;
         private const string NextSeasonName = "2027-2028";
         private const int NextSeasonNhlSeasonCode = 20272028;
@@ -81,6 +93,29 @@ namespace NhlFantasyLeague.api.Services
         // setting CreateNextSeason to true.
         private const decimal NextSeasonSalaryCap = 0m;
         private const decimal NextSeasonSalaryFloor = 0m;
+
+        // ----- Draft seasons -----
+        //
+        // League rules: only the next two drafts are ever tradeable, so
+        // this is intentionally a closed list of exactly two seasons.
+        //
+        // Both seasons are auto-created by the seeding step below if they
+        // do not already exist. The 2026-2027 season already exists (it
+        // is the current season, with its real cap and floor), so only
+        // 2027-2028 gets created by this step, with cap = 0 and floor = 0.
+        //
+        // No 2028-2029 season is created, and no draft exists for it:
+        // the league does not have access to those picks yet.
+        private static readonly (string Name, int Code)[] DraftSeasons = new[]
+        {
+            ("2026-2027", 20262027),
+            ("2027-2028", 20272028),
+        };
+
+        // Number of rounds each draft has. Every team gets one pick
+        // per round, so this is also the number of picks each team
+        // starts with.
+        private const int DraftRounds = 5;
 
         // ================================================================
         // ==================  END OF EDITABLE VALUES  ====================
@@ -98,8 +133,9 @@ namespace NhlFantasyLeague.api.Services
         }
 
         /// <summary>
-        /// Runs the full idempotent setup: league, seasons, fantasy teams and
-        /// their active-season links. Reports what was created and updated.
+        /// Runs the full idempotent setup: league, seasons, fantasy teams,
+        /// their active-season links, and the two tradeable drafts with
+        /// their seeded picks. Reports what was created and updated.
         /// </summary>
         /// <returns>A report listing everything the setup created or updated.</returns>
         /// <exception cref="InvalidOperationException">
@@ -204,10 +240,13 @@ namespace NhlFantasyLeague.api.Services
             // Save now so PostgreSQL generates the Season ids used below.
             await _dbContext.SaveChangesAsync();
 
-            // The current season is the one that starts the latest.
-            var currentSeason = await _dbContext.Seasons
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync();
+            // Resolve the current season by SeasonCodes.Current, not by
+            // "latest StartDate". The future draft seasons (2027-2028,
+            // etc.) have a later StartDate and would otherwise be
+            // picked on a second setup run, unlinking every team from
+            // its real season.
+            var currentSeason = await Data.SeasonQueries
+                .GetCurrentSeasonAsync(_dbContext);
 
             if (currentSeason == null)
             {
@@ -270,6 +309,125 @@ namespace NhlFantasyLeague.api.Services
 
             // Final save: writes the new FantasyTeamSeason rows.
             await _dbContext.SaveChangesAsync();
+
+            // ----- Step 5: ensure both draft seasons exist --------------
+            //
+            // The 2026-2027 season already exists with its real cap and
+            // floor (Step 2), so this loop only creates 2027-2028, with
+            // cap = 0 and floor = 0. The UI falls back to the current
+            // season's cap wherever a real number is required.
+            foreach (var (name, code) in DraftSeasons)
+            {
+                var existing = await _dbContext.Seasons
+                    .FirstOrDefaultAsync(s => s.NhlSeasonCode == code);
+
+                if (existing != null)
+                {
+                    continue;
+                }
+
+                var startYear = code / 10000;
+                var endYear = startYear + 1;
+
+                _dbContext.Seasons.Add(new Season
+                {
+                    Name = name,
+                    StartDate = new DateOnly(startYear, 10, 1),
+                    EndDate = new DateOnly(endYear, 6, 30),
+                    SalaryCap = 0m,
+                    SalaryFloor = 0m,
+                    NhlSeasonCode = code,
+                    LeagueId = league.Id
+                });
+
+                result.Created.Add(
+                    $"Season {name} created (for draft picks).");
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            // ----- Step 6: the drafts and their seeded picks ------------
+            var draftSeasonCodes = DraftSeasons
+                .Select(s => s.Code)
+                .ToList();
+
+            var draftSeasonRows = await _dbContext.Seasons
+                .Where(s => draftSeasonCodes.Contains(s.NhlSeasonCode))
+                .OrderBy(s => s.NhlSeasonCode)
+                .ToListAsync();
+
+            foreach (var draftSeason in draftSeasonRows)
+            {
+                var draft = await _dbContext.Drafts
+                    .FirstOrDefaultAsync(d =>
+                        d.SeasonId == draftSeason.Id);
+
+                if (draft == null)
+                {
+                    // A draft is held the summer before the season
+                    // starts, so July 1 of the season's start year.
+                    // The exact date can be edited later via the
+                    // admin page.
+                    var draftYear = draftSeason.NhlSeasonCode / 10000;
+
+                    draft = new Draft
+                    {
+                        SeasonId = draftSeason.Id,
+                        DraftDate = new DateTime(
+                            draftYear, 7, 1, 0, 0, 0,
+                            DateTimeKind.Utc),
+                        NumberOfRounds = DraftRounds
+                    };
+
+                    _dbContext.Drafts.Add(draft);
+                    await _dbContext.SaveChangesAsync();
+
+                    result.Created.Add(
+                        $"Draft for season {draftSeason.Name} created.");
+                }
+
+                // Seed picks only when the draft has none yet, so the
+                // whole setup is idempotent and trades on existing
+                // picks are never overwritten.
+                var existingPickCount = await _dbContext.DraftPicks
+                    .CountAsync(p => p.DraftId == draft.Id);
+
+                if (existingPickCount > 0)
+                {
+                    continue;
+                }
+
+                // Linear seeding: round 1 has one pick per team in
+                // team-id order, round 2 follows, etc. The real draft
+                // order is set later by lottery / final standings and
+                // can be adjusted by the commissioner.
+                var orderedTeams = teams
+                    .OrderBy(t => t.Id)
+                    .ToList();
+
+                foreach (var round in Enumerable.Range(1, DraftRounds))
+                {
+                    for (var i = 0; i < orderedTeams.Count; i++)
+                    {
+                        _dbContext.DraftPicks.Add(new DraftPick
+                        {
+                            DraftId = draft.Id,
+                            Round = round,
+                            PickNumber = i + 1,
+                            OriginalOwnerFantasyTeamId =
+                                orderedTeams[i].Id,
+                            CurrentOwnerFantasyTeamId =
+                                orderedTeams[i].Id
+                        });
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync();
+
+                result.Created.Add(
+                    $"Draft picks seeded for {draftSeason.Name} " +
+                    $"({orderedTeams.Count} teams x {DraftRounds} rounds).");
+            }
 
             result.Summary =
                 $"Setup complete: {result.Created.Count} created, " +
@@ -383,7 +541,9 @@ namespace NhlFantasyLeague.api.Services
                 }
             };
 
-            // The 2027-2028 season is only included when CreateNextSeason is true.
+            // The 2027-2028 season is only included when CreateNextSeason is
+            // true. (When false, it is still created later by the draft-
+            // seeding step, but with cap = 0 and floor = 0.)
             if (CreateNextSeason)
             {
                 definitions.Add(new SeasonDefinition

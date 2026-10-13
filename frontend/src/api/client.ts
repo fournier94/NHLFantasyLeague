@@ -819,6 +819,84 @@ export function getStandings(seasonId?: number): Promise<StandingsRow[]> {
 }
 
 // ---------------------------------------------------------------------
+// Draft picks
+//
+// Read-only. Each pick is a single round pick in a single draft.
+// A team with the full 5 picks for both 2027 and 2028 sees 10 rows.
+// ---------------------------------------------------------------------
+
+/**
+ * One draft pick currently owned by a fantasy team.
+ */
+export interface DraftPick {
+    id: number;
+    draftId: number;
+
+    /** Year of the draft, e.g. 2027. */
+    draftYear: number;
+
+    /** NHL season code the draft belongs to, e.g. 20272028. */
+    nhlSeasonCode: number;
+
+    /** Display name of the season, e.g. "2027-2028". */
+    seasonName: string;
+
+    /** Round number, 1-based. */
+    round: number;
+
+    /** Position within the round, 1-based. */
+    pickNumber: number;
+
+    originalOwnerFantasyTeamId: number;
+    originalOwnerFantasyTeamName: string;
+
+    currentOwnerFantasyTeamId: number;
+
+    /**
+     * True when the pick has never been traded away from its original
+     * owner. When false, the card shows where it came from.
+     */
+    isOriginallyOwned: boolean;
+}
+
+/**
+ * Returns every draft pick currently owned by the given fantasy team.
+ *
+ * Cached client-side for 60 seconds so toggling between Lineup /
+ * Masse salariale / Repêchage does not refetch on every switch. The
+ * data only changes when the commissioner seeds new picks or trades
+ * them.
+ */
+export function getTeamDraftPicks(
+    fantasyTeamId: number,
+): Promise<DraftPick[]> {
+    return apiGet<DraftPick[]>(
+        `/DraftPick/team/${fantasyTeamId}`,
+        { cacheTtlMs: 60_000 },
+    );
+}
+
+/**
+ * Swaps the current owner of two draft picks. Commissioner-only.
+ *
+ * Both picks must exist, must be different, and must currently belong
+ * to two different teams. Original owner is not modified.
+ *
+ * The POST goes through apiPost, which clears the client-side GET
+ * cache on success, so the next getTeamDraftPicks call for either
+ * team refetches.
+ */
+export function swapDraftPicks(
+    pickAId: number,
+    pickBId: number,
+): Promise<{ message: string }> {
+    return apiPost<{ message: string }>(
+        '/DraftPick/swap',
+        { pickAId, pickBId },
+    );
+}
+
+// ---------------------------------------------------------------------
 // Player detail (GET /api/NhlPlayerDetail/{nhlPlayerId})
 // ---------------------------------------------------------------------
 
@@ -1968,6 +2046,48 @@ export function respondToTradeOffer(
 ): Promise<RespondToTradeOfferResult> {
     return apiPost<RespondToTradeOfferResult>(
         `/Marketplace/offers/${offerId}/respond`,
+        request,
+    );
+}
+
+// ---------------------------------------------------------------------
+// Direct offers ("Créer" tab)
+//
+// A direct offer is a fully-specified trade proposal built by one
+// manager and sent straight to another, without going through the
+// public marketplace. The backend records it as a TradeOffer owned
+// by the TARGET team plus a TradeOfferResponse from the CONNECTED
+// team, so it lands in the target's "Reçues" (actionable) and in
+// the connected user's "Envoyées" (cancellable).
+// ---------------------------------------------------------------------
+
+/** One pair inside a direct offer: what each side gives up. */
+export interface CreateDirectOfferSlotRequest {
+    /** Player on the calling user's roster (what he offers). */
+    connectedPlayerId: number;
+
+    /** Player on the target team's roster (what he wants). */
+    targetPlayerId: number;
+}
+
+/** Body of POST /api/Marketplace/direct-offers. */
+export interface CreateDirectOfferRequest {
+    targetTeamId: number;
+    slots: CreateDirectOfferSlotRequest[];
+    note?: string | null;
+}
+
+/**
+ * Sends a direct trade offer from the calling user's team to the
+ * given target team. Returns the same result shape as
+ * `respondToTradeOffer`, since the backend creates a response in
+ * the same transaction.
+ */
+export function createDirectOffer(
+    request: CreateDirectOfferRequest,
+): Promise<RespondToTradeOfferResult> {
+    return apiPost<RespondToTradeOfferResult>(
+        '/Marketplace/direct-offers',
         request,
     );
 }

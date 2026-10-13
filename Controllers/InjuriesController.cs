@@ -87,10 +87,8 @@ namespace NhlFantasyLeague.api.Controllers
 
             // Current-season roster lookup, one query, used to attach
             // fantasy-team info without N+1.
-            var currentSeason = await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync(ct);
+            var currentSeason = await Data.SeasonQueries
+                .GetCurrentSeasonAsync(_dbContext, ct);
 
             var rosterLookup = new Dictionary<int, RosterEntry>();
 

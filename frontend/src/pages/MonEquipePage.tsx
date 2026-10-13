@@ -1,6 +1,14 @@
 ﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { getLeagueTeams, getTeamRoster, type FantasyTeam, type RosterEntry, type TeamRoster } from '@/api/client';
+import {
+    getLeagueTeams,
+    getTeamDraftPicks,
+    getTeamRoster,
+    type DraftPick,
+    type FantasyTeam,
+    type RosterEntry,
+    type TeamRoster,
+} from '@/api/client';
 import { RosterSection } from '@/components/roster/RosterSection';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { useAura } from '@/lib/auraContext';
@@ -593,9 +601,9 @@ export default function MonEquipePage() {
     const [isTeamPickerOpen, setIsTeamPickerOpen] = useState(false);
     const teamPickerRef = useRef<HTMLDivElement>(null);
 
-    const [activeView, setActiveView] = useState<'lineup' | 'cap'>(
-        'lineup',
-    );
+    const [activeView, setActiveView] = useState<
+        'lineup' | 'cap' | 'draft'
+    >('lineup');
 
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
 
@@ -610,6 +618,12 @@ export default function MonEquipePage() {
     const [roster, setRoster] = useState<TeamRoster | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+
+    const [draftPicks, setDraftPicks] = useState<DraftPick[] | null>(null);
+    const [draftPicksLoading, setDraftPicksLoading] = useState(false);
+    const [draftPicksError, setDraftPicksError] = useState<string | null>(
+        null,
+    );
 
     const trackAura = useAura('capBarTrack');
     const neonAura = useAura('teamPickerLabel');
@@ -862,6 +876,46 @@ export default function MonEquipePage() {
             cancelled = true;
         };
     }, [teamId]);
+
+    // Fetch the draft picks for the current team whenever the
+    // Repêchage view is active. The client-side GET cache in
+    // client.ts makes a re-fetch on every toggle effectively free
+    // (same URL within 60 s returns the cached response), so we do
+    // not need to guard against re-fetching here.
+    useEffect(() => {
+        if (activeView !== 'draft') return;
+        if (teamId == null) return;
+
+        let cancelled = false;
+
+        setDraftPicksLoading(true);
+        setDraftPicksError(null);
+
+        getTeamDraftPicks(teamId)
+            .then((data) => {
+                if (!cancelled) {
+                    setDraftPicks(data);
+                }
+            })
+            .catch((err) => {
+                if (!cancelled) {
+                    setDraftPicksError(
+                        err instanceof Error
+                            ? err.message
+                            : 'Impossible de charger vos choix de repêchage.',
+                    );
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setDraftPicksLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeView, teamId]);
 
     useEffect(() => {
         if (!roster) {
@@ -1132,7 +1186,7 @@ export default function MonEquipePage() {
                         <button
                             type='button'
                             onClick={() => setActiveView('lineup')}
-                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-all duration-200 ${activeView === 'lineup'
+                            className={`flex-1 cursor-pointer rounded-full px-2.5 py-0.5 text-xs font-bold transition-all duration-200 ${activeView === 'lineup'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -1153,7 +1207,7 @@ export default function MonEquipePage() {
                         <button
                             type='button'
                             onClick={() => setActiveView('cap')}
-                            className={`flex-1 cursor-pointer rounded-full px-3 py-0.5 text-sm font-bold transition-all duration-200 ${activeView === 'cap'
+                            className={`flex-1 cursor-pointer rounded-full px-2.5 py-0.5 text-xs font-bold transition-all duration-200 ${activeView === 'cap'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -1169,6 +1223,27 @@ export default function MonEquipePage() {
                             }
                         >
                             Masse salariale
+                        </button>
+
+                        <button
+                            type='button'
+                            onClick={() => setActiveView('draft')}
+                            className={`flex-1 cursor-pointer rounded-full px-2.5 py-0.5 text-xs font-bold transition-all duration-200 ${activeView === 'draft'
+                                ? 'bg-white text-[#1D1B61]'
+                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
+                                }`}
+                            style={
+                                activeView === 'draft'
+                                    ? {
+                                        boxShadow:
+                                            '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                        textShadow:
+                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                    }
+                                    : undefined
+                            }
+                        >
+                            Repêchage
                         </button>
                     </div>
                 </div>
@@ -1252,6 +1327,123 @@ export default function MonEquipePage() {
                             );
                         })}
                     </div>
+                </div>
+            )}
+
+            {activeView === 'draft' && (
+                <div className='mt-7 w-full space-y-4'>
+                    {draftPicksLoading && draftPicks == null && (
+                        <p className='text-center text-sm text-muted-foreground'>
+                            Chargement des choix de repêchage...
+                        </p>
+                    )}
+
+                    {draftPicksError && (
+                        <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                            {draftPicksError}
+                        </p>
+                    )}
+
+                    {draftPicks != null && draftPicks.length === 0 && (
+                        <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
+                            Vous n'avez aucun choix de repêchage.
+                        </p>
+                    )}
+
+                    {draftPicks != null && draftPicks.length > 0 && (() => {
+                        const grouped = new Map<number, DraftPick[]>();
+
+                        for (const p of draftPicks) {
+                            const list =
+                                grouped.get(p.nhlSeasonCode) ?? [];
+                            list.push(p);
+                            grouped.set(p.nhlSeasonCode, list);
+                        }
+
+                        const seasonCodes = Array.from(
+                            grouped.keys(),
+                        ).sort((a, b) => a - b);
+
+                        return seasonCodes.map((code) => {
+                            const picks = [
+                                ...(grouped.get(code) ?? []),
+                            ].sort(
+                                (a, b) =>
+                                    a.round - b.round ||
+                                    a.pickNumber - b.pickNumber,
+                            );
+
+                            const seasonName =
+                                picks[0]?.seasonName ?? String(code);
+
+                            return (
+                                <div
+                                    key={code}
+                                    className='overflow-hidden rounded-lg border'
+                                    style={{
+                                        borderColor:
+                                            'rgba(51, 187, 255, 0.6)',
+                                        backgroundColor: '#050A16',
+                                    }}
+                                >
+                                    <div
+                                        className='border-b px-3 py-2 text-center text-sm font-bold uppercase tracking-wider text-white'
+                                        style={{
+                                            borderColor:
+                                                'rgba(51, 187, 255, 0.35)',
+                                            background:
+                                                'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
+                                        }}
+                                    >
+                                        Repêchage {seasonName}
+                                    </div>
+
+                                    <div>
+                                        {picks.map((p) => (
+                                            <div
+                                                key={p.id}
+                                                className='flex items-center justify-between border-b px-3 py-2 text-sm last:border-b-0'
+                                                style={{
+                                                    borderColor:
+                                                        'rgba(51, 187, 255, 0.12)',
+                                                }}
+                                            >
+                                                <div className='flex items-center gap-3'>
+                                                    <span
+                                                        className='font-semibold'
+                                                        style={{
+                                                            color: '#00E5FF',
+                                                        }}
+                                                    >
+                                                        Ronde {p.round}
+                                                    </span>
+
+                                                    <span className='text-white'>
+                                                        Choix{' '}
+                                                        {p.pickNumber}
+                                                    </span>
+                                                </div>
+
+                                                {!p.isOriginallyOwned && (
+                                                    <span
+                                                        className='text-xs italic'
+                                                        style={{
+                                                            color: '#FFC72C',
+                                                        }}
+                                                    >
+                                                        de{' '}
+                                                        {
+                                                            p.originalOwnerFantasyTeamName
+                                                        }
+                                                    </span>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        });
+                    })()}
                 </div>
             )}
         </section>
