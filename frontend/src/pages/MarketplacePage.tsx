@@ -4194,7 +4194,7 @@ function SlotPlayerBlock({
             />
 
             {currentContractLabel && (
-                <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.8rem] leading-none font-semibold text-emerald-400 md:text-[0.85rem]'>
+                <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.7rem] leading-none font-semibold text-emerald-400 md:text-[0.75rem]'>
                     <span className='whitespace-nowrap'>
                         {currentContractLabel}
                     </span>
@@ -4454,7 +4454,7 @@ function RespondingPlayerBlock({
                     />
 
                     {currentContractLabel && (
-                        <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.8rem] leading-none font-semibold text-emerald-400 md:text-[0.85rem]'>
+                        <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.7rem] leading-none font-semibold text-emerald-400 md:text-[0.75rem]'>
                             <span className='whitespace-nowrap'>
                                 {currentContractLabel}
                             </span>
