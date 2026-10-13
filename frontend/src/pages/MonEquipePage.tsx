@@ -1417,11 +1417,6 @@ export default function MonEquipePage() {
                                                     >
                                                         Ronde {p.round}
                                                     </span>
-
-                                                    <span className='text-white'>
-                                                        Choix{' '}
-                                                        {p.pickNumber}
-                                                    </span>
                                                 </div>
 
                                                 <span
