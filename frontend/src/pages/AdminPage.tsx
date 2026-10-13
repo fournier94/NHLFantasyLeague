@@ -13,8 +13,8 @@ import {
     releasePlayer,
     resetUserPassword,
     searchPlayers,
-    swapDraftPicks,
     swapRosterStatus,
+    transferDraftPick,
     unassignUserTeam,
     updateRosterEntry,
     deleteStatusHistory,
@@ -438,19 +438,20 @@ export default function AdminPage() {
         null,
     );
 
-    // --- Draft pick swap section state ---
-    const [draftSwapTeamAId, setDraftSwapTeamAId] = useState('');
-    const [draftSwapTeamBId, setDraftSwapTeamBId] = useState('');
-    const [draftSwapPicksA, setDraftSwapPicksA] = useState<DraftPick[]>([]);
-    const [draftSwapPicksB, setDraftSwapPicksB] = useState<DraftPick[]>([]);
-    const [draftSwapPickAId, setDraftSwapPickAId] = useState('');
-    const [draftSwapPickBId, setDraftSwapPickBId] = useState('');
-    const [draftSwapLoadingA, setDraftSwapLoadingA] = useState(false);
-    const [draftSwapLoadingB, setDraftSwapLoadingB] = useState(false);
-    const [draftSwapBusy, setDraftSwapBusy] = useState(false);
-    const [draftSwapError, setDraftSwapError] =
+    // --- Draft pick transfer section state ---
+    const [draftTransferFromTeamId, setDraftTransferFromTeamId] =
+        useState('');
+    const [draftTransferToTeamId, setDraftTransferToTeamId] =
+        useState('');
+    const [draftTransferPicks, setDraftTransferPicks] =
+        useState<DraftPick[]>([]);
+    const [draftTransferPickId, setDraftTransferPickId] = useState('');
+    const [draftTransferPicksLoading, setDraftTransferPicksLoading] =
+        useState(false);
+    const [draftTransferBusy, setDraftTransferBusy] = useState(false);
+    const [draftTransferError, setDraftTransferError] =
         useState<string | null>(null);
-    const [draftSwapSuccess, setDraftSwapSuccess] =
+    const [draftTransferSuccess, setDraftTransferSuccess] =
         useState<string | null>(null);
 
     // Poll the background job while it runs. Stops as soon as the
@@ -779,73 +780,39 @@ export default function AdminPage() {
         setSwapError(null);
     }, [swapTeamId]);
 
-    // --- Draft swap: load side A picks when the team changes ---
+    // --- Draft transfer: load the source team's picks when it changes ---
     useEffect(() => {
-        if (!draftSwapTeamAId) {
-            setDraftSwapPicksA([]);
-            setDraftSwapLoadingA(false);
+        if (!draftTransferFromTeamId) {
+            setDraftTransferPicks([]);
+            setDraftTransferPicksLoading(false);
             return;
         }
 
         let cancelled = false;
 
-        setDraftSwapLoadingA(true);
+        setDraftTransferPicksLoading(true);
 
-        getTeamDraftPicks(Number(draftSwapTeamAId))
+        getTeamDraftPicks(Number(draftTransferFromTeamId))
             .then((data) => {
                 if (!cancelled) {
-                    setDraftSwapPicksA(data);
+                    setDraftTransferPicks(data);
                 }
             })
             .catch(() => {
                 if (!cancelled) {
-                    setDraftSwapPicksA([]);
+                    setDraftTransferPicks([]);
                 }
             })
             .finally(() => {
                 if (!cancelled) {
-                    setDraftSwapLoadingA(false);
+                    setDraftTransferPicksLoading(false);
                 }
             });
 
         return () => {
             cancelled = true;
         };
-    }, [draftSwapTeamAId]);
-
-    // --- Draft swap: load side B picks when the team changes ---
-    useEffect(() => {
-        if (!draftSwapTeamBId) {
-            setDraftSwapPicksB([]);
-            setDraftSwapLoadingB(false);
-            return;
-        }
-
-        let cancelled = false;
-
-        setDraftSwapLoadingB(true);
-
-        getTeamDraftPicks(Number(draftSwapTeamBId))
-            .then((data) => {
-                if (!cancelled) {
-                    setDraftSwapPicksB(data);
-                }
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    setDraftSwapPicksB([]);
-                }
-            })
-            .finally(() => {
-                if (!cancelled) {
-                    setDraftSwapLoadingB(false);
-                }
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [draftSwapTeamBId]);
+    }, [draftTransferFromTeamId]);
 
     function handleSelect(player: PlayerSearchResult) {
         setSelectedPlayer(player);
@@ -2130,82 +2097,74 @@ export default function AdminPage() {
         }
     }
 
-    async function handleSwapDraftPicks() {
-        const pickAId = Number(draftSwapPickAId);
-        const pickBId = Number(draftSwapPickBId);
+    async function handleTransferDraftPick() {
+        const pickId = Number(draftTransferPickId);
+        const newOwnerId = Number(draftTransferToTeamId);
 
-        if (!pickAId || !pickBId) {
+        if (!pickId || !newOwnerId) {
             return;
         }
 
-        if (pickAId === pickBId) {
-            setDraftSwapError(
-                'Les deux choix doivent être différents.',
+        if (draftTransferFromTeamId === draftTransferToTeamId) {
+            setDraftTransferError(
+                "L'équipe de destination doit être différente de " +
+                "l'équipe de départ.",
             );
             return;
         }
 
-        // Show the actual picks being swapped in the confirmation.
-        // Falls back to generic labels if the pick is not found,
-        // which should not happen but avoids a blank confirm.
-        const pickA = draftSwapPicksA.find((p) => p.id === pickAId);
-        const pickB = draftSwapPicksB.find((p) => p.id === pickBId);
+        const pick = draftTransferPicks.find((p) => p.id === pickId);
 
-        const labelA = pickA
-            ? `${pickA.seasonName} — Ronde ${pickA.round}, ` +
-            `Choix ${pickA.pickNumber}`
-            : `Choix #${pickAId}`;
+        const pickLabel = pick
+            ? `${pick.seasonName} — Ronde ${pick.round}, ` +
+            `Choix ${pick.pickNumber}`
+            : `Choix #${pickId}`;
 
-        const labelB = pickB
-            ? `${pickB.seasonName} — Ronde ${pickB.round}, ` +
-            `Choix ${pickB.pickNumber}`
-            : `Choix #${pickBId}`;
+        const fromTeamName =
+            teams.find((t) => String(t.id) === draftTransferFromTeamId)
+                ?.name ?? 'équipe source';
+
+        const toTeamName =
+            teams.find((t) => String(t.id) === draftTransferToTeamId)
+                ?.name ?? 'équipe cible';
 
         if (
             !window.confirm(
-                `Échanger ces deux choix de repêchage ?\n\n` +
-                `Choix A : ${labelA}\n` +
-                `Choix B : ${labelB}`,
+                `Transférer ce choix de repêchage ?\n\n` +
+                `De : ${fromTeamName}\n` +
+                `Vers : ${toTeamName}\n` +
+                `Choix : ${pickLabel}`,
             )
         ) {
             return;
         }
 
-        setDraftSwapBusy(true);
-        setDraftSwapError(null);
-        setDraftSwapSuccess(null);
+        setDraftTransferBusy(true);
+        setDraftTransferError(null);
+        setDraftTransferSuccess(null);
 
         try {
-            const result = await swapDraftPicks(pickAId, pickBId);
+            const result = await transferDraftPick(pickId, newOwnerId);
 
-            setDraftSwapSuccess(result.message);
+            setDraftTransferSuccess(result.message);
 
-            // Refresh both lists so the two picks that just moved
-            // appear under their new owners. The POST cleared the
-            // client-side GET cache on success, so these fetches hit
-            // the API.
-            if (draftSwapTeamAId) {
-                const freshA = await getTeamDraftPicks(
-                    Number(draftSwapTeamAId),
+            // Refresh the source team's list so the transferred pick
+            // disappears from it. The POST cleared the client-side GET
+            // cache on success, so this hits the API.
+            if (draftTransferFromTeamId) {
+                const fresh = await getTeamDraftPicks(
+                    Number(draftTransferFromTeamId),
                 );
-                setDraftSwapPicksA(freshA);
+                setDraftTransferPicks(fresh);
             }
 
-            if (draftSwapTeamBId) {
-                const freshB = await getTeamDraftPicks(
-                    Number(draftSwapTeamBId),
-                );
-                setDraftSwapPicksB(freshB);
-            }
-
-            setDraftSwapPickAId('');
-            setDraftSwapPickBId('');
+            setDraftTransferPickId('');
         } catch (err) {
-            setDraftSwapError(
+            setDraftTransferError(
                 err instanceof Error ? err.message : 'Erreur inconnue.',
             );
         } finally {
-            setDraftSwapBusy(false);
+            setDraftTransferBusy(false);
         }
     }
 
@@ -3221,191 +3180,164 @@ export default function AdminPage() {
             </div>
 
             {/* ============================================================
-                Échange de choix de repêchage
+                Transfert de choix de repêchage
                 ============================================================ */}
             <div className='max-w-3xl space-y-3'>
                 <h3 className='text-lg font-semibold text-foreground'>
-                    Échange de choix de repêchage
+                    Transfert de choix de repêchage
                 </h3>
 
                 <p className='text-sm text-muted-foreground'>
-                    Échangez manuellement deux choix de repêchage entre
-                    deux équipes. Le propriétaire actuel de chaque choix
-                    est inversé ; le propriétaire d'origine ne change
-                    jamais.
+                    Transférez un choix de repêchage d'une équipe vers
+                    une autre. Le propriétaire d'origine ne change
+                    jamais ; seul le propriétaire actuel est mis à
+                    jour.
                 </p>
 
-                {draftSwapError && (
+                {draftTransferError && (
                     <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
-                        {draftSwapError}
+                        {draftTransferError}
                     </p>
                 )}
 
-                {draftSwapSuccess && (
+                {draftTransferSuccess && (
                     <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
-                        {draftSwapSuccess}
+                        {draftTransferSuccess}
                     </p>
                 )}
 
-                <div className='grid gap-3 md:grid-cols-2'>
-                    <div className='space-y-2 rounded-lg border border-border bg-card p-3'>
-                        <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-                            Premier choix
-                        </p>
+                <div className='space-y-2 rounded-lg border border-border bg-card p-3'>
+                    <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+                        Équipe source
+                    </p>
 
-                        <select
-                            value={draftSwapTeamAId}
-                            onChange={(event) => {
-                                setDraftSwapTeamAId(event.target.value);
-                                setDraftSwapPickAId('');
-                                setDraftSwapError(null);
-                                setDraftSwapSuccess(null);
-                            }}
-                            className={selectClass}
-                        >
-                            <option value='' disabled>
-                                Choisir une équipe
+                    <select
+                        value={draftTransferFromTeamId}
+                        onChange={(event) => {
+                            setDraftTransferFromTeamId(event.target.value);
+                            setDraftTransferPickId('');
+                            setDraftTransferError(null);
+                            setDraftTransferSuccess(null);
+
+                            // If the destination was the same team,
+                            // clear it so the form stays consistent.
+                            if (
+                                event.target.value ===
+                                draftTransferToTeamId
+                            ) {
+                                setDraftTransferToTeamId('');
+                            }
+                        }}
+                        className={selectClass}
+                    >
+                        <option value='' disabled>
+                            Choisir une équipe
+                        </option>
+                        {teams.map((team) => (
+                            <option key={team.id} value={team.id}>
+                                {team.name}
                             </option>
-                            {teams.map((team) => (
+                        ))}
+                    </select>
+
+                    {draftTransferFromTeamId !== '' && (
+                        <>
+                            {draftTransferPicksLoading && (
+                                <p className='text-xs text-muted-foreground'>
+                                    Chargement...
+                                </p>
+                            )}
+
+                            {!draftTransferPicksLoading &&
+                                draftTransferPicks.length === 0 && (
+                                    <p className='text-xs text-muted-foreground'>
+                                        Aucun choix pour cette équipe.
+                                    </p>
+                                )}
+
+                            {!draftTransferPicksLoading &&
+                                draftTransferPicks.length > 0 && (
+                                    <select
+                                        value={draftTransferPickId}
+                                        onChange={(event) =>
+                                            setDraftTransferPickId(
+                                                event.target.value,
+                                            )
+                                        }
+                                        className={selectClass}
+                                    >
+                                        <option value='' disabled>
+                                            Choisir un choix
+                                        </option>
+                                    {draftTransferPicks.map((p) => (
+                                        <option
+                                            key={p.id}
+                                            value={p.id}
+                                        >
+                                            {p.seasonName} · Ronde{' '}
+                                            {p.round} · Choix{' '}
+                                            {p.pickNumber}
+                                            {` (de ${p.originalOwnerFantasyTeamName})`}
+                                        </option>
+                                    ))}
+                                    </select>
+                                )}
+                        </>
+                    )}
+                </div>
+
+                <div className='space-y-2 rounded-lg border border-border bg-card p-3'>
+                    <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+                        Équipe de destination
+                    </p>
+
+                    <select
+                        value={draftTransferToTeamId}
+                        onChange={(event) => {
+                            setDraftTransferToTeamId(event.target.value);
+                            setDraftTransferError(null);
+                            setDraftTransferSuccess(null);
+                        }}
+                        className={selectClass}
+                    >
+                        <option value='' disabled>
+                            Choisir une équipe
+                        </option>
+                        {teams
+                            .filter(
+                                (t) =>
+                                    String(t.id) !==
+                                    draftTransferFromTeamId,
+                            )
+                            .map((team) => (
                                 <option key={team.id} value={team.id}>
                                     {team.name}
                                 </option>
                             ))}
-                        </select>
+                    </select>
 
-                        {draftSwapTeamAId !== '' && (
-                            <>
-                                {draftSwapLoadingA && (
-                                    <p className='text-xs text-muted-foreground'>
-                                        Chargement...
-                                    </p>
-                                )}
-
-                                {!draftSwapLoadingA &&
-                                    draftSwapPicksA.length === 0 && (
-                                        <p className='text-xs text-muted-foreground'>
-                                            Aucun choix pour cette équipe.
-                                        </p>
-                                    )}
-
-                                {!draftSwapLoadingA &&
-                                    draftSwapPicksA.length > 0 && (
-                                        <select
-                                            value={draftSwapPickAId}
-                                            onChange={(event) =>
-                                                setDraftSwapPickAId(
-                                                    event.target.value,
-                                                )
-                                            }
-                                            className={selectClass}
-                                        >
-                                            <option value='' disabled>
-                                                Choisir un choix
-                                            </option>
-                                            {draftSwapPicksA.map((p) => (
-                                                <option
-                                                    key={p.id}
-                                                    value={p.id}
-                                                >
-                                                    {p.seasonName} · Ronde{' '}
-                                                    {p.round} · Choix{' '}
-                                                    {p.pickNumber}
-                                                    {!p.isOriginallyOwned
-                                                        ? ` (de ${p.originalOwnerFantasyTeamName})`
-                                                        : ''}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    )}
-                            </>
+                    {draftTransferFromTeamId !== '' &&
+                        draftTransferToTeamId === '' && (
+                            <p className='text-xs text-muted-foreground'>
+                                Choisissez une autre équipe que la source.
+                            </p>
                         )}
-                    </div>
-
-                    <div className='space-y-2 rounded-lg border border-border bg-card p-3'>
-                        <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-                            Deuxième choix
-                        </p>
-
-                        <select
-                            value={draftSwapTeamBId}
-                            onChange={(event) => {
-                                setDraftSwapTeamBId(event.target.value);
-                                setDraftSwapPickBId('');
-                                setDraftSwapError(null);
-                                setDraftSwapSuccess(null);
-                            }}
-                            className={selectClass}
-                        >
-                            <option value='' disabled>
-                                Choisir une équipe
-                            </option>
-                            {teams.map((team) => (
-                                <option key={team.id} value={team.id}>
-                                    {team.name}
-                                </option>
-                            ))}
-                        </select>
-
-                        {draftSwapTeamBId !== '' && (
-                            <>
-                                {draftSwapLoadingB && (
-                                    <p className='text-xs text-muted-foreground'>
-                                        Chargement...
-                                    </p>
-                                )}
-
-                                {!draftSwapLoadingB &&
-                                    draftSwapPicksB.length === 0 && (
-                                        <p className='text-xs text-muted-foreground'>
-                                            Aucun choix pour cette équipe.
-                                        </p>
-                                    )}
-
-                                {!draftSwapLoadingB &&
-                                    draftSwapPicksB.length > 0 && (
-                                        <select
-                                            value={draftSwapPickBId}
-                                            onChange={(event) =>
-                                                setDraftSwapPickBId(
-                                                    event.target.value,
-                                                )
-                                            }
-                                            className={selectClass}
-                                        >
-                                            <option value='' disabled>
-                                                Choisir un choix
-                                            </option>
-                                            {draftSwapPicksB.map((p) => (
-                                                <option
-                                                    key={p.id}
-                                                    value={p.id}
-                                                >
-                                                    {p.seasonName} · Ronde{' '}
-                                                    {p.round} · Choix{' '}
-                                                    {p.pickNumber}
-                                                    {!p.isOriginallyOwned
-                                                        ? ` (de ${p.originalOwnerFantasyTeamName})`
-                                                        : ''}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    )}
-                            </>
-                        )}
-                    </div>
                 </div>
 
                 <button
                     type='button'
-                    onClick={() => void handleSwapDraftPicks()}
+                    onClick={() => void handleTransferDraftPick()}
                     disabled={
-                        draftSwapBusy ||
-                        draftSwapPickAId === '' ||
-                        draftSwapPickBId === ''
+                        draftTransferBusy ||
+                        draftTransferPickId === '' ||
+                        draftTransferToTeamId === '' ||
+                        draftTransferFromTeamId === draftTransferToTeamId
                     }
                     className={primaryButtonClass}
                 >
-                    {draftSwapBusy ? 'Échange...' : 'Échanger les choix'}
+                    {draftTransferBusy
+                        ? 'Transfert...'
+                        : 'Transférer le choix'}
                 </button>
             </div>
 

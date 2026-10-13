@@ -1424,19 +1424,17 @@ export default function MonEquipePage() {
                                                     </span>
                                                 </div>
 
-                                                {!p.isOriginallyOwned && (
-                                                    <span
-                                                        className='text-xs italic'
-                                                        style={{
-                                                            color: '#FFC72C',
-                                                        }}
-                                                    >
-                                                        de{' '}
-                                                        {
-                                                            p.originalOwnerFantasyTeamName
-                                                        }
-                                                    </span>
-                                                )}
+                                                <span
+                                                    className='text-xs italic'
+                                                    style={{
+                                                        color: '#FFC72C',
+                                                    }}
+                                                >
+                                                    de{' '}
+                                                    {
+                                                        p.originalOwnerFantasyTeamName
+                                                    }
+                                                </span>
                                             </div>
                                         ))}
                                     </div>

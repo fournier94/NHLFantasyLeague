@@ -877,22 +877,23 @@ export function getTeamDraftPicks(
 }
 
 /**
- * Swaps the current owner of two draft picks. Commissioner-only.
+ * Transfers one draft pick from its current owner to another team.
+ * Commissioner-only.
  *
- * Both picks must exist, must be different, and must currently belong
- * to two different teams. Original owner is not modified.
+ * Only the pick's CurrentOwnerFantasyTeamId is rewritten; its
+ * OriginalOwnerFantasyTeamId is left alone.
  *
  * The POST goes through apiPost, which clears the client-side GET
  * cache on success, so the next getTeamDraftPicks call for either
  * team refetches.
  */
-export function swapDraftPicks(
-    pickAId: number,
-    pickBId: number,
+export function transferDraftPick(
+    pickId: number,
+    newOwnerFantasyTeamId: number,
 ): Promise<{ message: string }> {
     return apiPost<{ message: string }>(
-        '/DraftPick/swap',
-        { pickAId, pickBId },
+        '/DraftPick/transfer',
+        { pickId, newOwnerFantasyTeamId },
     );
 }
 

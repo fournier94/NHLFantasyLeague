@@ -86,19 +86,22 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
-        /// Swaps the current owner of two draft picks.
+        /// Transfers one draft pick from its current owner to another
+        /// team. Only the pick's CurrentOwnerFantasyTeamId is rewritten;
+        /// the OriginalOwnerFantasyTeamId is left alone so the
+        /// "came from" label keeps its full history.
         ///
-        /// Both picks must exist, must be different, and must currently
-        /// belong to two different teams. Neither pick's
-        /// OriginalOwnerFantasyTeamId is modified.
+        /// Refuses when:
+        ///   - the pick does not exist,
+        ///   - the destination team does not exist,
+        ///   - the destination team is already the current owner.
         ///
-        /// Commissioner-only. Use this to correct a mis-recorded trade
-        /// or to apply an off-platform trade by hand.
+        /// Commissioner-only.
         /// </summary>
-        [HttpPost("swap")]
+        [HttpPost("transfer")]
         [Authorize(Roles = AuthService.CommissionerRole)]
-        public async Task<IActionResult> SwapPicks(
-            [FromBody] DraftPickSwapRequest request,
+        public async Task<IActionResult> TransferPick(
+            [FromBody] DraftPickTransferRequest request,
             CancellationToken ct)
         {
             if (request == null)
@@ -109,86 +112,81 @@ namespace NhlFantasyLeague.api.Controllers
                 });
             }
 
-            if (request.PickAId <= 0 || request.PickBId <= 0)
+            if (request.PickId <= 0)
             {
                 return BadRequest(new
                 {
-                    message = "PickAId and PickBId are required."
+                    message = "PickId is required."
                 });
             }
 
-            if (request.PickAId == request.PickBId)
+            if (request.NewOwnerFantasyTeamId <= 0)
             {
                 return BadRequest(new
                 {
-                    message = "PickAId and PickBId must be different."
+                    message = "NewOwnerFantasyTeamId is required."
                 });
             }
 
-            var pickA = await _dbContext.DraftPicks
-                .FirstOrDefaultAsync(p => p.Id == request.PickAId, ct);
+            var pick = await _dbContext.DraftPicks
+                .Include(p => p.Draft)
+                    .ThenInclude(d => d.Season)
+                .FirstOrDefaultAsync(p => p.Id == request.PickId, ct);
 
-            if (pickA == null)
+            if (pick == null)
             {
                 return NotFound(new
                 {
-                    message = $"DraftPick {request.PickAId} not found."
+                    message = $"DraftPick {request.PickId} not found."
                 });
             }
 
-            var pickB = await _dbContext.DraftPicks
-                .FirstOrDefaultAsync(p => p.Id == request.PickBId, ct);
-
-            if (pickB == null)
-            {
-                return NotFound(new
-                {
-                    message = $"DraftPick {request.PickBId} not found."
-                });
-            }
-
-            if (pickA.CurrentOwnerFantasyTeamId ==
-                pickB.CurrentOwnerFantasyTeamId)
+            if (pick.CurrentOwnerFantasyTeamId ==
+                request.NewOwnerFantasyTeamId)
             {
                 return BadRequest(new
                 {
                     message =
-                        "Les deux choix appartiennent déjà à la même " +
-                        "équipe. Choisissez un choix d'une autre équipe."
+                        "Ce choix appartient déjà à l'équipe de " +
+                        "destination."
                 });
             }
 
-            var ownerA = pickA.CurrentOwnerFantasyTeamId;
-            var ownerB = pickB.CurrentOwnerFantasyTeamId;
+            var newOwner = await _dbContext.FantasyTeams
+                .AsNoTracking()
+                .FirstOrDefaultAsync(
+                    t => t.Id == request.NewOwnerFantasyTeamId, ct);
 
-            // The actual swap. OriginalOwner fields are left alone: the
-            // "came from" label on the frontend keeps pointing at the
-            // original owner regardless of how many times a pick moves.
-            pickA.CurrentOwnerFantasyTeamId = ownerB;
-            pickB.CurrentOwnerFantasyTeamId = ownerA;
+            if (newOwner == null)
+            {
+                return NotFound(new
+                {
+                    message =
+                        $"Fantasy team {request.NewOwnerFantasyTeamId} " +
+                        "not found."
+                });
+            }
+
+            var oldOwner = await _dbContext.FantasyTeams
+                .AsNoTracking()
+                .FirstOrDefaultAsync(
+                    t => t.Id == pick.CurrentOwnerFantasyTeamId, ct);
+
+            var oldOwnerName = oldOwner?.Name
+                ?? $"Équipe {pick.CurrentOwnerFantasyTeamId}";
+
+            pick.CurrentOwnerFantasyTeamId = newOwner.Id;
 
             await _dbContext.SaveChangesAsync(ct);
-
-            // Load both team names for a readable message. Defensive
-            // default on missing names so the response never throws.
-            var teamNames = await _dbContext.FantasyTeams
-                .AsNoTracking()
-                .Where(t => t.Id == ownerA || t.Id == ownerB)
-                .ToDictionaryAsync(t => t.Id, t => t.Name, ct);
-
-            var nameA = teamNames.GetValueOrDefault(
-                ownerA, $"Équipe {ownerA}");
-            var nameB = teamNames.GetValueOrDefault(
-                ownerB, $"Équipe {ownerB}");
 
             return Ok(new
             {
                 message =
-                    $"Choix échangés entre '{nameA}' et '{nameB}'.",
-                pickAId = pickA.Id,
-                pickANewOwnerFantasyTeamId = ownerB,
-                pickBId = pickB.Id,
-                pickBNewOwnerFantasyTeamId = ownerA
+                    $"Choix {pick.Draft.Season.Name} — Ronde {pick.Round}, " +
+                    $"Choix {pick.PickNumber} transféré de " +
+                    $"'{oldOwnerName}' à '{newOwner.Name}'.",
+                pickId = pick.Id,
+                newOwnerFantasyTeamId = newOwner.Id,
             });
         }
     }
