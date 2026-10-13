@@ -4668,7 +4668,7 @@ function TeamCapLine({
     const busted = adjustedCapSpace < 0;
 
     return (
-        <div className='flex items-center justify-center gap-x-1 text-xs font-semibold tabular-nums md:text-sm'>
+        <div className='flex items-center justify-center gap-x-1 text-sm font-semibold tabular-nums md:text-base'>
             <span className='text-[#7DD3FC]'>
                 {compactSalary(baseCapSpace)} $
             </span>
@@ -8744,15 +8744,6 @@ function DirectOfferCard({
                     </div>
                 </div>
 
-                {/* Ajouter un joueur */}
-                <button
-                    type='button'
-                    onClick={addSlot}
-                    className='w-full cursor-pointer rounded-md border border-emerald-500 bg-transparent px-3 py-1 text-[0.7rem] font-bold uppercase tracking-wide text-emerald-500 transition-colors hover:bg-emerald-500/10 md:text-xs'
-                >
-                    Ajouter un joueur
-                </button>
-
                 {/* Draft picks slot. Two columns: the connected user's
                     picks on the left, the target team's picks on the
                     right. Both sides are always editable, so both
@@ -8817,6 +8808,20 @@ function DirectOfferCard({
                         />
                     </div>
                 </div>
+
+                {/* Ajouter un joueur — placed under the two
+                    "Ajouter un choix" buttons so the picks row stays
+                    visually grouped on its own, and colored to match
+                    "Choisir un joueur" (filled green, dark text) so
+                    the two "add" actions on the form share one
+                    palette. */}
+                <button
+                    type='button'
+                    onClick={addSlot}
+                    className='mx-auto block w-fit cursor-pointer rounded-md bg-emerald-500 px-6 py-1 text-xs font-bold uppercase tracking-wide text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
+                >
+                    Ajouter un joueur
+                </button>
 
                 {/* Message (same style as Publier une annonce) */}
                 <div>
