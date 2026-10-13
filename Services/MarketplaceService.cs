@@ -547,28 +547,18 @@ namespace NhlFantasyLeague.api.Services
                             "deux fois dans la meme offre.";
                     }
 
-                    if (!rosterByPlayerId.TryGetValue(
-                            slot.OfferingPlayerId.Value,
-                            out var entry))
+                    // The offered player's position is deliberately
+                    // NOT checked against the slot's PositionGroup.
+                    // Managers in this league can announce a demand
+                    // that does not match their offered player, or
+                    // vice versa, to make negotiation easier.
+                    if (!rosterByPlayerId.ContainsKey(
+                            slot.OfferingPlayerId.Value))
                     {
                         return
                             $"Le joueur {slot.OfferingPlayerId.Value} " +
                             "n'est pas sur votre equipe pour la saison " +
                             "en cours.";
-                    }
-
-                    var playerGroup = PositionGroupHelper.Classify(
-                        entry.Player?.Position);
-
-                    if (!PositionMatchesGroup(
-                            playerGroup, slot.PositionGroup))
-                    {
-                        return
-                            $"La position du joueur " +
-                            $"{entry.Player?.FirstName} " +
-                            $"{entry.Player?.LastName} ne correspond pas " +
-                            $"a la position demandee pour l'emplacement " +
-                            $"{i + 1}.";
                     }
                 }
             }
@@ -1330,25 +1320,16 @@ offeredPlayerIds, ct);
                         "emplacements de la meme offre.");
                 }
 
-                if (!rosterByPlayerId.TryGetValue(
-                        pick.RespondingPlayerId, out var entry))
+                // The responding player's position is deliberately
+                // NOT checked against the slot's PositionGroup.
+                // Managers can respond with a player of any position;
+                // the slot's announced PositionGroup is a preference.
+                if (!rosterByPlayerId.ContainsKey(
+                        pick.RespondingPlayerId))
                 {
                     return Failure(
                         $"Le joueur {pick.RespondingPlayerId} " +
                         "n'est pas sur votre equipe pour la saison en cours.");
-                }
-
-                var playerGroup = PositionGroupHelper.Classify(
-                    entry.Player?.Position);
-
-                if (!PositionMatchesGroup(
-                        playerGroup, offerSlot.PositionGroup))
-                {
-                    return Failure(
-                        $"La position du joueur " +
-                        $"{entry.Player?.FirstName} {entry.Player?.LastName} " +
-                        $"ne correspond pas a l'emplacement " +
-                        $"{pick.SlotIndex + 1} de l'offre.");
                 }
             }
 
@@ -1585,33 +1566,25 @@ offeredPlayerIds, ct);
                         "apparaitre deux fois dans l'offre.");
                 }
 
-                if (!connectedByPlayerId.TryGetValue(
-                        slot.ConnectedPlayerId, out var connectedEntry))
+                // Both sides' positions are deliberately NOT checked
+                // against each other. A direct offer can mix
+                // positions across the slot, which makes negotiation
+                // easier when two managers value different position
+                // groups.
+                if (!connectedByPlayerId.ContainsKey(
+                        slot.ConnectedPlayerId))
                 {
                     return Failure(
                         $"Le joueur {slot.ConnectedPlayerId} n'est " +
                         "pas sur votre equipe pour la saison en cours.");
                 }
 
-                if (!targetByPlayerId.TryGetValue(
-                        slot.TargetPlayerId, out var targetEntry))
+                if (!targetByPlayerId.ContainsKey(
+                        slot.TargetPlayerId))
                 {
                     return Failure(
                         $"Le joueur {slot.TargetPlayerId} n'est pas " +
                         "sur l'equipe cible pour la saison en cours.");
-                }
-
-                var connectedGroup = PositionGroupHelper.Classify(
-                    connectedEntry.Player?.Position);
-
-                var targetGroup = PositionGroupHelper.Classify(
-                    targetEntry.Player?.Position);
-
-                if (connectedGroup != targetGroup)
-                {
-                    return Failure(
-                        $"Les joueurs de l'emplacement {i + 1} ne " +
-                        "jouent pas a la meme position.");
                 }
             }
 
@@ -3086,25 +3059,9 @@ IReadOnlySet<int>? seenResponseIds = null)
             return v == "F" || v == "D" || v == "G";
         }
 
-        private static bool PositionMatchesGroup(
-     PositionGroup group,
-     string pg)
-        {
-            var v = pg.Trim().ToUpperInvariant();
-
-            return v switch
-            {
-                "F" => group == PositionGroup.Forward,
-                "D" => group == PositionGroup.Defense,
-                "G" => group == PositionGroup.Goalie,
-                _ => false,
-            };
-        }
-
         /// <summary>
-        /// Inverse of <see cref="PositionMatchesGroup"/>: converts a
-        /// classified <see cref="PositionGroup"/> back to the single
-        /// character code stored on TradeOfferSlot.PositionGroup.
+        /// Converts a classified <see cref="PositionGroup"/> to the
+        /// single-character code stored on TradeOfferSlot.PositionGroup.
         ///
         /// Unknown positions collapse to "F", matching the frontend's
         /// default and the PositionGroupHelper.Classify convention

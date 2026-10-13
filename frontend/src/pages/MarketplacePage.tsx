@@ -437,11 +437,12 @@ function playerMatchesSlotDemand(
     entry: RosterEntry,
     slot: TradeOfferSlot,
 ): boolean {
-    // Position is always enforced: it is what defines the slot.
-    if (toPositionGroup(entry.position) !== slot.positionGroup) {
-        return false;
-    }
-
+    // Position is deliberately NOT enforced. Managers in this league
+    // can offer a player of any position, regardless of the slot's
+    // announced PositionGroup. Position-for-position is a rule we
+    // still follow out-of-band, but the website lets managers
+    // negotiate without it as a hard constraint.
+    //
     // Each demand criterion filters the dropdown only when BOTH of
     // the following hold:
     //
@@ -1758,15 +1759,10 @@ export default function MarketplacePage() {
                         rosterPopupTeam.initialPositionFilter
                     }
                     referencePlayer={rosterPopupTeam.referencePlayer}
-                    lockedPosition={
-                        rosterPopupTeam.pickContext
-                            ? (rosterPopupTeam.pickContext.slot
-                                .positionGroup as PositionGroup)
-                            : (rosterPopupTeam.directPickContext
-                                ?.lockedPosition ??
-                                rosterPopupTeam.publishPickContext
-                                    ?.lockedPosition)
-                    }
+                    // No locked position anywhere: managers can
+                    // respond to or create a trade with a player of
+                    // any position, regardless of what the other
+                    // side of the slot demands.
                     filterSlot={
                         rosterPopupTeam.pickContext?.slot
                     }
@@ -2061,46 +2057,19 @@ function AddOfferPanel({
     }, [initialOffer]);
 
     /**
-     * Sync each slot's positionGroup to the current position of
-     * its picked player. Preserves the invariant that a slot with
-     * a picked player always has a matching positionGroup, even
-     * when the pick came from the roster popup (which only sends
-     * the player id).
-     *
-     * Idempotent: once every slot's positionGroup matches, the
-     * effect does nothing on the next run.
-     */
+   * The user's roster, used to resolve each picked player's
+   * display info (name, position, contracts). Loaded once per
+   * team and passed down to SlotEditor.
+   *
+   * The offered player's position is intentionally NOT synced to
+   * the slot's PositionGroup. Managers can announce any demanded
+   * position regardless of who they are offering — the two
+   * fields are independent by design.
+   */
     const entries = useMemo(
         () => roster?.entries ?? [],
         [roster],
     );
-
-    useLayoutEffect(() => {
-        let needsUpdate = false;
-
-        const next = slots.map((s): SlotState => {
-            if (s.offeringPlayerId == null) return s;
-
-            const entry = entries.find(
-                (e) => e.playerId === s.offeringPlayerId,
-            );
-            if (!entry) return s;
-
-            const group = toPositionGroup(entry.position);
-            if (s.positionGroup === group) return s;
-
-            needsUpdate = true;
-            return {
-                ...s,
-                positionGroup: group,
-                firstHandled: 'player',
-            };
-        });
-
-        if (needsUpdate) {
-            updatePublishDraft((d) => ({ ...d, slots: next }));
-        }
-    }, [slots, entries]);
 
     const [submitting, setSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
@@ -2364,20 +2333,13 @@ function AddOfferPanel({
 
         const slot = slots[index];
 
-        let clearPlayer = false;
-
-        if (slot.offeringPlayerId != null && position !== '') {
-            const entry = entries.find(
-                (e) => e.playerId === slot.offeringPlayerId,
-            );
-            const group = entry ? toPositionGroup(entry.position) : '';
-            if (group !== position) clearPlayer = true;
-        }
-
+        // Position and offering player are now decoupled: changing
+        // the demanded position never clears a player whose position
+        // happens to differ. Managers are allowed to announce a
+        // demand that does not match their offered player.
         updateSlot(index, {
             positionGroup: position,
             firstHandled: slot.firstHandled ?? 'position',
-            offeringPlayerId: clearPlayer ? null : slot.offeringPlayerId,
         });
     }
 
@@ -2646,10 +2608,10 @@ function AddOfferPanel({
                             slotIndex: index,
                             currentPickedPlayerId:
                                 slot.offeringPlayerId,
-                            lockedPosition:
-                                slot.positionGroup !== ''
-                                    ? (slot.positionGroup as PositionGroup)
-                                    : undefined,
+                            // No locked position: the popup's
+                            // segmented control is free, and the
+                            // roster list is not filtered by the
+                            // slot's PositionGroup.
                             excludedPlayerIds:
                                 excludedPlayerIdsForSlot(index),
                             onPick: (playerId) =>
@@ -3015,16 +2977,10 @@ function SlotEditor({
     forceOpenFilterToken: number;
 }) {
     /**
-  * Opens the info popup when the user clicks the Demande dropdown
-  * while it's locked by a selected Offre player.
-  */
-    const [showLockedPopup, setShowLockedPopup] = useState(false);
-
-    /**
-     * Whether the "Critères recherchés" form is expanded. Collapsed by
-     * default so the slot doesn't take half the screen before the
-     * user decides to filter.
-     */
+   * Whether the "Critères recherchés" form is expanded. Collapsed by
+   * default so the slot doesn't take half the screen before the
+   * user decides to filter.
+   */
     const [filterExpanded, setFilterExpanded] = useState(false);
 
     // Open the criteria form whenever the parent bumps the token,
@@ -3045,8 +3001,6 @@ function SlotEditor({
         slot.maxSalary === '' &&
         slot.maxAge === '' &&
         slot.minPointsLastYear === '';
-
-    const positionLocked = slot.offeringPlayerId !== null;
 
     // When collapsed (only possible when there is more than one slot),
     // render a compact summary button instead of the full form.
@@ -3203,36 +3157,18 @@ function SlotEditor({
                 <div className='space-y-2'>
                     <p className={labelClass}>Demande</p>
 
-                    {/* Wrapper is `relative` so the transparent overlay
-                        button can sit exactly on top of the disabled
-                        select. Disabled selects do not fire click
-                        events, so this is how we detect the user's
-                        attempt to change the position. */}
-                    <div className='relative'>
-                        <select
-                            value={slot.positionGroup}
-                            onChange={(e) =>
-                                onPositionChange(e.target.value)
-                            }
-                            disabled={positionLocked}
-                            className={inputClass}
-                        >
-                            <option value=''>— Choisir une position —</option>
-                            <option value='F'>Attaquant (F)</option>
-                            <option value='D'>Défenseur (D)</option>
-                            <option value='G'>Gardien (G)</option>
-                        </select>
-
-                        {positionLocked && (
-                            <button
-                                type='button'
-                                aria-label='Position demandée verrouillée'
-                                title='Retirez le joueur offert pour modifier la position demandée.'
-                                onClick={() => setShowLockedPopup(true)}
-                                className='absolute inset-0 cursor-pointer rounded-lg'
-                            />
-                        )}
-                    </div>
+                    <select
+                        value={slot.positionGroup}
+                        onChange={(e) =>
+                            onPositionChange(e.target.value)
+                        }
+                        className={inputClass}
+                    >
+                        <option value=''>— Choisir une position —</option>
+                        <option value='F'>Attaquant (F)</option>
+                        <option value='D'>Défenseur (D)</option>
+                        <option value='G'>Gardien (G)</option>
+                    </select>
 
                     {showFilterForm &&
                         (filterExpanded ? (
@@ -3286,87 +3222,6 @@ function SlotEditor({
                 </div>
             </div>
 
-            {/*
-             * Locked-demand popup. Portaled to document.body so it
-             * renders above everything (the surrounding card uses
-             * overflow-hidden, and portals guarantee the modal is
-             * never clipped). Clicking the backdrop closes it, same
-             * as the OK button.
-             */}
-            {showLockedPopup &&
-                createPortal(
-                    <div
-                        className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
-                        onClick={() => setShowLockedPopup(false)}
-                        role='dialog'
-                        aria-modal='true'
-                        aria-label='Position demandée verrouillée'
-                    >
-                        <div
-                            className='w-full max-w-sm overflow-hidden rounded-lg border'
-                            onClick={(e) => e.stopPropagation()}
-                            style={{
-                                borderColor: 'rgba(0, 168, 255, 0.6)',
-                                backgroundColor: '#080D1A',
-                                boxShadow:
-                                    '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)',
-                            }}
-                        >
-                            <div
-                                className='border-b px-3 py-2'
-                                style={{
-                                    borderColor:
-                                        'rgba(0, 168, 255, 0.35)',
-                                    background:
-                                        'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))',
-                                }}
-                            >
-                                <p className='text-sm font-bold text-white'>
-                                    Position demandée verrouillée
-                                </p>
-                            </div>
-
-                            <div className='space-y-4 px-4 py-4'>
-                                <p className='text-sm text-foreground'>
-                                    Le joueur sélectionné de votre équipe
-                                    est un{' '}
-                                    <span className='font-semibold'>
-                                        {groupLabel(
-                                            slot.positionGroup as PositionGroup,
-                                        ).toLowerCase()}
-                                    </span>
-                                    . Pour modifier la position demandée,
-                                    vous devez d'abord retirer le joueur
-                                    offert.
-                                </p>
-
-                                <div className='flex flex-col items-center gap-2'>
-                                    <button
-                                        type='button'
-                                        onClick={() => {
-                                            setShowLockedPopup(false);
-                                            onResetSlot();
-                                        }}
-                                        className='w-full cursor-pointer rounded-lg border border-destructive/40 bg-transparent px-3 py-1.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10'
-                                    >
-                                        Retirer le joueur offert
-                                    </button>
-
-                                    <button
-                                        type='button'
-                                        onClick={() =>
-                                            setShowLockedPopup(false)
-                                        }
-                                        className='w-full cursor-pointer rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400'
-                                    >
-                                        OK
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>,
-                    document.body,
-                )}
         </div>
     );
 }
@@ -6123,15 +5978,9 @@ function OfferCard({
                                                     : undefined
                                             }
                                         />
-                                    ) : (
-                                        <>
-                                            <p className='text-xs font-semibold text-foreground md:text-sm'>
-                                                {groupLabel(
-                                                    slot.positionGroup as PositionGroup,
-                                                )}
-                                            </p>
-
-                                            <ul className='mt-1 inline-block text-left text-[0.6rem] text-[#7DD3FC] md:text-[0.7rem]'>
+                                        ) : (
+                                            <>
+                                                <ul className='mt-1 inline-block text-left text-[0.6rem] text-[#7DD3FC] md:text-[0.7rem]'>
                                                 {slot.demandMinContractYears !=
                                                     null && (
                                                         <li className='flex items-center gap-1'>
@@ -8718,26 +8567,6 @@ function DirectOfferCard({
                                     ) ?? null
                                     : null;
 
-                            const leftGroup = leftPicked
-                                ? toPositionGroup(leftPicked.position)
-                                : null;
-
-                            const rightGroup = rightPicked
-                                ? toPositionGroup(rightPicked.position)
-                                : null;
-
-                            // Once either side has a pick, both
-                            // labels show that player's position.
-                            // The two groups are guaranteed equal by
-                            // the filtering logic below and by the
-                            // auto-clear on change.
-                            const unifiedGroup =
-                                leftGroup ?? rightGroup;
-
-                            const positionLabel = unifiedGroup
-                                ? groupLabel(unifiedGroup)
-                                : 'Aucune position';
-
                             const targetPickerDisabled =
                                 targetTeamId == null ||
                                 targetTeamName == null;
@@ -8858,18 +8687,16 @@ function DirectOfferCard({
                              * pick any position.
                              */
                             const handleLeftClick = () => {
-                                const lockedPosition = rightPicked
-                                    ? toPositionGroup(
-                                        rightPicked.position,
-                                    )
-                                    : undefined;
-
                                 onRequestPlayerPick({
                                     teamId: connectedTeamId,
                                     teamName: connectedTeamName,
                                     slotIndex: idx,
                                     side: 'offering',
-                                    lockedPosition,
+                                    // No locked position: the user
+                                    // can pick a player of any
+                                    // position, regardless of what
+                                    // the other side of the slot
+                                    // already has.
                                     capContext:
                                         buildCapContext('left'),
                                     referencePlayer: rightPicked,
@@ -8907,18 +8734,16 @@ function DirectOfferCard({
                                     return;
                                 }
 
-                                const lockedPosition = leftPicked
-                                    ? toPositionGroup(
-                                        leftPicked.position,
-                                    )
-                                    : undefined;
-
                                 onRequestPlayerPick({
                                     teamId: targetTeamId,
                                     teamName: targetTeamName,
                                     slotIndex: idx,
                                     side: 'target',
-                                    lockedPosition,
+                                    // No locked position: the user
+                                    // can pick a player of any
+                                    // position, regardless of what
+                                    // the other side of the slot
+                                    // already has.
                                     capContext:
                                         buildCapContext('right'),
                                     referencePlayer: leftPicked,
@@ -8974,21 +8799,15 @@ function DirectOfferCard({
                                                 }
                                             />
                                         ) : (
-                                            <>
-                                                <p className='text-xs font-semibold text-foreground md:text-sm'>
-                                                    {positionLabel}
-                                                </p>
-
-                                                    <button
-                                                        type='button'
-                                                        onClick={
-                                                            handleLeftClick
-                                                        }
-                                                        className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
-                                                    >
-                                                        Choisir un joueur
-                                                    </button>
-                                            </>
+                                            <button
+                                                type='button'
+                                                onClick={
+                                                    handleLeftClick
+                                                }
+                                                className='w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
+                                            >
+                                                Choisir un joueur
+                                            </button>
                                         )}
 
                                     </div>
@@ -9051,25 +8870,19 @@ function DirectOfferCard({
                                                 }
                                             />
                                         ) : (
-                                            <>
-                                                <p className='text-xs font-semibold text-foreground md:text-sm'>
-                                                    {positionLabel}
-                                                </p>
-
-                                                    <button
-                                                        type='button'
-                                                        onClick={
-                                                            targetPickerDisabled
-                                                                ? onRequestTargetTeam
-                                                                : handleRightClick
-                                                        }
-                                                        className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
-                                                    >
-                                                        {targetPickerDisabled
-                                                            ? 'Choisir un gestionnaire'
-                                                            : 'Choisir un joueur'}
-                                                    </button>
-                                            </>
+                                            <button
+                                                type='button'
+                                                onClick={
+                                                    targetPickerDisabled
+                                                        ? onRequestTargetTeam
+                                                        : handleRightClick
+                                                }
+                                                className='w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
+                                            >
+                                                {targetPickerDisabled
+                                                    ? 'Choisir un gestionnaire'
+                                                    : 'Choisir un joueur'}
+                                            </button>
                                         )}
                                     </div>
                                 </div>
