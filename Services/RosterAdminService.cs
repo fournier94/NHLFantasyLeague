@@ -1694,17 +1694,31 @@ Season? season,
 CardStatLine? line,
 PlayerSeasonStat? seasonStat = null)
         {
-            if (season == null || line == null)
+            // Bail out only when the stat line itself is missing.
+            // The Season row is used purely for the human label; the
+            // raw season code lives on the stat line, so a missing
+            // Season row must not hide real stats.
+            //
+            // This matters for past seasons that predate league setup
+            // and never got a Season row created: the archive still
+            // has the numbers, and the card should show them with a
+            // label derived from the raw code (e.g. "25-26").
+            if (line == null)
             {
                 return null;
             }
 
+            var seasonCode = season?.NhlSeasonCode ?? line.Season;
+
+            var label =
+                season != null && !string.IsNullOrWhiteSpace(season.Name)
+                    ? season.Name
+                    : $"{seasonCode / 10000}-{seasonCode % 100:D2}";
+
             return new SeasonStatLineDto
             {
-                Label = string.IsNullOrWhiteSpace(season.Name)
-                    ? $"{season.NhlSeasonCode / 10000}-{season.NhlSeasonCode % 100:D2}"
-                    : season.Name,
-                NhlSeasonCode = season.NhlSeasonCode,
+                Label = label,
+                NhlSeasonCode = seasonCode,
                 LeagueAbbreviation = line.LeagueAbbreviation,
                 TeamName = null,
                 GameTypeId = 2,
