@@ -1425,7 +1425,6 @@ export default function MonEquipePage() {
                                                         color: '#FFC72C',
                                                     }}
                                                 >
-                                                    de{' '}
                                                     {
                                                         p.originalOwnerFantasyTeamName
                                                     }
