@@ -1987,16 +1987,22 @@ r.Status == TradeOfferResponseStatus.Accepted))
         }
 
         /// <summary>
-        /// Cancels a Pending response that the calling user's team
-        /// sent to someone else's offer. The original offer stays
-        /// Active — only this response is withdrawn.
+        /// Cancels a Pending OR Accepted response that the calling
+        /// user's team sent to someone else's offer. The original
+        /// offer stays Active — only this response is withdrawn.
+        ///
+        /// Allowing an Accepted response to be cancelled is a
+        /// deliberate choice for this private league: managers
+        /// trust each other and may change their mind after
+        /// accepting. The accept becomes a no-op; the offer stays
+        /// on the market and other managers can still respond.
         ///
         /// Authorization: only the responding team can cancel its
-        /// own response. The offer creator cannot cancel it (that
-        /// would be a rejection, which is a different flow).
+        /// own response.
         ///
-        /// State: the response must still be Pending. An Accepted
-        /// or already-Cancelled response cannot be cancelled.
+        /// State: the response must be Pending or Accepted. A
+        /// Rejected or already-Cancelled response cannot be
+        /// cancelled.
         /// </summary>
         public async Task<TradeOfferActionResultDto> CancelOfferResponseAsync(
             int userId,
@@ -2031,11 +2037,11 @@ r.Status == TradeOfferResponseStatus.Accepted))
                     "par votre propre equipe.");
             }
 
-            if (response.Status != TradeOfferResponseStatus.Pending)
+            if (response.Status != TradeOfferResponseStatus.Pending &&
+                response.Status != TradeOfferResponseStatus.Accepted)
             {
                 return Failure(
-                    "Cette reponse n'est plus en attente et ne peut " +
-                    "plus etre annulee.");
+                    "Cette reponse ne peut plus etre annulee.");
             }
 
             response.Status = TradeOfferResponseStatus.Cancelled;
@@ -2049,8 +2055,14 @@ r.Status == TradeOfferResponseStatus.Accepted))
         }
 
         /// <summary>
-        /// Refuses a Pending response to one of the calling user's
-        /// own offers.
+        /// Refuses a Pending OR Accepted response to one of the
+        /// calling user's own offers.
+        ///
+        /// Rejecting an Accepted response is a deliberate escape
+        /// hatch for this private league: managers trust each
+        /// other and may change their mind after accepting. The
+        /// acceptance is withdrawn and both sides see the response
+        /// disappear from their panels.
         ///
         /// The TradeOffer itself is NOT touched. Refusing a specific
         /// answer only tells the responding manager that his answer
@@ -2059,8 +2071,8 @@ r.Status == TradeOfferResponseStatus.Accepted))
         /// managers (including the one who was just refused) can
         /// still see it and submit new responses.
         ///
-        /// What changes: the response moves from Pending to Rejected.
-        /// That single status flip removes it from:
+        /// What changes: the response moves to Rejected. That single
+        /// status flip removes it from:
         ///
         ///   - the offer creator's "Offres reçues" list (filtered on
         ///     Pending or Accepted);
@@ -2108,7 +2120,8 @@ r.Status == TradeOfferResponseStatus.Accepted))
                     "propres offres.");
             }
 
-            if (response.Status != TradeOfferResponseStatus.Pending)
+            if (response.Status != TradeOfferResponseStatus.Pending &&
+                response.Status != TradeOfferResponseStatus.Accepted)
             {
                 return Failure(
                     "Cette reponse a deja ete traitee.");

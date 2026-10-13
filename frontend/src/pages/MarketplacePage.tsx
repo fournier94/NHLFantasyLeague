@@ -3851,6 +3851,38 @@ function ReceivedOffersPanel({
         }
     }
 
+    /**
+     * Withdraws an already-accepted response. Uses the same backend
+     * call as handleReject (the endpoint now accepts Accepted as
+     * well as Pending), but with a message that reflects the
+     * "changed my mind after accepting" intent.
+     */
+    async function handleCancelAccepted(responseId: number) {
+        if (
+            !window.confirm(
+                'Annuler ce trade accepté ? ' +
+                "L'autre gestionnaire ne verra plus cette réponse " +
+                'et votre annonce restera active sur le marché.',
+            )
+        ) {
+            return;
+        }
+
+        setBusyId(responseId);
+        setError(null);
+
+        try {
+            await rejectTradeOfferResponse(responseId);
+            await load();
+        } catch (err) {
+            setError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setBusyId(null);
+        }
+    }
+
     if (loading) {
         return (
             <p className='text-center text-muted-foreground'>
@@ -3892,6 +3924,12 @@ function ReceivedOffersPanel({
                     onCounterOffer={
                         onCounterOffer
                             ? () => onCounterOffer(response)
+                            : undefined
+                    }
+                    onCancelAcceptedTrade={
+                        response.status === 'Accepted'
+                            ? () =>
+                                void handleCancelAccepted(response.id)
                             : undefined
                     }
                     onOpenTeamRoster={onOpenTeamRoster}
@@ -3999,6 +4037,11 @@ function SentOffersPanel({
                     responseStatus={response.status}
                     onCancelResponse={() =>
                         void handleCancel(response.id)
+                    }
+                    onCancelAcceptedTrade={
+                        response.status === 'Accepted'
+                            ? () => void handleCancel(response.id)
+                            : undefined
                     }
                     userRoster={null}
                     onOpenTeamRoster={onOpenTeamRoster}
@@ -4818,6 +4861,7 @@ function OfferCard({
     onCounterOffer,
     responseStatus,
     onCancelResponse,
+    onCancelAcceptedTrade,
     onOpenTeamRoster,
     onRequestPlayerPick,
     onUseAsBase,
@@ -4884,21 +4928,32 @@ function OfferCard({
      * ("Pending", "Accepted", "Rejected" or "Cancelled").
      */
     responseStatus?: string;
-    /**
-     * When provided AND `responseStatus === 'Pending'`, the card
-     * renders a small "Annuler" button in its header. Only the
-     * "Offres envoyées" panel passes this.
-     */
-    onCancelResponse?: () => void;
-    /**
-  * When provided, the two manager names in the card header
-  * become clickable buttons that call this callback with the
-  * team id and name. MarketplacePage uses it to open a roster
-  * popup instead of navigating to /mon-equipe. When undefined
-  * (e.g. the publish preview popup), the names render as plain
-  * non-interactive text.
-  */
-    onOpenTeamRoster?: (teamId: number, teamName: string) => void;
+        /**
+         * When provided AND `responseStatus === 'Pending'`, the card
+         * renders a small "Annuler" button in its header. Only the
+         * "Offres envoyées" panel passes this.
+         */
+        onCancelResponse?: () => void;
+        /**
+         * When provided AND the underlying response has been Accepted,
+         * renders an "Annuler" button below the "OFFRE ACCEPTÉE" label.
+         *
+         * Both the Reçues and Envoyées panels pass this: the offer
+         * creator to withdraw his acceptance, the responder to withdraw
+         * his answer. Semantically this is the "changed my mind"
+         * escape hatch for a private league where managers trust each
+         * other.
+         */
+        onCancelAcceptedTrade?: () => void;
+        /**
+      * When provided, the two manager names in the card header
+      * become clickable buttons that call this callback with the
+      * team id and name. MarketplacePage uses it to open a roster
+      * popup instead of navigating to /mon-equipe. When undefined
+      * (e.g. the publish preview popup), the names render as plain
+      * non-interactive text.
+      */
+        onOpenTeamRoster?: (teamId: number, teamName: string) => void;
     /**
   * When provided, the responder's picker is a "Choisir un
   * joueur" button that opens the roster popup in pick mode,
@@ -5343,68 +5398,39 @@ function OfferCard({
         responderAdjustedCapSpace != null;
 
     /**
-     * True when either side of the trade would push a team below
-     * zero cap space. When true, the offer is refused outright: the
-     * "Offrir" button is disabled AND handleOffer() bails out
-     * defensively so a stray click cannot slip a submission through.
-     *
-     * Only flags a bust when the adjusted value is actually known
-     * (i.e. not null). If the backend did not send cap info — for
-     * example a card rendered inside the publish preview popup —
-     * both adjusted values are null, and we silently allow the
-     * offer rather than block on data we don't have.
-     *
-     * The math itself is unchanged: creatorAdjustedCapSpace and
-     * responderAdjustedCapSpace already incorporate the current-
-     * season contract salaries of the players picked on each side.
-     * A simple sign check is all that is needed here.
-     */
-    const creatorBustsCap =
-        creatorAdjustedCapSpace != null &&
-        creatorAdjustedCapSpace < 0;
-
-    const responderBustsCap =
-        responderAdjustedCapSpace != null &&
-        responderAdjustedCapSpace < 0;
-
-    /**
-     * True when at least one dropdown on this card has a pick.
-     *
-     * The cap-violation check is only meaningful once the user has
-     * started building the trade: before any pick, the "adjusted"
-     * space on one side is nothing but (base - creatorOfferedSalary),
-     * which can read as a bust even though the user hasn't chosen
-     * anything yet. Suppressing the warning in that state keeps the
-     * card quiet until the user actually does something.
-     */
+  * True when at least one dropdown on this card has a pick.
+  * Used only to enable the "Réinitialiser" button.
+  *
+  * NOTE: there is deliberately NO cap-violation gate on this
+  * card. Managers in this private league can send offers that
+  * push either side over the salary cap. The projected cap
+  * values on the card header still show the impact in red when
+  * a side goes negative, but nothing is blocked.
+  */
     const hasAnyPick = useMemo(
         () => Object.values(picks).some((v) => v != null),
         [picks],
     );
 
-    const capViolation =
-        hasAnyPick && (creatorBustsCap || responderBustsCap);
-
     /**
-     * Simulates picking the given player in the given slot and
-     * returns true when either team would end up below zero cap
-     * space with that pick in place.
-     *
-     * Used by the player dropdown to color a would-be-busting
-     * option's salary in red, so the user can see before clicking
-     * which picks are off-limits. The math mirrors the live cap
-     * display: swap the current pick in this slot (if any) for the
-     * candidate, recompute both sides, and check the sign.
-     *
-     * Returns false when cap data is incomplete (missing season
-     * cap, missing base cap hit) — never flags a bust we cannot
-     * prove.
-     *
-     * Plain function (not useCallback): the panel is short-lived
-     * and only rendered while open, so re-creating the closure on
-     * every render is cheaper than keeping a stale one in sync
-     * with `offer`, `picks` and `userRoster`.
-     */
+  * Simulates picking the given player in the given slot and
+  * returns true when either team would end up below zero cap
+  * space with that pick in place.
+  *
+  * Used ONLY as a visual warning: the player dropdown colors a
+  * would-be-busting option's salary in red so the manager can
+  * see the impact before clicking. Nothing is blocked — the
+  * offer can still be submitted with that pick.
+  *
+  * Returns false when cap data is incomplete (missing season
+  * cap, missing base cap hit) — never flags a bust we cannot
+  * prove.
+  *
+  * Plain function (not useCallback): the panel is short-lived
+  * and only rendered while open, so re-creating the closure on
+  * every render is cheaper than keeping a stale one in sync
+  * with `offer`, `picks` and `userRoster`.
+  */
     const wouldBustCap = (
         candidateSalary: number,
         forSlotIndex: number,
@@ -5471,16 +5497,16 @@ function OfferCard({
     }
 
     async function handleOffer() {
-        // `capViolation` is included in the guard so a submission
-        // cannot slip through if the button's disabled state is ever
-        // bypassed (keyboard activation, automation, a future change
-        // that re-wires the click handler). Belt and suspenders: the
-        // disabled attribute on the button is the primary defense.
+        // `allSlotsFilled` is the only structural gate on this
+        // side of the guard. Cap violations are intentionally
+        // allowed: a manager who would bust the cap can still
+        // submit his offer, and the other manager can decide
+        // whether to accept. The red cap line on the header is a
+        // warning, not a block.
         if (
             !canRespond ||
             !allSlotsFilled ||
-            respondBusy ||
-            capViolation
+            respondBusy
         ) {
             return;
         }
@@ -6421,13 +6447,11 @@ function OfferCard({
                                 type='button'
                                 disabled={
                                     !allSlotsFilled ||
-                                    respondBusy ||
-                                    capViolation
+                                    respondBusy
                                 }
                                 onClick={handleOffer}
                                 className={`w-24 rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${allSlotsFilled &&
-                                    !respondBusy &&
-                                    !capViolation
+                                    !respondBusy
                                     ? 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
                                     : 'cursor-not-allowed bg-zinc-800 text-zinc-500'
                                     }`}
@@ -6494,9 +6518,14 @@ function OfferCard({
                     creator's "Reçues" panel and the responder's
                     "Envoyées" panel. The gold color matches the
                     gold frame applied to the card above, so the
-                    whole card reads as one accepted state. */}
+                    whole card reads as one accepted state.
+                    
+                    When `onCancelAcceptedTrade` is provided, an
+                    "Annuler" button is rendered below the label so
+                    either manager can withdraw his acceptance if
+                    he changes his mind. Both panels pass this. */}
                 {isAccepted && (
-                    <div className='flex justify-center pt-1'>
+                    <div className='flex flex-col items-center gap-2 pt-1'>
                         <span
                             className='text-lg font-bold uppercase tracking-widest'
                             style={{
@@ -6507,6 +6536,17 @@ function OfferCard({
                         >
                             Offre acceptée
                         </span>
+
+                        {onCancelAcceptedTrade && (
+                            <button
+                                type='button'
+                                onClick={onCancelAcceptedTrade}
+                                disabled={busy}
+                                className='cursor-pointer rounded-lg border border-destructive/60 bg-transparent px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50'
+                            >
+                                Annuler
+                            </button>
+                        )}
                     </div>
                 )}
             </div>
@@ -8252,32 +8292,17 @@ function DirectOfferCard({
         connectedOfferedSalary;
 
     /**
-  * True when the connected team's post-trade cap space would
-  * be negative, i.e. the trade would push them over the salary
-  * cap.
+  * Number of slots with a player picked on the connected user's
+  * side, and on the target team's side. A direct offer must be
+  * a 1-for-1, 2-for-2, etc.: every player given up on one side
+  * must be matched by a player on the other.
   *
-  * Guarded by `seasonSalaryCap > 0`: when the cap data has not
-  * loaded yet (fresh tab, roster still fetching), seasonSalaryCap
-  * is 0 and both base values collapse to (0 - 0) = 0, which would
-  * otherwise read as a bust if only one side was loaded. The
-  * guard keeps the button enabled until we actually have numbers
-  * to prove a violation.
+  * NOTE: there is deliberately NO cap-violation gate on this
+  * card. Managers can send a direct offer that pushes either
+  * team over the salary cap; the projected cap values on the
+  * card header still show the impact in red when a side goes
+  * negative, but nothing is blocked.
   */
-    const connectedBustsCap =
-        seasonSalaryCap > 0 && connectedAdjustedCapSpace < 0;
-
-    /**
-     * Same rule, for the target team.
-     */
-    const targetBustsCap =
-        seasonSalaryCap > 0 && targetAdjustedCapSpace < 0;
-
-    /**
-     * Number of slots with a player picked on the connected user's
-     * side, and on the target team's side. A direct offer must be
-     * a 1-for-1, 2-for-2, etc.: every player given up on one side
-     * must be matched by a player on the other.
-     */
     const connectedPickedCount = useMemo(() => {
         let count = 0;
         for (const slot of slots) {
@@ -8310,25 +8335,26 @@ function DirectOfferCard({
         connectedPickedCount === 0 && targetPickedCount === 0;
 
     /**
-     * Single "cannot offer" flag, the OR of every blocking
-     * condition:
-     *
-     *   - capViolation      → the trade would push one side over
-     *                         the salary cap.
-     *   - noPlayersSelected → nothing has been drafted yet.
-     *   - sidesUnbalanced   → the number of players picked differs
-     *                         between the two sides (this also
-     *                         covers "one side empty, other side
-     *                         filled", which is not a valid trade).
-     *
-     * The "Offrir" button is disabled while this is true, and
-     * `handleOffer` re-checks it defensively so a stray activation
-     * can never slip a submission through.
-     */
-    const capViolation = connectedBustsCap || targetBustsCap;
-
+  * Single "cannot offer" flag, the OR of the two structural
+  * blocking conditions:
+  *
+  *   - noPlayersSelected → nothing has been drafted yet.
+  *   - sidesUnbalanced   → the number of players picked differs
+  *                         between the two sides (this also
+  *                         covers "one side empty, other side
+  *                         filled", which is not a valid trade).
+  *
+  * Cap violations are intentionally NOT blocking. A manager can
+  * send a direct offer that puts either team over the cap; the
+  * other manager decides whether to accept. The red cap line on
+  * the header is a warning, not a gate.
+  *
+  * The "Offrir" button is disabled while this is true, and
+  * `handleOffer` re-checks it defensively so a stray activation
+  * can never slip a submission through.
+  */
     const offerDisabled =
-        capViolation || noPlayersSelected || sidesUnbalanced;
+        noPlayersSelected || sidesUnbalanced;
 
     // NOTE: the "clear target picks on target team change" logic
     // used to live here as an effect on [targetTeamId]. It is now
@@ -8379,8 +8405,8 @@ function DirectOfferCard({
         // Defensive guard: the button is already disabled while
         // `offerDisabled` is true, but a stray activation (keyboard,
         // automation, or a future change that re-wires the click
-        // handler) must never be able to submit a trade that busts
-        // either team's cap, is empty, or has mismatched sides.
+        // handler) must never be able to submit an empty trade or
+        // one with mismatched sides. Cap violations are allowed.
         if (offerDisabled) return;
         if (targetTeamId == null) return;
         if (submitting) return;
