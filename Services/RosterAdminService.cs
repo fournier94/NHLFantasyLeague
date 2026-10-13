@@ -1440,10 +1440,11 @@ namespace NhlFantasyLeague.api.Services
 
             var playerIds = players.Select(p => p.Id).ToList();
 
-            var currentSeason = await _dbContext.Seasons
-                 .AsNoTracking()
-                 .OrderByDescending(s => s.StartDate)
-                 .FirstOrDefaultAsync();
+            // Current season is looked up by season code, not by
+            // "latest StartDate" — see the note in
+            // GetRosterGameStatsForDateAsync.
+            var currentSeason = await Data.SeasonQueries
+                .GetCurrentSeasonAsync(_dbContext);
 
             var currentEntryByPlayerId = new Dictionary<int, RosterEntry>();
 
@@ -1519,10 +1520,11 @@ namespace NhlFantasyLeague.api.Services
                 return new List<PlayerOwnershipRowDto>();
             }
 
-            var currentSeason = await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync(ct);
+            // Current season is looked up by season code, not by
+            // "latest StartDate" — see the note in
+            // GetRosterGameStatsForDateAsync.
+            var currentSeason = await Data.SeasonQueries
+                .GetCurrentSeasonAsync(_dbContext, ct);
 
             if (currentSeason == null)
             {
@@ -2368,12 +2370,17 @@ PlayerSeasonStat? seasonStat = null)
                 DateOnly date,
                 CancellationToken ct = default)
         {
-            // Resolve the current season. PlayerGameLog rows are
-            // scoped to a season, so we need its id to filter.
-            var season = await _dbContext.Seasons
-                .AsNoTracking()
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefaultAsync(ct);
+            // Resolve the current season by its season code, not by
+            // "latest StartDate". The draft-seeding step creates
+            // future seasons (2027-2028) whose StartDate is later
+            // than the current season's, so "latest StartDate" would
+            // silently return one of those, the roster lookup below
+            // would find zero entries, and the endpoint would return
+            // an empty list — which is the "Hier" table showing
+            // "Aucun de vos joueurs n'a joué hier" while games were
+            // actually played.
+            var season = await Data.SeasonQueries
+                .GetCurrentSeasonAsync(_dbContext, ct);
 
             if (season == null)
             {

@@ -266,15 +266,35 @@ namespace NhlFantasyLeague.api.Services.Health
             // team change detection below. One query, small table.
             // ---------------------------------------------------------
 
-            var teamIdByAbbrev = await _dbContext.NhlTeams
+            // Duplicate-safe: same UTA 59/68 rule as the other
+            // abbreviation-keyed lookups. Load the rows then group
+            // in memory so two rows with the same abbreviation do not
+            // throw.
+            var teamRowsForAbbrev = await _dbContext.NhlTeams
                 .AsNoTracking()
-                .Where(t => t.Abbreviation != null && t.Abbreviation != "")
-                .Select(t => new { t.Abbreviation, t.NhlTeamId })
-                .ToDictionaryAsync(
+                .Where(t =>
+                    t.Abbreviation != null &&
+                    t.Abbreviation != "")
+                .Select(t => new
+                {
+                    t.Abbreviation,
+                    t.NhlTeamId,
+                    t.IsActive
+                })
+                .ToListAsync(ct);
+
+            var teamIdByAbbrev = teamRowsForAbbrev
+                .GroupBy(
                     t => t.Abbreviation,
-                    t => t.NhlTeamId,
-                    StringComparer.OrdinalIgnoreCase,
-                    ct);
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .OrderByDescending(t => t.IsActive)
+                        .ThenBy(t => t.NhlTeamId)
+                        .First()
+                        .NhlTeamId,
+                    StringComparer.OrdinalIgnoreCase);
 
             // ---------------------------------------------------------
             // Apply the escalation ladder to every player before we

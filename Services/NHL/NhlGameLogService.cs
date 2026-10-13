@@ -153,9 +153,17 @@ namespace NhlFantasyLeague.api.Services.NHL
                     .AsNoTracking()
                     .ToListAsync();
 
+                // Duplicate-safe, same rule as the batch callers.
                 teamsByAbbreviation = teams
-                    .ToDictionary(
+                    .GroupBy(
                         t => t.Abbreviation,
+                        StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g
+                            .OrderByDescending(t => t.IsActive)
+                            .ThenBy(t => t.NhlTeamId)
+                            .First(),
                         StringComparer.OrdinalIgnoreCase);
             }
 
@@ -508,13 +516,23 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             // Load the team lookup ONCE for the whole run instead of
             // re-querying it inside SavePlayerGameLogsAsync per player.
+            //
+            // Duplicate-safe, same rule as
+            // RefreshCurrentSeasonForAllPlayersAsync.
             var allTeams = await _dbContext.NhlTeams
                 .AsNoTracking()
                 .ToListAsync(ct);
 
             var teamsByAbbreviation = allTeams
-                .ToDictionary(
+                .GroupBy(
                     t => t.Abbreviation,
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .OrderByDescending(t => t.IsActive)
+                        .ThenBy(t => t.NhlTeamId)
+                        .First(),
                     StringComparer.OrdinalIgnoreCase);
 
             var players = await _dbContext.Players
@@ -656,9 +674,24 @@ namespace NhlFantasyLeague.api.Services.NHL
                 .AsNoTracking()
                 .ToListAsync(ct);
 
+            // Duplicate-safe: if two rows in NhlTeams ever share an
+            // abbreviation (the UTA 59/68 incident from Oct 8 is the
+            // canonical example), a plain ToDictionary throws and
+            // kills the whole batch. Group first and pick one row
+            // per abbreviation so the job is immune to that class
+            // of data anomaly. Preference order within a group:
+            //   1. IsActive = true (the current row).
+            //   2. Lowest NhlTeamId, as a deterministic tiebreak.
             var teamsByAbbreviation = allTeams
-                .ToDictionary(
+                .GroupBy(
                     t => t.Abbreviation,
+                    StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .OrderByDescending(t => t.IsActive)
+                        .ThenBy(t => t.NhlTeamId)
+                        .First(),
                     StringComparer.OrdinalIgnoreCase);
 
             var playersQuery = _dbContext.Players

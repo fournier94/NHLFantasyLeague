@@ -479,8 +479,9 @@ namespace NhlFantasyLeague.api.Services
                 .ToListAsync();
 
             var currentSeason = seasons
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefault();
+        .FirstOrDefault(s =>
+            s.NhlSeasonCode ==
+            NhlFantasyLeague.api.Constants.SeasonCodes.Current);
 
             return new LeagueSummaryDto
             {
@@ -517,8 +518,9 @@ namespace NhlFantasyLeague.api.Services
                 .ToListAsync();
 
             var currentSeason = seasons
-                .OrderByDescending(s => s.StartDate)
-                .FirstOrDefault();
+     .FirstOrDefault(s =>
+         s.NhlSeasonCode ==
+         NhlFantasyLeague.api.Constants.SeasonCodes.Current);
 
             return seasons
                 .Select(s => ToSeasonDto(s, s.Id == currentSeason?.Id))
