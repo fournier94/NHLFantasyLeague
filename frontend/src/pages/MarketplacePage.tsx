@@ -166,6 +166,24 @@ function groupLabel(g: PositionGroup): string {
     }
 }
 
+/**
+ * Formats a player's name as "F. Lastname". Falls back to just the
+ * last name when the first name is missing or empty.
+ */
+function shortName(
+    firstName: string | null | undefined,
+    lastName: string | null | undefined,
+): string {
+    const first = (firstName ?? '').trim();
+    const last = (lastName ?? '').trim();
+
+    if (first.length === 0) {
+        return last;
+    }
+
+    return `${first.charAt(0).toUpperCase()}. ${last}`;
+}
+
 // `groupLabelPlural` used to render the <optgroup> labels of the
 // offering-player dropdown that SlotEditor used before the roster
 // popup replaced it. Kept removed to avoid a dead-code warning.
@@ -4168,11 +4186,11 @@ function SlotPlayerBlock({
                         onClick={(e) => e.stopPropagation()}
                         className='min-w-0 truncate font-semibold text-foreground transition-colors hover:text-[#00E5FF]'
                     >
-                        {firstName} {lastName}
+                        {shortName(firstName, lastName)}
                     </Link>
                 ) : (
                     <span className='min-w-0 truncate font-semibold'>
-                        {firstName} {lastName}
+                        {shortName(firstName, lastName)}
                     </span>
                 )}
 
@@ -4416,7 +4434,10 @@ function RespondingPlayerBlock({
 
                             <span className='truncate'>
                                 {entry
-                                    ? `${entry.firstName} ${entry.lastName}`
+                                    ? shortName(
+                                        entry.firstName,
+                                        entry.lastName,
+                                    )
                                     : matches.length === 0
                                         ? 'Aucun joueur admissible'
                                         : '— Choisir un joueur —'}
