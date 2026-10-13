@@ -1,4 +1,9 @@
-﻿import { useEffect, useRef, useState } from 'react';
+﻿import {
+    useEffect,
+    useRef,
+    useState,
+    useSyncExternalStore,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -30,6 +35,10 @@ import {
 import { useAura } from '@/lib/auraContext';
 import { usePwaInstall } from '@/lib/pwaInstall';
 import { IosShareHint } from '@/components/layout/IosShareHint';
+import {
+    getMarketplaceNotificationsSnapshot,
+    subscribeToMarketplaceNotifications,
+} from '@/lib/marketplaceNotificationsStore';
 import {
     auraPulseClass,
     auraPulseStyle,
@@ -220,6 +229,58 @@ function MarketplaceIcon({ className = NAV_ICON_CLASS }: { className?: string })
             <path d='M20 16 H7' />
             <path d='M10 13 L7 16 L10 19' />
         </svg>
+    );
+}
+
+/**
+ * Navbar badge that sits centered on the marketplace icon. Shows
+ * the number of unseen marketplace items (new browse offers + new
+ * received responses) for the connected user.
+ *
+ * Hidden when:
+ *   - the user is not authenticated, or
+ *   - the count is zero.
+ *
+ * Uses useSyncExternalStore so React re-renders only when the
+ * count actually changes. The subscription starts a 60-second
+ * polling loop; the loop stops automatically when the last
+ * subscriber (this component) unmounts.
+ *
+ * Rendering: the badge is absolutely positioned at the center of
+ * the parent icon wrapper. The parent must be a
+ * `relative inline-flex` element so the badge anchors to the icon
+ * itself rather than to the whole link.
+ */
+function MarketplaceBadge() {
+    const { isAuthenticated } = useAuth();
+
+    if (!isAuthenticated) return null;
+
+    return <MarketplaceBadgeContent />;
+}
+
+function MarketplaceBadgeContent() {
+    const count = useSyncExternalStore(
+        subscribeToMarketplaceNotifications,
+        getMarketplaceNotificationsSnapshot,
+    );
+
+    if (count <= 0) return null;
+
+    const label = count > 99 ? '99+' : String(count);
+
+    return (
+        <span
+            aria-label={`${count} nouvelle${count > 1 ? 's' : ''} notification${count > 1 ? 's' : ''} dans le marché`}
+            className='pointer-events-none absolute left-1/2 top-1/2 flex h-5 min-w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 px-1 text-[0.6rem] font-bold leading-none'
+            style={{
+                borderColor: '#080D1A',
+                backgroundColor: GOLD,
+                color: '#000000',
+            }}
+        >
+            {label}
+        </span>
     );
 }
 
@@ -438,7 +499,10 @@ export function TopBar() {
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
                     >
-                        <MarketplaceIcon className={NAV_ICON_CLASS} />
+                        <span className='relative inline-block h-6 w-6 max-[400px]:h-5 max-[400px]:w-5'>
+                            <MarketplaceIcon className='block h-full w-full' />
+                            <MarketplaceBadge />
+                        </span>
                         <span>Marketplace</span>
                     </Link>
 
@@ -514,16 +578,32 @@ export function TopBar() {
                         <InjuryIcon className={NAV_ICON_CLASS} />
                     </Link>
 
-                    {/* Marketplace shortcut — mobile only. */}
+                    {/* Marketplace shortcut — mobile only.
+
+                        The SVG is rendered directly inside the <a>
+                        with the same NAV_ICON_CLASS the other mobile
+                        shortcut icons use. An inline-block wrapper
+                        around it (as we tried first) changes the
+                        icon's baseline inside the inline <a> and
+                        shifts it up. Rendering the SVG bare keeps it
+                        on the exact line box it had before the badge
+                        existed.
+
+                        The badge is absolutely positioned against
+                        the <a> (which is already `relative`), and
+                        centers on the <a>'s padding box. Because the
+                        <a> is a symmetric p-2 box around the icon,
+                        the badge effectively centers on the icon. */}
                     <Link
                         to='/marketplace'
                         aria-label='Marketplace'
-                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/marketplace'
+                        className={`relative cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/marketplace'
                             ? 'text-primary'
                             : 'text-foreground'
                             }`}
                     >
                         <MarketplaceIcon className={NAV_ICON_CLASS} />
+                        <MarketplaceBadge />
                     </Link>
 
                     {/* Game Day shortcut — mobile only. */}

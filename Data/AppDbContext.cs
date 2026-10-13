@@ -98,6 +98,15 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<TradeOfferView> TradeOfferViews { get; set; }
 
         /// <summary>
+        /// Per-user memory of which marketplace responses a user has
+        /// already seen. One row per (UserId, TradeOfferResponseId);
+        /// only its existence matters (it drives the "Nouvelle offre"
+        /// badge on the Reçues panel and the navbar notification
+        /// count for unseen responses).
+        /// </summary>
+        public DbSet<TradeOfferResponseView> TradeOfferResponseViews { get; set; }
+
+        /// <summary>
         /// Marketplace responses. One row per (TradeOffer, RespondingTeam)
         /// while the offer is active. What the offer creator sees in
         /// his "Offres reçues" section.
@@ -717,6 +726,30 @@ namespace NhlFantasyLeague.api.Data
             // is idempotent even if a user double-taps the browse tab.
             modelBuilder.Entity<TradeOfferView>()
                 .HasIndex(v => new { v.UserId, v.TradeOfferId })
+                .IsUnique();
+
+            // -----------------------------------------------------------------
+            // TradeOfferResponseView (per-user "already seen" marker
+            // for received responses)
+            // -----------------------------------------------------------------
+
+            // Cascade on both sides: deleting the user or the
+            // response drops its view rows too.
+            modelBuilder.Entity<TradeOfferResponseView>()
+                .HasOne(v => v.User)
+                .WithMany()
+                .HasForeignKey(v => v.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferResponseView>()
+                .HasOne(v => v.TradeOfferResponse)
+                .WithMany()
+                .HasForeignKey(v => v.TradeOfferResponseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // One row per (user, response).
+            modelBuilder.Entity<TradeOfferResponseView>()
+                .HasIndex(v => new { v.UserId, v.TradeOfferResponseId })
                 .IsUnique();
 
             // -----------------------------------------------------------------

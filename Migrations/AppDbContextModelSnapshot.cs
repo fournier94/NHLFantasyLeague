@@ -1917,6 +1917,33 @@ namespace NhlFantasyLeague.api.Migrations
                     b.ToTable("TradeOfferResponseSlots");
                 });
 
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseView", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("SeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("TradeOfferResponseId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TradeOfferResponseId");
+
+                    b.HasIndex("UserId", "TradeOfferResponseId")
+                        .IsUnique();
+
+                    b.ToTable("TradeOfferResponseViews");
+                });
+
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferSlot", b =>
                 {
                     b.Property<int>("Id")
@@ -2654,6 +2681,25 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Navigation("RespondingPlayer");
 
                     b.Navigation("TradeOfferResponse");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseView", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.TradeOfferResponse", "TradeOfferResponse")
+                        .WithMany()
+                        .HasForeignKey("TradeOfferResponseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.ApplicationUser", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TradeOfferResponse");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferSlot", b =>

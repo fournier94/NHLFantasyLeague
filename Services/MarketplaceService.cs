@@ -1018,6 +1018,167 @@ offeredPlayerIds, ct);
             return inserted;
         }
 
+        /// <summary>
+        /// Returns the count of unseen offers and unseen received
+        /// responses for the given user. This is what the navbar
+        /// notification badge renders.
+        ///
+        /// "Unseen offer" = an ACTIVE offer not created by the
+        /// user's team, that the user has never had in view on the
+        /// browse tab (no TradeOfferView row), and that the user
+        /// has not already responded to (a Pending response means
+        /// the offer is hidden from browse and should not be
+        /// counted).
+        ///
+        /// "Unseen response" = a PENDING response on an offer the
+        /// user's team created, that the user has never had in
+        /// view on the received tab (no TradeOfferResponseView
+        /// row). Accepted responses are never counted: they were
+        /// acted on, which means they were seen.
+        ///
+        /// The two counts are independent; Total is the sum and is
+        /// the number the badge renders.
+        /// </summary>
+        public async Task<MarketplaceNotificationCountDto>
+            GetNotificationCountAsync(
+                int userId,
+                CancellationToken ct = default)
+        {
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return new MarketplaceNotificationCountDto();
+            }
+
+            var myTeamId = user.FantasyTeamId.Value;
+
+            // --- Unseen offers --------------------------------------------
+            var seenOfferIds = _dbContext.TradeOfferViews
+                .Where(v => v.UserId == userId)
+                .Select(v => v.TradeOfferId);
+
+            var respondedOfferIds = _dbContext.TradeOfferResponses
+                .Where(r =>
+                    r.RespondingFantasyTeamId == myTeamId &&
+                    r.Status == TradeOfferResponseStatus.Pending)
+                .Select(r => r.TradeOfferId);
+
+            var unseenOffers = await _dbContext.TradeOffers
+                .AsNoTracking()
+                .Where(o =>
+                    o.Status == TradeOfferStatus.Active &&
+                    o.CreatedByFantasyTeamId != myTeamId &&
+                    !seenOfferIds.Contains(o.Id) &&
+                    !respondedOfferIds.Contains(o.Id))
+                .CountAsync(ct);
+
+            // --- Unseen responses -----------------------------------------
+            var seenResponseIds = _dbContext.TradeOfferResponseViews
+                .Where(v => v.UserId == userId)
+                .Select(v => v.TradeOfferResponseId);
+
+            var unseenResponses = await _dbContext.TradeOfferResponses
+                .AsNoTracking()
+                .Where(r =>
+                    r.Status == TradeOfferResponseStatus.Pending &&
+                    r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
+                    !seenResponseIds.Contains(r.Id))
+                .CountAsync(ct);
+
+            return new MarketplaceNotificationCountDto
+            {
+                UnseenOffers = unseenOffers,
+                UnseenResponses = unseenResponses,
+                Total = unseenOffers + unseenResponses,
+            };
+        }
+
+        /// <summary>
+        /// Records that the calling user has seen the given
+        /// responses on his Reçues tab. Idempotent: responses the
+        /// user already saw are skipped. Responses on offers the
+        /// user did not create are silently filtered out so a
+        /// caller cannot mark someone else's responses as seen.
+        ///
+        /// Returns the number of view rows inserted.
+        /// </summary>
+        public async Task<int> MarkResponsesSeenAsync(
+            int userId,
+            IReadOnlyCollection<int> rawResponseIds,
+            CancellationToken ct = default)
+        {
+            if (rawResponseIds.Count == 0)
+            {
+                return 0;
+            }
+
+            var user = await _dbContext.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+            if (user?.FantasyTeamId == null)
+            {
+                return 0;
+            }
+
+            var myTeamId = user.FantasyTeamId.Value;
+
+            // Only responses on offers the user created are valid
+            // candidates. This is the authorization check: a user
+            // cannot mark someone else's responses as seen.
+            var validResponseIds = await _dbContext.TradeOfferResponses
+                .AsNoTracking()
+                .Where(r =>
+                    rawResponseIds.Contains(r.Id) &&
+                    r.TradeOffer.CreatedByFantasyTeamId == myTeamId)
+                .Select(r => r.Id)
+                .ToListAsync(ct);
+
+            if (validResponseIds.Count == 0)
+            {
+                return 0;
+            }
+
+            var alreadySeen = await _dbContext.TradeOfferResponseViews
+                .Where(v =>
+                    v.UserId == userId &&
+                    validResponseIds.Contains(v.TradeOfferResponseId))
+                .Select(v => v.TradeOfferResponseId)
+                .ToListAsync(ct);
+
+            var seenSet = alreadySeen.ToHashSet();
+            var now = DateTime.UtcNow;
+            var inserted = 0;
+
+            foreach (var id in validResponseIds)
+            {
+                if (seenSet.Contains(id))
+                {
+                    continue;
+                }
+
+                _dbContext.TradeOfferResponseViews.Add(
+                    new TradeOfferResponseView
+                    {
+                        UserId = userId,
+                        TradeOfferResponseId = id,
+                        SeenAt = now,
+                    });
+
+                inserted++;
+            }
+
+            if (inserted > 0)
+            {
+                await _dbContext.SaveChangesAsync(ct);
+            }
+
+            return inserted;
+        }
+
         public async Task<TradeOfferActionResultDto> CancelOfferAsync(
             int userId,
             int offerId,
@@ -1669,6 +1830,18 @@ r.Status == TradeOfferResponseStatus.Accepted))
             var teamCapInfo = await LoadCreatorTeamCapInfoAsync(
                 teamIds, ct);
 
+            // Per-user "seen" markers for this response set. Only
+            // the ones we are about to render matter.
+            var seenResponseIds = (await _dbContext
+                .TradeOfferResponseViews
+                .AsNoTracking()
+                .Where(v =>
+                    v.UserId == userId &&
+                    responseIds.Contains(v.TradeOfferResponseId))
+                .Select(v => v.TradeOfferResponseId)
+                .ToListAsync(ct))
+                .ToHashSet();
+
             return responses
      .Select(r => ToResponseDto(
          r,
@@ -1677,7 +1850,8 @@ r.Status == TradeOfferResponseStatus.Accepted))
          teamCapInfo,
          offerPicksByOfferId,
          responsePicksByResponseId,
-         requestedPicksByResponseId))
+         requestedPicksByResponseId,
+         seenResponseIds))
      .ToList();
         }
 
@@ -2730,7 +2904,8 @@ IReadOnlyDictionary<int, PlayerStatLines> statsByPlayerId,
 CreatorTeamCapInfo? teamCapInfo = null,
 IReadOnlyDictionary<int, List<DraftPickDto>>? offerPicksByOfferId = null,
 IReadOnlyDictionary<int, List<DraftPickDto>>? responsePicksByResponseId = null,
-IReadOnlyDictionary<int, List<DraftPickDto>>? requestedPicksByResponseId = null)
+IReadOnlyDictionary<int, List<DraftPickDto>>? requestedPicksByResponseId = null,
+IReadOnlySet<int>? seenResponseIds = null)
         {
             var offerSlotsByIndex = response.TradeOffer.Slots
                 .ToDictionary(s => s.SlotIndex);
@@ -2776,6 +2951,17 @@ IReadOnlyDictionary<int, List<DraftPickDto>>? requestedPicksByResponseId = null)
                     response.TradeOffer.Season?.SalaryCap ?? 0m,
                 CreatedAt = response.CreatedAt,
                 Status = response.Status.ToString(),
+
+                // Only Pending responses can be "new". An Accepted
+                // response was acted on, which means it was seen.
+                // A null seen-set (single-response loader) means
+                // "cannot prove unseen" and defaults to false.
+                IsNew =
+                    response.Status ==
+                        TradeOfferResponseStatus.Pending &&
+                    seenResponseIds != null &&
+                    !seenResponseIds.Contains(response.Id),
+
                 Slots = response.Slots
                     .OrderBy(s => s.SlotIndex)
                     .Select(s =>

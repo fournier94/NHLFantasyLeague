@@ -23,6 +23,7 @@ import {
     listSentResponses,
     listTradeOffers,
     markOffersSeen,
+    markResponsesSeen,
     respondToTradeOffer,
     updateTradeOffer,
     type CreateTradeOfferSlotRequest,
@@ -51,6 +52,9 @@ import {
     setMarketplaceSection,
 } from '@/lib/marketplaceSectionState';
 import * as DraftPicks from '@/lib/marketplacePicksState';
+import {
+    refreshMarketplaceNotificationsNow,
+} from '@/lib/marketplaceNotificationsStore';
 import { TradePicksSlot } from '@/components/marketplace/TradePicksSlot';
 import {
     getDirectOfferDraft,
@@ -1280,6 +1284,87 @@ export default function MarketplacePage() {
         setView('add');
     }
 
+    /**
+     * "Contre-offre" handler for the Reçues panel. Copies the
+     * received response into the Créer draft and switches the page
+     * to the Créer tab, so the user can tweak and send a direct
+     * counter-offer to the manager who responded.
+     *
+     * Mapping:
+     *   - draft.selectedTargetTeamId = the responder's team
+     *   - draft slot i:
+     *       offeringPlayerId = the user's own offered player on
+     *                          the original offer slot i (from
+     *                          the offer side of the response)
+     *       targetPlayerId   = the responder's player on slot i
+     *                          (from the response side)
+     *   - DraftPicks DIRECT_OFFERING_KEY = offer.picks +
+     *     response.requestedPicks (everything the user gives)
+     *   - DraftPicks DIRECT_TARGET_KEY   = response.respondingPicks
+     *     (everything the responder gives)
+     *
+     * The note is reset, matching "Utiliser comme base": the note
+     * on the received response is a message from the other manager,
+     * not a message from the current user to him.
+     *
+     * After the draft is populated and the view switches, the
+     * response is rejected on the server so it disappears from
+     * Reçues. The underlying offer stays Active for other
+     * responders. If the reject call fails (transient network
+     * error), the response will simply reappear the next time
+     * Reçues loads — the draft the user is looking at is not
+     * affected.
+     */
+    function handleCounterOffer(response: TradeOfferResponse): void {
+        const sortedSlots = [...response.slots].sort(
+            (a, b) => a.slotIndex - b.slotIndex,
+        );
+
+        const draftSlots = sortedSlots.map((s) => ({
+            offeringPlayerId: s.offeringPlayerId ?? null,
+            targetPlayerId: s.respondingPlayerId ?? null,
+        }));
+
+        updateDirectOfferDraft((d) => ({
+            ...d,
+            selectedTargetTeamId: String(
+                response.respondingFantasyTeamId,
+            ),
+            slots:
+                draftSlots.length > 0
+                    ? draftSlots
+                    : [
+                        {
+                            offeringPlayerId: null,
+                            targetPlayerId: null,
+                        },
+                    ],
+            note: '',
+        }));
+
+        DraftPicks.setPicks(
+            DraftPicks.DIRECT_OFFERING_KEY,
+            [
+                ...(response.creatorPicks ?? []).map((p) => p.id),
+                ...(response.requestedPicks ?? []).map((p) => p.id),
+            ],
+        );
+
+        DraftPicks.setPicks(
+            DraftPicks.DIRECT_TARGET_KEY,
+            (response.respondingPicks ?? []).map((p) => p.id),
+        );
+
+        // Fire and forget: the user is already in the Créer tab
+        // by the time this resolves. If it fails, the response
+        // will reappear on the next Reçues load.
+        rejectTradeOfferResponse(response.id).catch(() => {
+            // Non-fatal.
+        });
+
+        setView('add');
+    }
+
     return (
         <section className='-mt-4 space-y-4 sm:-mt-6'>
             <div className='mt-2 flex flex-col items-center gap-2'>
@@ -1634,6 +1719,7 @@ export default function MarketplacePage() {
                     onOpenTeamRoster={(id, name) =>
                         setRosterPopupTeam({ id, name })
                     }
+                    onCounterOffer={handleCounterOffer}
                 />
             )}
 
@@ -3488,9 +3574,11 @@ function BrowseOffersPanel({
         const ids = offers.map((o) => o.id);
 
         const timer = window.setTimeout(() => {
-            markOffersSeen(ids).catch(() => {
-                // Non-fatal.
-            });
+            markOffersSeen(ids)
+                .then(() => refreshMarketplaceNotificationsNow())
+                .catch(() => {
+                    // Non-fatal.
+                });
         }, MARK_SEEN_DELAY_MS);
 
         return () => {
@@ -3605,7 +3693,7 @@ function responseToOfferShape(
         note: response.tradeOfferNote,
         status: response.status,
         isMine: false,
-        isNew: false,
+        isNew: response.isNew,
         picks: response.creatorPicks ?? [],
         requestedPicks: response.requestedPicks ?? [],
         respondingPicks: response.respondingPicks ?? [],
@@ -3672,9 +3760,18 @@ function responseToOfferShape(
 function ReceivedOffersPanel({
     refreshTick,
     onOpenTeamRoster,
+    onCounterOffer,
 }: {
     refreshTick: number;
     onOpenTeamRoster: (teamId: number, teamName: string) => void;
+    /**
+     * Called when the user clicks "Contre-offre" on a received
+     * response. The parent handles the transition (populate the
+     * Créer draft, switch the tab, reject the response). Optional
+     * so the panel can still be rendered without it in a future
+     * preview context.
+     */
+    onCounterOffer?: (response: TradeOfferResponse) => void;
 }) {
     const [responses, setResponses] = useState<TradeOfferResponse[]>([]);
     const [loading, setLoading] = useState(true);
@@ -3704,6 +3801,35 @@ function ReceivedOffersPanel({
     useEffect(() => {
         void load();
     }, [load, refreshTick]);
+
+    /**
+     * Fire-and-forget "seen" marker, 2 seconds after the list has
+     * been on screen. Same delay and reasoning as the browse tab:
+     * long enough that a StrictMode double-mount never has time
+     * to consume the "new" state before the user actually sees it,
+     * short enough that the "Nouvelle offre" chips feel responsive.
+     *
+     * On success, forces an immediate refetch of the navbar badge
+     * so the count drops without waiting for the next 60-second
+     * poll tick.
+     */
+    useEffect(() => {
+        if (responses.length === 0) return;
+
+        const ids = responses.map((r) => r.id);
+
+        const timer = window.setTimeout(() => {
+            markResponsesSeen(ids)
+                .then(() => refreshMarketplaceNotificationsNow())
+                .catch(() => {
+                    // Non-fatal.
+                });
+        }, MARK_SEEN_DELAY_MS);
+
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, [responses]);
 
     async function handleAccept(responseId: number) {
         setBusyId(responseId);
@@ -3786,6 +3912,11 @@ function ReceivedOffersPanel({
                     userRoster={null}
                     onAccept={() => void handleAccept(response.id)}
                     onReject={() => void handleReject(response.id)}
+                    onCounterOffer={
+                        onCounterOffer
+                            ? () => onCounterOffer(response)
+                            : undefined
+                    }
                     onOpenTeamRoster={onOpenTeamRoster}
                 />
             ))}
@@ -4707,6 +4838,7 @@ function OfferCard({
     onSlotClick,
     onAccept,
     onReject,
+    onCounterOffer,
     responseStatus,
     onCancelResponse,
     onOpenTeamRoster,
@@ -4749,12 +4881,21 @@ function OfferCard({
   */
     onAccept?: () => void;
 
-    /**
-     * When provided AND the offer is still Pending, renders the
-     * "Refuser" button to the left of "Accepter". Only the "Offres
-     * reçues" panel passes this.
-     */
-    onReject?: () => void;
+        /**
+       * When provided AND the offer is still Pending, renders the
+       * "Refuser" button to the left of "Accepter". Only the "Offres
+       * reçues" panel passes this.
+       */
+        onReject?: () => void;
+
+        /**
+         * When provided AND the offer is still Pending, renders a
+         * "Contre-offre" button to the left of "Refuser". Only the
+         * "Offres reçues" panel passes this. The callback is
+         * responsible for populating the Créer draft, switching the
+         * tab, and rejecting the underlying response.
+         */
+        onCounterOffer?: () => void;
 
     /**
      * When set, this card represents a response the current user's
@@ -6326,39 +6467,55 @@ function OfferCard({
                     </div>
                 )}
 
-                {/* Response action buttons (Accepter / Refuser):
-                    shown only when the parent wires at least one
-                    callback (i.e. the "Offres reçues" panel) AND the
-                    response is still Pending. Refuser sits to the
-                    left of Accepter. Once the response flips to
-                    Accepted, this block disappears entirely and the
-                    gold "OFFRE ACCEPTÉE" label below takes its
-                    place. */}
-                {(onAccept || onReject) && offer.status === 'Pending' && (
-                    <div className='flex justify-center gap-2 pt-1'>
-                        {onReject && (
-                            <button
-                                type='button'
-                                onClick={onReject}
-                                disabled={busy}
-                                className='w-32 cursor-pointer rounded-lg border border-destructive/60 bg-transparent px-4 py-2 text-sm font-bold uppercase tracking-wider text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50'
-                            >
-                                Refuser
-                            </button>
-                        )}
+                {/* Response action buttons (Contre-offre / Refuser /
+                    Accepter): shown only when the parent wires at
+                    least one callback AND the response is still
+                    Pending. Once the response flips to Accepted,
+                    this block disappears entirely and the gold
+                    "OFFRE ACCEPTÉE" label below takes its place.
+                    
+                    The three buttons share the row equally via
+                    flex-1, and the container's default
+                    items-stretch makes the "Contre-offre" button
+                    (smaller font, longer label) match the height
+                    of the other two instead of being shorter. */}
+                {(onCounterOffer || onAccept || onReject) &&
+                    offer.status === 'Pending' && (
+                        <div className='flex items-stretch justify-center gap-2 pt-1'>
+                            {onCounterOffer && (
+                                <button
+                                    type='button'
+                                    onClick={onCounterOffer}
+                                    disabled={busy}
+                                    className='flex-1 cursor-pointer rounded-lg border border-[#00C8FF]/60 bg-transparent px-2 py-2 text-xs font-bold uppercase tracking-wider text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-50'
+                                >
+                                    Contre-offre
+                                </button>
+                            )}
 
-                        {onAccept && (
-                            <button
-                                type='button'
-                                onClick={onAccept}
-                                disabled={busy}
-                                className='w-32 cursor-pointer rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold uppercase tracking-wider text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50'
-                            >
-                                {busy ? 'Envoi...' : 'Accepter'}
-                            </button>
-                        )}
-                    </div>
-                )}
+                            {onReject && (
+                                <button
+                                    type='button'
+                                    onClick={onReject}
+                                    disabled={busy}
+                                    className='flex-1 cursor-pointer rounded-lg border border-destructive/60 bg-transparent px-2 py-2 text-sm font-bold uppercase tracking-wider text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50'
+                                >
+                                    Refuser
+                                </button>
+                            )}
+
+                            {onAccept && (
+                                <button
+                                    type='button'
+                                    onClick={onAccept}
+                                    disabled={busy}
+                                    className='flex-1 cursor-pointer rounded-lg bg-emerald-500 px-2 py-2 text-sm font-bold uppercase tracking-wider text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50'
+                                >
+                                    {busy ? 'Envoi...' : 'Accepter'}
+                                </button>
+                            )}
+                        </div>
+                    )}
 
                 {/* Accepted-state label. Rendered on every card whose
                     underlying response status is Accepted — which

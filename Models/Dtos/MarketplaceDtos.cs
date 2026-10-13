@@ -94,6 +94,24 @@
         public List<int> OfferIds { get; set; } = new();
     }
 
+    public class MarkResponsesSeenRequest
+    {
+        public List<int> ResponseIds { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Navbar badge payload: how many offers the current user has
+    /// not yet seen on the browse tab, and how many responses to his
+    /// own offers he has not yet seen on the received tab. Total is
+    /// the sum, and is what the badge renders.
+    /// </summary>
+    public class MarketplaceNotificationCountDto
+    {
+        public int UnseenOffers { get; set; }
+        public int UnseenResponses { get; set; }
+        public int Total { get; set; }
+    }
+
     public class TradeOfferResponseDto
     {
         public int Id { get; set; }
@@ -113,6 +131,14 @@
 
         public DateTime CreatedAt { get; set; }
         public string Status { get; set; } = string.Empty;
+
+        /// <summary>
+        /// True when this response is still Pending and the current
+        /// user has never loaded the Reçues panel with this response
+        /// in view. Drives the "Nouvelle offre" badge on the Reçues
+        /// card and the navbar notification count.
+        /// </summary>
+        public bool IsNew { get; set; }
 
         public List<TradeOfferResponseSlotDto> Slots { get; set; } = new();
 

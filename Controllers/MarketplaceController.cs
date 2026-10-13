@@ -264,6 +264,57 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
+        /// Records that the calling user has seen the given responses
+        /// on his Reçues tab. Idempotent. Called by the received tab
+        /// after the list has been on screen for a short grace
+        /// period, mirroring the browse tab's mark-seen flow.
+        /// </summary>
+        [HttpPost("responses/mark-seen")]
+        public async Task<IActionResult> MarkResponsesSeen(
+            [FromBody] MarkResponsesSeenRequest request,
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var inserted = await _marketplaceService
+                .MarkResponsesSeenAsync(
+                    uid,
+                    request.ResponseIds ?? new List<int>(),
+                    ct);
+
+            return Ok(new { inserted });
+        }
+
+        /// <summary>
+        /// Returns the navbar notification count for the calling
+        /// user: how many offers he has not yet seen on the browse
+        /// tab, and how many responses on his own offers he has not
+        /// yet seen on the received tab. Polled by the SPA every
+        /// 60 seconds. The Total is what the badge renders.
+        /// </summary>
+        [HttpGet("notifications/count")]
+        public async Task<IActionResult> GetNotificationCount(
+            CancellationToken ct)
+        {
+            var userId = _userManager.GetUserId(User);
+
+            if (!int.TryParse(userId, out var uid))
+            {
+                return Unauthorized();
+            }
+
+            var count = await _marketplaceService
+                .GetNotificationCountAsync(uid, ct);
+
+            return Ok(count);
+        }
+
+        /// <summary>
         /// Accepts a Pending response to one of the calling user's own
         /// offers. Pure state change: no player is moved, no roster
         /// row is touched.

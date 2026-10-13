@@ -1938,6 +1938,42 @@ export function markOffersSeen(
     );
 }
 
+/**
+ * Records that the current user has seen the given received
+ * responses on his Reçues tab. Fire-and-forget, same convention
+ * as markOffersSeen: the tab schedules this a couple of seconds
+ * after the list has been rendered.
+ */
+export function markResponsesSeen(
+    responseIds: number[],
+): Promise<{ inserted: number }> {
+    return apiPost<{ inserted: number }>(
+        '/Marketplace/responses/mark-seen',
+        { responseIds },
+    );
+}
+
+/**
+ * Navbar notification badge payload. `total` is what the badge
+ * renders: unseen browse offers + unseen received responses for
+ * the connected user.
+ *
+ * Fetched with cacheTtlMs 0 so the polling loop always hits the
+ * API and never serves a stale cached count.
+ */
+export interface MarketplaceNotificationCount {
+    unseenOffers: number;
+    unseenResponses: number;
+    total: number;
+}
+
+export function getMarketplaceNotifications(): Promise<MarketplaceNotificationCount> {
+    return apiGet<MarketplaceNotificationCount>(
+        '/Marketplace/notifications/count',
+        { cacheTtlMs: 0 },
+    );
+}
+
 /** Cancels one of the current user's own active offers. */
 export function cancelTradeOffer(
     id: number,
@@ -2042,6 +2078,15 @@ export interface TradeOfferResponse {
     id: number;
     tradeOfferId: number;
     tradeOfferNote: string | null;
+
+    /**
+     * True when this response is still Pending and the current
+     * user has never loaded the Reçues panel with this response
+     * in view. Drives the "Nouvelle offre" badge on the Reçues
+     * card and the navbar notification count.
+     */
+    isNew: boolean;
+
     tradeOfferCreatedByFantasyTeamId: number;
     tradeOfferCreatedByFantasyTeamName: string;
 
