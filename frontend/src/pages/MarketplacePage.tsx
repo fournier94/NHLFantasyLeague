@@ -99,13 +99,14 @@ const EMPTY_SLOT: SlotState = {
     maxSalary: '',
     maxAge: '',
     minPointsLastYear: '',
-    // Every criterion ticked by default: the responder's dropdown
-    // is filtered by it, matching the marketplace's historical
-    // behavior. The offer creator can opt out per criterion.
-    enforceMinContractYears: true,
-    enforceMaxSalary: true,
-    enforceMaxAge: true,
-    enforceMinPointsLastYear: true,
+    // Every criterion unticked by default: the responder's
+    // dropdown is not filtered by any criterion unless the offer
+    // creator explicitly opts in. A criterion with its box
+    // unticked is shown to the responder as a preference.
+    enforceMinContractYears: false,
+    enforceMaxSalary: false,
+    enforceMaxAge: false,
+    enforceMinPointsLastYear: false,
 };
 
 const MAX_SLOTS = 10;
@@ -3069,11 +3070,8 @@ function FilterForm({
                 </button>
             </div>
 
-            <p className='text-[0.55rem] leading-snug text-[#7DD3FC]/70 md:text-[0.6rem]'>
-                Un critère coché filtre le menu déroulant du
-                gestionnaire qui vous répondra : il ne verra que les
-                joueurs qui y répondent. Non coché = simple
-                préférence, aucun filtrage.
+            <p className='text-[0.65rem] leading-snug text-[#7DD3FC]/70 md:text-[0.7rem]'>
+                Si un critère est coché, l'autre utilisateur ne pourra pas ajouter de joueur qui ne répondent pas à ce critère.
             </p>
 
             <div className='grid grid-cols-2 gap-x-2 gap-y-2'>
@@ -3865,7 +3863,7 @@ function StatLinesTable({
                     {columns.map((column) => (
                         <th
                             key={column}
-                            className='px-0 text-center font-normal'
+                            className={`px-0 text-center ${column === 'FP' || column === 'GP' ? 'font-bold' : 'font-normal'}`}
                             style={{ color: statColumnColor(column) }}
                         >
                             {column}
@@ -3883,7 +3881,7 @@ function StatLinesTable({
                     {currentValues.map((value, index) => (
                         <td
                             key={index}
-                            className='px-0 text-center'
+                            className={`px-0 text-center ${columns[index] === 'FP' || columns[index] === 'GP' ? 'font-bold' : ''}`}
                             style={{
                                 color: statColumnColor(columns[index]),
                             }}
@@ -3901,7 +3899,7 @@ function StatLinesTable({
                     {previousValues.map((value, index) => (
                         <td
                             key={index}
-                            className='px-0 text-center'
+                            className={`px-0 text-center ${columns[index] === 'FP' || columns[index] === 'GP' ? 'font-bold' : ''}`}
                             style={{
                                 color: statColumnColor(columns[index]),
                             }}
@@ -4159,7 +4157,7 @@ function SlotPlayerBlock({
 
     return (
         <>
-            <div className='flex h-7 w-full items-center justify-start gap-x-1.5 text-sm text-foreground md:text-[0.9rem]'>
+            <div className='flex h-7 w-full items-center justify-start gap-x-1.5 text-[0.8rem] text-foreground md:text-[0.85rem]'>
                 {nhlTeam && (
                     <NhlTeamLogo abbreviation={nhlTeam} size={20} />
                 )}
@@ -4196,7 +4194,7 @@ function SlotPlayerBlock({
             />
 
             {currentContractLabel && (
-                <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.6rem] font-semibold text-emerald-400 md:text-xs'>
+                <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.8rem] leading-none font-semibold text-emerald-400 md:text-[0.85rem]'>
                     <span className='whitespace-nowrap'>
                         {currentContractLabel}
                     </span>
@@ -4383,7 +4381,7 @@ function RespondingPlayerBlock({
                          * right rather than pushing the name
                          * off-center.
                          */}
-                        <span className='flex min-w-0 items-center justify-center gap-x-1.5 truncate pr-2 text-sm font-semibold text-foreground md:text-[0.9rem]'>
+                        <span className='flex min-w-0 items-center justify-center gap-x-1.5 truncate pr-2 text-[0.8rem] font-semibold text-foreground md:text-[0.85rem]'>
                             {entry?.nhlTeamAbbreviation && (
                                 /*
                                  * Wrapper holds the layout box at
@@ -4456,7 +4454,7 @@ function RespondingPlayerBlock({
                     />
 
                     {currentContractLabel && (
-                        <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-sm leading-none font-semibold text-emerald-400 md:text-base'>
+                        <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.8rem] leading-none font-semibold text-emerald-400 md:text-[0.85rem]'>
                             <span className='whitespace-nowrap'>
                                 {currentContractLabel}
                             </span>
@@ -6170,25 +6168,25 @@ function RosterPlayerRow({
             {onClearPick != null &&
                 currentPickedPlayerId != null &&
                 entry.playerId === currentPickedPlayerId ? (
-                <button
-                    type='button'
-                    onClick={onClearPick}
-                    className='absolute left-2 top-2 inline-flex h-3.5 shrink-0 cursor-pointer items-center justify-center rounded bg-red-600 px-1.5 text-[0.6rem] font-bold uppercase leading-none tracking-wide text-black transition-colors hover:bg-red-500 md:h-4 md:text-[0.65rem]'
-                >
-                    Retirer
-                </button>
+                    <button
+                        type='button'
+                        onClick={onClearPick}
+                        className='absolute left-2 top-2 inline-flex h-[21.875px] shrink-0 cursor-pointer items-center justify-center rounded bg-red-600 px-1.5 text-[0.6rem] font-bold uppercase leading-none tracking-wide text-black transition-colors hover:bg-red-500 md:h-[25px] md:text-[0.65rem]'
+                    >
+                        Retirer
+                    </button>
             ) : onAdd ? (
-                <button
-                    type='button'
-                    onClick={onAdd}
-                    className={`absolute left-2 top-2 inline-flex h-3.5 shrink-0 cursor-pointer items-center justify-center rounded px-1.5 text-[0.6rem] font-bold uppercase leading-none tracking-wide transition-colors md:h-4 md:text-[0.65rem] ${capContext != null &&
-                        (leftOverCap || rightOverCap)
-                        ? 'bg-yellow-400 text-yellow-950 hover:bg-yellow-300'
-                        : 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
-                        }`}
-                >
-                    Ajouter
-                </button>
+                    <button
+                        type='button'
+                        onClick={onAdd}
+                        className={`absolute left-2 top-2 inline-flex h-[21.875px] shrink-0 cursor-pointer items-center justify-center rounded px-1.5 text-[0.6rem] font-bold uppercase leading-none tracking-wide transition-colors md:h-[25px] md:text-[0.65rem] ${capContext != null &&
+                            (leftOverCap || rightOverCap)
+                            ? 'bg-yellow-400 text-yellow-950 hover:bg-yellow-300'
+                            : 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
+                            }`}
+                    >
+                        Ajouter
+                    </button>
             ) : null}
 
             <div className='flex min-w-0 flex-col items-center text-center'>
@@ -6222,17 +6220,17 @@ function RosterPlayerRow({
                              * Wrapper holds the layout footprint at
                              * 16x16 so the row's natural height is
                              * unchanged; the inner NhlTeamLogo is
-                             * scaled 1.25x with `transform`, which
+                             * scaled 2x with `transform`, which
                              * does not affect layout. The rendered
-                             * logo reads as 20px (16 * 1.25) but the
-                             * card never grows.
+                             * logo reads as 32px (16 * 2) but
+                             * the card never grows.
                              */
                             <span
                                 style={{
                                     width: 16,
                                     height: 16,
                                     display: 'inline-block',
-                                    transform: 'scale(1.25)',
+                                    transform: 'scale(2)',
                                     transformOrigin: 'center',
                                     flexShrink: 0,
                                 }}
@@ -6287,7 +6285,7 @@ function RosterPlayerRow({
                 />
 
                 {currentContractLabel && (
-                    <div className='mt-1 flex flex-wrap items-center justify-center gap-x-1 text-xs leading-none font-semibold text-emerald-400 md:text-sm'>
+                    <div className='mt-1 flex flex-wrap items-center justify-center gap-x-1 text-sm leading-none font-semibold text-emerald-400 md:text-base'>
                         <span className='whitespace-nowrap'>
                             {currentContractLabel}
                         </span>
