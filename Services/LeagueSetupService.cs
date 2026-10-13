@@ -94,22 +94,36 @@ namespace NhlFantasyLeague.api.Services
         private const decimal NextSeasonSalaryCap = 0m;
         private const decimal NextSeasonSalaryFloor = 0m;
 
-        // ----- Draft seasons -----
+        // ----- Seasons that must exist in the DB -----
         //
-        // League rules: only the next two drafts are ever tradeable, so
-        // this is intentionally a closed list of exactly two seasons.
+        // Two past seasons are needed so the roster popup can display
+        // their FP: PlayerSeasonStat has a FK to Season, so no Season
+        // row means no season stats for that year.
         //
-        // Both seasons are auto-created by the seeding step below if they
-        // do not already exist. The 2026-2027 season already exists (it
-        // is the current season, with its real cap and floor), so only
-        // 2027-2028 gets created by this step, with cap = 0 and floor = 0.
+        // Two future seasons are needed for the tradeable drafts:
+        // league rules let managers trade 2026-2027 and 2027-2028
+        // picks and nothing beyond.
         //
-        // No 2028-2029 season is created, and no draft exists for it:
-        // the league does not have access to those picks yet.
-        private static readonly (string Name, int Code)[] DraftSeasons = new[]
+        // All four are created by the seeding step below if they are
+        // missing. Cap and floor are 0 for the past and future ones
+        // because they are only used as labels and FK targets, not
+        // for cap math.
+        private static readonly (string Name, int Code)[] SeasonsToEnsure =
+            new[]
+            {
+                ("2024-2025", 20242025),
+                ("2025-2026", 20252026),
+                ("2026-2027", 20262027),
+                ("2027-2028", 20272028),
+            };
+
+        // The two seasons whose drafts are tradeable. This is a subset
+        // of SeasonsToEnsure; the actual draft rows and pick seeding
+        // only run for these.
+        private static readonly int[] DraftSeasonCodes = new[]
         {
-            ("2026-2027", 20262027),
-            ("2027-2028", 20272028),
+            20262027,
+            20272028,
         };
 
         // Number of rounds each draft has. Every team gets one pick
@@ -310,13 +324,18 @@ namespace NhlFantasyLeague.api.Services
             // Final save: writes the new FantasyTeamSeason rows.
             await _dbContext.SaveChangesAsync();
 
-            // ----- Step 5: ensure both draft seasons exist --------------
+            // ----- Step 5: ensure every season row exists --------------
             //
-            // The 2026-2027 season already exists with its real cap and
-            // floor (Step 2), so this loop only creates 2027-2028, with
-            // cap = 0 and floor = 0. The UI falls back to the current
-            // season's cap wherever a real number is required.
-            foreach (var (name, code) in DraftSeasons)
+            // Creates any missing season row in SeasonsToEnsure. The
+            // 2026-2027 row already exists from Step 2 with its real
+            // cap and floor; the others are created with cap = 0 and
+            // floor = 0 because they only serve as labels and FK
+            // targets for PlayerSeasonStat / DraftPick.
+            //
+            // The two past seasons are needed so the roster popup can
+            // display their FP: PlayerSeasonStat has a FK to Season,
+            // so no Season row means no season stats for that year.
+            foreach (var (name, code) in SeasonsToEnsure)
             {
                 var existing = await _dbContext.Seasons
                     .FirstOrDefaultAsync(s => s.NhlSeasonCode == code);
@@ -340,16 +359,13 @@ namespace NhlFantasyLeague.api.Services
                     LeagueId = league.Id
                 });
 
-                result.Created.Add(
-                    $"Season {name} created (for draft picks).");
+                result.Created.Add($"Season {name} created.");
             }
 
             await _dbContext.SaveChangesAsync();
 
             // ----- Step 6: the drafts and their seeded picks ------------
-            var draftSeasonCodes = DraftSeasons
-                .Select(s => s.Code)
-                .ToList();
+            var draftSeasonCodes = DraftSeasonCodes.ToList();
 
             var draftSeasonRows = await _dbContext.Seasons
                 .Where(s => draftSeasonCodes.Contains(s.NhlSeasonCode))

@@ -36,7 +36,6 @@ import {
     type TradeOfferSlot,
 } from '@/api/client';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
-import { NeonTitle } from '@/components/ui/NeonTitle';
 import {
     clearMarketplacePopupRestore,
     consumeMarketplacePopupRestore,
@@ -688,13 +687,6 @@ const TEAM_NAME_BUTTON_STYLE: React.CSSProperties = {
     backgroundColor: '#14B8A6',
     color: '#1D1B61',
     border: '1px solid #5EEAD4',
-    boxShadow: [
-        '0 0 3px rgba(20, 184, 166, 0.9)',
-        '0 0 7px rgba(20, 184, 166, 0.65)',
-        '0 0 13px rgba(20, 184, 166, 0.3)',
-        '0 0 20px rgba(20, 184, 166, 0.1)',
-        'inset 0 0 2px rgba(20, 184, 166, 0.35)',
-    ].join(', '),
 };
 
 // ---------------------------------------------------------------------
@@ -1249,16 +1241,12 @@ export default function MarketplacePage() {
     return (
         <section className='-mt-4 space-y-4 sm:-mt-6'>
             <div className='mt-2 flex flex-col items-center gap-2'>
-                <h2 className='text-center'>
-                    <NeonTitle keepPulseOnMobile>Marketplace</NeonTitle>
-                </h2>
-
                 <div className='flex w-full flex-col items-center gap-3'>
                     <div
                         className='flex w-full items-center rounded-full border border-[#00A8FF] bg-[#050A18] p-0.5'
                         style={{
                             boxShadow:
-                                '0 0 8px rgba(0, 168, 255, 0.7), 0 0 18px rgba(0, 168, 255, 0.45), 0 0 30px rgba(0, 168, 255, 0.2), inset 0 0 8px rgba(0, 168, 255, 0.15)',
+                                '0 0 5px rgba(0, 168, 255, 0.5), 0 0 10px rgba(0, 168, 255, 0.28), 0 0 16px rgba(0, 168, 255, 0.1), inset 0 0 5px rgba(0, 168, 255, 0.1)',
                         }}
                     >
                         {/* Four tabs. Labels are responsive: a short
@@ -1268,7 +1256,7 @@ export default function MarketplacePage() {
                         <button
                             type='button'
                             onClick={() => setView('browse')}
-                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'browse'
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${view === 'browse'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -1276,9 +1264,9 @@ export default function MarketplacePage() {
                                 view === 'browse'
                                     ? {
                                         boxShadow:
-                                            '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                            '0 0 4px rgba(255, 255, 255, 0.8), 0 0 8px rgba(0, 168, 255, 0.55), 0 0 16px rgba(0, 168, 255, 0.28), 0 0 26px rgba(0, 168, 255, 0.12), inset 0 0 3px rgba(0, 168, 255, 0.25)',
                                         textShadow:
-                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                            '0 0 2px rgba(0, 168, 255, 0.7), 0 0 4px rgba(0, 168, 255, 0.35)',
                                     }
                                     : undefined
                             }
@@ -1289,7 +1277,7 @@ export default function MarketplacePage() {
                         <button
                             type='button'
                             onClick={() => setView('add')}
-                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'add'
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${view === 'add'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -1311,7 +1299,7 @@ export default function MarketplacePage() {
                         <button
                             type='button'
                             onClick={() => setView('received')}
-                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'received'
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${view === 'received'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -1333,7 +1321,7 @@ export default function MarketplacePage() {
                         <button
                             type='button'
                             onClick={() => setView('sent')}
-                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.7rem] font-bold transition-all duration-200 sm:px-3 sm:text-sm ${view === 'sent'
+                            className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${view === 'sent'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                 }`}
@@ -3842,7 +3830,7 @@ function StatLinesTable({
     return (
         <table
             className={`w-full table-fixed border-collapse tabular-nums ${size === 'md'
-                ? 'mt-0.5 text-sm md:text-base leading-none'
+                ? 'mt-1 text-sm md:text-base leading-snug'
                 : 'mt-1 text-[0.6rem] md:text-[0.7rem] leading-tight'
                 }`}
         >
@@ -4524,7 +4512,7 @@ function TeamCapLine({
     const busted = adjustedCapSpace < 0;
 
     return (
-        <div className='flex items-center justify-center gap-x-1 text-[0.6rem] font-semibold tabular-nums md:text-xs'>
+        <div className='flex items-center justify-center gap-x-1 text-xs font-semibold tabular-nums md:text-sm'>
             <span className='text-[#7DD3FC]'>
                 {compactSalary(baseCapSpace)} $
             </span>
@@ -5328,37 +5316,31 @@ function OfferCard({
         >
             {offer.isMine && !hideInternalCancel && (
                 <div
-                    className='relative border-b px-3 py-2'
+                    className='flex items-center justify-end gap-1.5 border-b px-3 py-2'
                     style={{
                         borderColor: 'rgba(0, 168, 255, 0.35)',
                         background: HEADER_GRADIENT,
                     }}
                 >
-                    <span className='block text-center text-[0.6rem] font-semibold uppercase tracking-wider text-[#00E5FF]'>
-                        Mon offre
-                    </span>
-
-                    <div className='absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5'>
-                        {onEdit && (
-                            <button
-                                type='button'
-                                onClick={onEdit}
-                                disabled={busy}
-                                className='cursor-pointer rounded border border-[#00E5FF] px-2 py-0.5 text-xs font-semibold text-[#00E5FF] transition-colors hover:bg-[#00E5FF]/15 disabled:opacity-50'
-                            >
-                                Modifier
-                            </button>
-                        )}
-
+                    {onEdit && (
                         <button
                             type='button'
-                            onClick={onCancel}
+                            onClick={onEdit}
                             disabled={busy}
-                            className='cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50'
+                            className='cursor-pointer rounded border border-[#00E5FF] px-2 py-0.5 text-xs font-semibold text-[#00E5FF] transition-colors hover:bg-[#00E5FF]/15 disabled:opacity-50'
                         >
-                            Annuler
+                            Modifier
                         </button>
-                    </div>
+                    )}
+
+                    <button
+                        type='button'
+                        onClick={onCancel}
+                        disabled={busy}
+                        className='cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50'
+                    >
+                        Annuler
+                    </button>
                 </div>
             )}
 
@@ -5396,27 +5378,22 @@ function OfferCard({
                             borderColor: 'rgba(0, 168, 255, 0.2)',
                         }}
                     >
-                        {/*
-                         * Left side.
-                         *
-                         * Default layout (swapSides = false):
-                         *   creator on the left, responder on the
-                         *   right — matches Reçues / Envoyées /
-                         *   publish preview.
-                         *
-                         * Voir les offres (swapSides = true):
-                         *   responder on the left, creator on the
-                         *   right, so the connected user (the
-                         *   responder in that context) sees his
-                         *   own team on the left.
-                         *
-                         * Both blocks are declared above the
-                         * return statement; only their render
-                         * order changes.
-                         */}
                         {swapSides
                             ? responderHeaderBlock
                             : creatorHeaderBlock}
+
+                        {/* ⇄ between the two team names. Moved here
+                            from the middle of the slots area so the
+                            exchange icon sits right at the header's
+                            midpoint, above the divider. shrink-0 so
+                            the two flex-1 team blocks stay equal
+                            and the icon lands exactly centered. */}
+                        <span
+                            aria-hidden='true'
+                            className='shrink-0 px-1 text-base leading-none text-[#00E5FF]'
+                        >
+                            ⇄
+                        </span>
 
                         {/* Nouvelle offre badge, centered between the
                             two team names inside the card header.
@@ -5452,15 +5429,6 @@ function OfferCard({
                                 borderColor: 'rgba(0, 168, 255, 0.35)',
                             }}
                         />
-
-                        <span
-                            className='absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full px-1 text-base leading-none text-[#00E5FF]'
-                            style={{
-                                backgroundColor: 'rgba(8, 13, 26, 1)',
-                            }}
-                        >
-                            ⇄
-                        </span>
 
                         {offer.slots.map((slot, index) => {
                             const matches =
@@ -5724,33 +5692,25 @@ function OfferCard({
                                                 offer is not the
                                                 user's own and his
                                                 roster is loaded. */}
-                                            {canRespond && (
-                                                <button
-                                                    type='button'
-                                                    onClick={() =>
-                                                        requestPickForSlot(
-                                                            slot,
-                                                        )
-                                                    }
-                                                    disabled={
-                                                        onRequestPlayerPick ==
-                                                        null ||
-                                                        rightTeamId ==
-                                                        null
-                                                    }
-                                                    className='mt-1 w-fit cursor-pointer rounded bg-[#00E5FF] px-3 py-1 text-left text-xs font-semibold text-black transition-colors hover:brightness-110 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 md:text-sm'
-                                                    style={{
-                                                        boxShadow: [
-                                                            '0 0 4px rgba(0, 229, 255, 0.9)',
-                                                            '0 0 10px rgba(0, 229, 255, 0.5)',
-                                                            '0 0 18px rgba(0, 229, 255, 0.2)',
-                                                            'inset 0 0 2px rgba(0, 229, 255, 0.4)',
-                                                        ].join(', '),
-                                                    }}
-                                                >
-                                                    Choisir un joueur
-                                                </button>
-                                            )}
+                                                    {canRespond && (
+                                                        <button
+                                                            type='button'
+                                                            onClick={() =>
+                                                                requestPickForSlot(
+                                                                    slot,
+                                                                )
+                                                            }
+                                                            disabled={
+                                                                onRequestPlayerPick ==
+                                                                null ||
+                                                                rightTeamId ==
+                                                                null
+                                                            }
+                                                            className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-left text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 md:text-sm'
+                                                        >
+                                                            Choisir un joueur
+                                                        </button>
+                                                    )}
                                         </>
                                     )}
                                 </div>
@@ -5846,7 +5806,7 @@ function OfferCard({
                                 onClick={() =>
                                     onUseAsBase?.(offer, picks)
                                 }
-                                className='min-w-0 flex-1 cursor-pointer rounded-md border border-[#00C8FF] bg-transparent px-2 py-1 text-xs font-bold uppercase tracking-wide text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
+                                className='min-w-0 flex-1 cursor-pointer rounded-md border border-[#00C8FF] bg-transparent px-2 py-1 text-[0.65rem] font-bold uppercase tracking-wide text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
                             >
                                 Utiliser comme base
                             </button>
@@ -6197,7 +6157,7 @@ function RosterPlayerRow({
 
     return (
         <div
-            className='relative rounded-md border px-2 py-1.5'
+            className='relative rounded-md border px-2 py-2'
             style={{
                 borderColor: isReference
                     ? 'rgba(239, 68, 68, 0.7)'
@@ -6248,7 +6208,7 @@ function RosterPlayerRow({
                  * width and the logo would drift with the name length.
                  */}
                 <div
-                    className='grid w-full items-start text-left text-sm leading-none text-foreground md:text-base mb-1'
+                    className='grid w-full items-start text-left text-sm leading-none text-foreground md:text-base mb-1.5'
                     style={{
                         gridTemplateColumns:
                             '18% 12% 11% 11% 15% 22% 11%',
@@ -7753,6 +7713,19 @@ function DirectOfferCard({
                                 )}
                         </div>
 
+                        {/* ⇄ between the two team names. Moved here
+                            from the slot's middle column so the
+                            exchange icon sits right at the header's
+                            midpoint, above the divider. shrink-0 so
+                            the two flex-1 team blocks stay equal
+                            and the icon lands exactly centered. */}
+                        <span
+                            aria-hidden='true'
+                            className='shrink-0 px-1 text-base leading-none text-[#00E5FF]'
+                        >
+                            ⇄
+                        </span>
+
                         {/* Right: target team */}
                         <div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-y-2'>
                             {targetTeamName && targetTeamId != null ? (
@@ -8078,24 +8051,15 @@ function DirectOfferCard({
                                                     {positionLabel}
                                                 </p>
 
-                                                <button
-                                                    type='button'
-                                                    onClick={
-                                                        handleLeftClick
-                                                    }
-                                                    className='mt-1 w-fit cursor-pointer rounded bg-[#00E5FF] px-3 py-1 text-xs font-semibold text-black transition-colors hover:brightness-110 md:text-sm'
-                                                    style={{
-                                                        boxShadow:
-                                                            [
-                                                                '0 0 4px rgba(0, 229, 255, 0.9)',
-                                                                '0 0 10px rgba(0, 229, 255, 0.5)',
-                                                                '0 0 18px rgba(0, 229, 255, 0.2)',
-                                                                'inset 0 0 2px rgba(0, 229, 255, 0.4)',
-                                                            ].join(', '),
-                                                    }}
-                                                >
-                                                    Choisir un joueur
-                                                </button>
+                                                    <button
+                                                        type='button'
+                                                        onClick={
+                                                            handleLeftClick
+                                                        }
+                                                        className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
+                                                    >
+                                                        Choisir un joueur
+                                                    </button>
                                             </>
                                         )}
 
@@ -8104,7 +8068,7 @@ function DirectOfferCard({
                                     <div
                                         className={`flex items-center justify-center ${SLOT_ARROW_COL}`}
                                     >
-                                        {slots.length > 1 ? (
+                                        {slots.length > 1 && (
                                             <button
                                                 type='button'
                                                 onClick={() =>
@@ -8131,16 +8095,6 @@ function DirectOfferCard({
                                                     />
                                                 </svg>
                                             </button>
-                                        ) : (
-                                            <span
-                                                className='rounded-full px-1 text-base leading-none text-[#00E5FF]'
-                                                style={{
-                                                    backgroundColor:
-                                                        'rgba(8, 13, 26, 1)',
-                                                }}
-                                            >
-                                                ⇄
-                                            </span>
                                         )}
                                     </div>
 
@@ -8181,16 +8135,7 @@ function DirectOfferCard({
                                                                 ? onRequestTargetTeam
                                                                 : handleRightClick
                                                         }
-                                                        className='mt-1 w-fit cursor-pointer rounded bg-[#00E5FF] px-3 py-1 text-xs font-semibold text-black transition-colors hover:brightness-110 md:text-sm'
-                                                        style={{
-                                                            boxShadow:
-                                                                [
-                                                                    '0 0 4px rgba(0, 229, 255, 0.9)',
-                                                                    '0 0 10px rgba(0, 229, 255, 0.5)',
-                                                                    '0 0 18px rgba(0, 229, 255, 0.2)',
-                                                                    'inset 0 0 2px rgba(0, 229, 255, 0.4)',
-                                                                ].join(', '),
-                                                        }}
+                                                        className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
                                                     >
                                                         {targetPickerDisabled
                                                             ? 'Choisir un gestionnaire'

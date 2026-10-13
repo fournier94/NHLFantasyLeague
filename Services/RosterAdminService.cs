@@ -1098,6 +1098,8 @@ namespace NhlFantasyLeague.api.Services
              Wins = g.Sum(s => s.Wins),
              Losses = g.Sum(s => s.Losses),
              OvertimeLosses = g.Sum(s => s.OvertimeLosses),
+             HatTricks = g.Sum(s => s.HatTricks ?? 0),
+             Shutouts = g.Sum(s => s.Shutouts),
              TimeOnIce = aggregatedToi,
          };
      })
@@ -1715,6 +1717,27 @@ PlayerSeasonStat? seasonStat = null)
                     ? season.Name
                     : $"{seasonCode / 10000}-{seasonCode % 100:D2}";
 
+            // Fantasy points: prefer the live-tracked PlayerSeasonStat
+            // row when it exists (it accounts for hat tricks,
+            // shutouts, wins and OTLs that we might not have from the
+            // archive). Fall back to the archive's own counting stats
+            // otherwise, using the same formula MarketplaceService
+            // uses for historical seasons. That way FP still shows for
+            // seasons whose PlayerSeasonStat rows were never
+            // populated (typically the pre-current years).
+            var hatTricks = seasonStat?.HatTricks ?? line.HatTricks;
+            var shutouts = seasonStat?.Shutouts ?? line.Shutouts;
+
+            var fantasyPoints =
+                seasonStat?.FantasyPoints
+                ?? (
+                    line.Points +
+                    hatTricks * 3 +
+                    line.Wins * 2 +
+                    line.OvertimeLosses +
+                    shutouts * 3
+                );
+
             return new SeasonStatLineDto
             {
                 Label = label,
@@ -1729,12 +1752,9 @@ PlayerSeasonStat? seasonStat = null)
                 Wins = line.Wins,
                 Losses = line.Losses,
                 OvertimeLosses = line.OvertimeLosses,
-
-                // From PlayerSeasonStat: the lineup section displays
-                // these. Zero when the row is missing.
-                HatTricks = seasonStat?.HatTricks ?? 0,
-                Shutouts = seasonStat?.Shutouts ?? 0,
-                FantasyPoints = seasonStat?.FantasyPoints ?? 0,
+                HatTricks = hatTricks,
+                Shutouts = shutouts,
+                FantasyPoints = fantasyPoints,
 
                 // Weighted average ATOI from the archive. Null when
                 // no row in the group carried a usable value; the
@@ -2413,6 +2433,20 @@ PlayerSeasonStat? seasonStat = null)
             public int Wins { get; set; }
             public int Losses { get; set; }
             public int OvertimeLosses { get; set; }
+
+            /// <summary>
+            /// Hat tricks recorded in the season (from the archive).
+            /// Used to derive FP when no live PlayerSeasonStat row
+            /// exists for that season — the same way
+            /// MarketplaceService does. Null values count as 0.
+            /// </summary>
+            public int HatTricks { get; set; }
+
+            /// <summary>
+            /// Shutouts recorded in the season (from the archive).
+            /// Same usage as HatTricks.
+            /// </summary>
+            public int Shutouts { get; set; }
 
             /// <summary>
             /// Weighted average ATOI across the group's Sequence
