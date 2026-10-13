@@ -1,6 +1,7 @@
 ﻿import {
     useCallback,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -45,6 +46,7 @@ import {
     setMarketplacePopupRestore,
     type PendingDirectPickContext,
     type PendingPickContext,
+    type PendingPublishPickContext,
     type TradeCapContext,
 } from '@/lib/marketplacePopupRestoration';
 import {
@@ -69,6 +71,15 @@ import {
     subscribeToPicks,
     type PicksBySlot,
 } from '@/lib/marketplaceTradeState';
+import {
+    clearPublishSlot,
+    getPublishDraft,
+    pickPublishSlot,
+    resetPublishDraft,
+    subscribeToPublishDraft,
+    updatePublishDraft,
+    type PublishSlotState,
+} from '@/lib/publishOfferState';
 
 // ---------------------------------------------------------------------
 // Types
@@ -78,30 +89,19 @@ type View = 'add' | 'browse' | 'received' | 'sent';
 
 type PositionGroup = 'F' | 'D' | 'G';
 
-interface SlotState {
-    positionGroup: PositionGroup | '';
-    offeringPlayerId: number | null;
-    firstHandled: 'player' | 'position' | null;
-    minContractYears: string;
-    maxSalary: string;
-    maxAge: string;
-    minPointsLastYear: string;
-    /**
-     * Per-criterion strict flags. A criterion is enforced as a hard
-     * filter on the responder's dropdown only when its flag is true
-     * AND the corresponding value is set. A criterion set but not
-     * strict is displayed as a preference.
-     *
-     * Position is always enforced regardless.
-     *
-     * All four default to true, matching the strict-by-default
-     * behavior every offer had before this granularity.
-     */
-    enforceMinContractYears: boolean;
-    enforceMaxSalary: boolean;
-    enforceMaxAge: boolean;
-    enforceMinPointsLastYear: boolean;
-}
+/**
+ * Slot state for the publish-offer form.
+ *
+ * Aliased to the store's own type so the two can never drift
+ * apart. The store (`publishOfferState.ts`) is the source of
+ * truth: it owns the shape that gets written back via
+ * `updatePublishDraft`. A local interface duplicating that shape
+ * is a footgun — structural typing is easy to get subtly wrong
+ * and the mismatch only surfaces at the assignability check on
+ * the store write, where it shows up as an unhelpful
+ * `firstHandled: string` widening error.
+ */
+type SlotState = PublishSlotState;
 
 const EMPTY_SLOT: SlotState = {
     positionGroup: '',
@@ -1073,6 +1073,7 @@ export default function MarketplacePage() {
 
         const pick = pending.pickContext;
         const directPick = pending.directPickContext;
+        const publishPick = pending.publishPickContext;
 
         // A direct pick can only come from the Créer tab, so
         // make sure the page is on that tab when we reopen the
@@ -1151,6 +1152,23 @@ export default function MarketplacePage() {
                             }),
                         }));
                     },
+                }
+                : undefined,
+            publishPickContext: publishPick
+                ? {
+                    slotIndex: publishPick.slotIndex,
+                    currentPickedPlayerId:
+                        publishPick.currentPickedPlayerId,
+                    lockedPosition: publishPick.lockedPosition,
+                    excludedPlayerIds:
+                        publishPick.excludedPlayerIds,
+                    onPick: (playerId) =>
+                        pickPublishSlot(
+                            publishPick.slotIndex,
+                            playerId,
+                        ),
+                    onClearPick: () =>
+                        clearPublishSlot(publishPick.slotIndex),
                 }
                 : undefined,
         });
@@ -1778,6 +1796,27 @@ export default function MarketplacePage() {
                             }
                             : undefined
                     }
+                    publishPickInfo={
+                        rosterPopupTeam.publishPickContext
+                            ? {
+                                slotIndex:
+                                    rosterPopupTeam
+                                        .publishPickContext.slotIndex,
+                                currentPickedPlayerId:
+                                    rosterPopupTeam
+                                        .publishPickContext
+                                        .currentPickedPlayerId,
+                                lockedPosition:
+                                    rosterPopupTeam
+                                        .publishPickContext
+                                        .lockedPosition,
+                                excludedPlayerIds:
+                                    rosterPopupTeam
+                                        .publishPickContext
+                                        .excludedPlayerIds,
+                            }
+                            : undefined
+                    }
                     currentPickedPlayerId={popupPickedPlayerId}
                     pinnedPlayerId={popupPickedPlayerId}
                     excludedPlayerIds={
@@ -1880,52 +1919,49 @@ function AddOfferPanel({
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
 
-    const [slots, setSlots] = useState<SlotState[]>(() =>
-        initialOffer
-            ? initialOffer.slots.map((slot) => ({
-                positionGroup:
-                    slot.positionGroup as PositionGroup,
-                offeringPlayerId: slot.offeringPlayerId,
-                firstHandled:
-                    slot.positionGroup !== ''
-                        ? slot.offeringPlayerId != null
-                            ? 'player'
-                            : 'position'
-                        : null,
-                minContractYears:
-                    slot.demandMinContractYears != null
-                        ? String(slot.demandMinContractYears)
-                        : '',
-                maxSalary:
-                    slot.demandMaxSalary != null
-                        ? String(
-                            (slot.demandMaxSalary / 1_000_000)
-                                .toFixed(2)
-                                .replace(/\.?0+$/, ''),
-                        )
-                        : '',
-                maxAge:
-                    slot.demandMaxAge != null
-                        ? String(slot.demandMaxAge)
-                        : '',
-                minPointsLastYear:
-                    slot.demandMinPointsLastYear != null
-                        ? String(slot.demandMinPointsLastYear)
-                        : '',
-                // `!== false` matches the frontend guard in
-                // playerMatchesSlotDemand: undefined / null is
-                // treated as the safe default of "strict".
-                enforceMinContractYears:
-                    slot.enforceDemandMinContractYears !== false,
-                enforceMaxSalary:
-                    slot.enforceDemandMaxSalary !== false,
-                enforceMaxAge:
-                    slot.enforceDemandMaxAge !== false,
-                enforceMinPointsLastYear:
-                    slot.enforceDemandMinPointsLastYear !== false,
-            }))
-            : [{ ...EMPTY_SLOT }],
+    /**
+     * Slots and note live in a module-level store so they survive
+     * a PlayerPage round-trip (the user opens the popup from a
+     * slot, clicks a player name, lands on PlayerPage, clicks
+     * Fermer, comes back). See publishOfferState.ts.
+     *
+     * The store is the single source of truth. Every write goes
+     * through updatePublishDraft. The two aliases below let the
+     * rest of this component keep calling setSlots / setNote the
+     * same way it always did.
+     */
+    const publishDraft = useSyncExternalStore(
+        subscribeToPublishDraft,
+        getPublishDraft,
     );
+    const slots = publishDraft.slots;
+    const note = publishDraft.note;
+
+    const setSlots = (
+        updater:
+            | SlotState[]
+            | ((prev: SlotState[]) => SlotState[]),
+    ) => {
+        updatePublishDraft((d) => ({
+            ...d,
+            slots:
+                typeof updater === 'function'
+                    ? updater(d.slots)
+                    : updater,
+        }));
+    };
+
+    const setNote = (
+        updater: string | ((prev: string) => string),
+    ) => {
+        updatePublishDraft((d) => ({
+            ...d,
+            note:
+                typeof updater === 'function'
+                    ? updater(d.note)
+                    : updater,
+        }));
+    };
 
     /**
      * Index of the slot currently expanded in the "Ajouter une offre"
@@ -1935,16 +1971,136 @@ function AddOfferPanel({
      */
     const [expandedSlotIndex, setExpandedSlotIndex] = useState(0);
 
-    const [note, setNote] = useState(() => initialOffer?.note ?? '');
-
     /**
     * Whether the optional message textarea is expanded. Collapsed by
     * default; clicking the "Ajouter un message" button reveals it.
     * Auto-expanded when editing an offer that already had a note.
     */
     const [showNote, setShowNote] = useState(
-        () => (initialOffer?.note ?? '').trim() !== '',
+        () => getPublishDraft().note.trim() !== '',
     );
+
+    /**
+     * Seed the store from initialOffer on mount, synchronously
+     * (useLayoutEffect) so there is no visible flash of the
+     * previous draft. Only fires when the panel switches to a
+     * different offer than the one already in the store.
+     *
+     * When initialOffer is null, the store is deliberately NOT
+     * reset unless it currently holds an edit draft for another
+     * offer. That preserves an in-progress new-publish draft
+     * across the PlayerPage round-trip — which is the entire
+     * point of the store.
+     */
+    useLayoutEffect(() => {
+        const draft = getPublishDraft();
+
+        if (initialOffer) {
+            if (draft.editingOfferId !== initialOffer.id) {
+                updatePublishDraft(() => ({
+                    editingOfferId: initialOffer.id,
+                    slots: initialOffer.slots.map(
+                        (slot): SlotState => ({
+                            positionGroup:
+                                slot.positionGroup as PositionGroup,
+                            offeringPlayerId:
+                                slot.offeringPlayerId,
+                            firstHandled:
+                                slot.positionGroup !== ''
+                                    ? slot.offeringPlayerId != null
+                                        ? 'player'
+                                        : 'position'
+                                    : null,
+                            minContractYears:
+                                slot.demandMinContractYears != null
+                                    ? String(
+                                        slot.demandMinContractYears,
+                                    )
+                                    : '',
+                            maxSalary:
+                                slot.demandMaxSalary != null
+                                    ? String(
+                                        (slot.demandMaxSalary /
+                                            1_000_000)
+                                            .toFixed(2)
+                                            .replace(/\.?0+$/, ''),
+                                    )
+                                    : '',
+                            maxAge:
+                                slot.demandMaxAge != null
+                                    ? String(slot.demandMaxAge)
+                                    : '',
+                            minPointsLastYear:
+                                slot.demandMinPointsLastYear !=
+                                    null
+                                    ? String(
+                                        slot.demandMinPointsLastYear,
+                                    )
+                                    : '',
+                            enforceMinContractYears:
+                                slot.enforceDemandMinContractYears !==
+                                false,
+                            enforceMaxSalary:
+                                slot.enforceDemandMaxSalary !==
+                                false,
+                            enforceMaxAge:
+                                slot.enforceDemandMaxAge !== false,
+                            enforceMinPointsLastYear:
+                                slot.enforceDemandMinPointsLastYear !==
+                                false,
+                        }),
+                    ),
+                    note: initialOffer.note ?? '',
+                }));
+            }
+        } else {
+            if (draft.editingOfferId != null) {
+                resetPublishDraft();
+            }
+        }
+    }, [initialOffer]);
+
+    /**
+     * Sync each slot's positionGroup to the current position of
+     * its picked player. Preserves the invariant that a slot with
+     * a picked player always has a matching positionGroup, even
+     * when the pick came from the roster popup (which only sends
+     * the player id).
+     *
+     * Idempotent: once every slot's positionGroup matches, the
+     * effect does nothing on the next run.
+     */
+    const entries = useMemo(
+        () => roster?.entries ?? [],
+        [roster],
+    );
+
+    useLayoutEffect(() => {
+        let needsUpdate = false;
+
+        const next = slots.map((s): SlotState => {
+            if (s.offeringPlayerId == null) return s;
+
+            const entry = entries.find(
+                (e) => e.playerId === s.offeringPlayerId,
+            );
+            if (!entry) return s;
+
+            const group = toPositionGroup(entry.position);
+            if (s.positionGroup === group) return s;
+
+            needsUpdate = true;
+            return {
+                ...s,
+                positionGroup: group,
+                firstHandled: 'player',
+            };
+        });
+
+        if (needsUpdate) {
+            updatePublishDraft((d) => ({ ...d, slots: next }));
+        }
+    }, [slots, entries]);
 
     const [submitting, setSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
@@ -2045,11 +2201,10 @@ function AddOfferPanel({
     /**
      * The user's roster, loaded once so the preview popup can resolve
      * each slot's offered player (name, position, contracts).
+     *
+     * NOTE: `entries` is declared above (it powers the positionGroup
+     * sync effect), so it is not redeclared here.
      */
-    const entries: RosterEntry[] = useMemo(
-        () => roster?.entries ?? [],
-        [roster],
-    );
 
     /**
      * Fake TradeOffer built from the current slot state, used only to
@@ -2179,44 +2334,11 @@ function AddOfferPanel({
     }
 
     /**
-     * Picks the given player for the given slot and syncs the
-     * slot's demanded position to the player's position, matching
-     * the behaviour of the old dropdown: picking a defenseman
-     * locks the slot's demand to D, and picking a forward locks it
-     * to F.
-     *
-     * Called by the roster popup's `onPick` when the user clicks
-     * "Ajouter" on a player row.
-     */
-    function pickPlayerForSlot(index: number, playerId: number) {
-        const entry = entries.find((e) => e.playerId === playerId);
-        const group = entry ? toPositionGroup(entry.position) : '';
-
-        updateSlot(index, {
-            offeringPlayerId: playerId,
-            positionGroup: group,
-            firstHandled: 'player',
-        });
-    }
-
-    /**
-     * Clears the picked player for the given slot. Keeps the
-     * demanded position (if any) — the user cleared the player,
-     * not the whole slot. Same behaviour as the "Ne pas offrir de
-     * joueur" option in the old dropdown.
-     *
-     * Called by the roster popup's `onClearPick` when the user
-     * clicks "Retirer" on the pinned card.
-     */
-    function clearPlayerForSlot(index: number) {
-        const slot = slots[index];
-
-        updateSlot(index, {
-            offeringPlayerId: null,
-            firstHandled:
-                slot.positionGroup !== '' ? 'position' : null,
-        });
-    }
+  * Picks and clears now go through the publish-offer store
+  * directly (see publishOfferState.ts). The slot's positionGroup
+  * is synced separately by the layout effect above, so the
+  * callback here only needs to write the player id.
+  */
 
     /**
      * Returns the player ids picked in every OTHER slot of this
@@ -2531,9 +2653,9 @@ function AddOfferPanel({
                             excludedPlayerIds:
                                 excludedPlayerIdsForSlot(index),
                             onPick: (playerId) =>
-                                pickPlayerForSlot(index, playerId),
+                                pickPublishSlot(index, playerId),
                             onClearPick: () =>
-                                clearPlayerForSlot(index),
+                                clearPublishSlot(index),
                         })
                     }
                     onPositionChange={(p) => handlePositionChange(index, p)}
@@ -6579,6 +6701,7 @@ function RosterPlayerRow({
     capContext,
     pendingPickRestore,
     pendingDirectPickRestore,
+    pendingPublishPickRestore,
     referencePlayerForRestore,
     currentPickedPlayerId,
     onClearPick,
@@ -6605,12 +6728,19 @@ function RosterPlayerRow({
      * comes back from the player page.
      */
     pendingPickRestore?: PendingPickContext;
-    /**
-  * Same as pendingPickRestore, but for the "Créer" tab's
-  * direct-pick mode. Carries the slot index and side instead
-  * of a full offer slot.
-  */
-    pendingDirectPickRestore?: PendingDirectPickContext;
+        /**
+      * Same as pendingPickRestore, but for the "Créer" tab's
+      * direct-pick mode. Carries the slot index and side instead
+      * of a full offer slot.
+      */
+        pendingDirectPickRestore?: PendingDirectPickContext;
+        /**
+         * Same as pendingPickRestore, but for the "Publier une
+         * annonce" tab's pick mode. Carries the slot index, the
+         * current pick, the locked position and the excluded player
+         * ids.
+         */
+        pendingPublishPickRestore?: PendingPublishPickContext;
     /**
      * RosterEntry-shaped snapshot of the player on the OTHER side
      * of the trade slot, if any. Carried through every player
@@ -6900,6 +7030,8 @@ function RosterPlayerRow({
                                     pickContext: pendingPickRestore,
                                     directPickContext:
                                         pendingDirectPickRestore,
+                                    publishPickContext:
+                                        pendingPublishPickRestore,
                                     referencePlayer:
                                         referencePlayerForRestore,
                                 })
@@ -7029,6 +7161,7 @@ function ManagerRosterPopup({
     capContext,
     offerId,
     directPickInfo,
+    publishPickInfo,
     currentPickedPlayerId,
     pinnedPlayerId,
     referencePlayer,
@@ -7078,26 +7211,42 @@ function ManagerRosterPopup({
      * lands back on the same pick-mode popup he left.
      */
     offerId?: number;
-    /**
-  * Direct-pick info for the "Créer" tab. Set when the popup was
-  * opened in pick mode from a DirectOfferCard slot. Used by the
-  * player-name Links to save the pending pick-restore object
-  * that survives the PlayerPage round-trip, so the user lands
-  * back on the same pick-mode popup he left.
-  *
-  * Contains only the identifying info (slot index, side,
-  * locked position, cap context, current pick). The onPick and
-  * onClearPick callbacks are NOT carried here — MarketplacePage
-  * rebuilds fresh ones on restore that write directly to the
-  * draft store.
-  */
-    directPickInfo?: {
-        slotIndex: number;
-        side: 'offering' | 'target';
-        lockedPosition?: PositionGroup;
-        capContext?: TradeCapContext;
-        currentPickedPlayerId?: number | null;
-    };
+        /**
+   * Direct-pick info for the "Créer" tab. Set when the popup was
+   * opened in pick mode from a DirectOfferCard slot. Used by the
+   * player-name Links to save the pending pick-restore object
+   * that survives the PlayerPage round-trip, so the user lands
+   * back on the same pick-mode popup he left.
+   *
+   * Contains only the identifying info (slot index, side,
+   * locked position, cap context, current pick). The onPick and
+   * onClearPick callbacks are NOT carried here — MarketplacePage
+   * rebuilds fresh ones on restore that write directly to the
+   * draft store.
+   */
+        directPickInfo?: {
+            slotIndex: number;
+            side: 'offering' | 'target';
+            lockedPosition?: PositionGroup;
+            capContext?: TradeCapContext;
+            currentPickedPlayerId?: number | null;
+        };
+        /**
+         * Publish-pick info for the "Publier une annonce" tab. Set
+         * when the popup was opened in pick mode from an
+         * AddOfferPanel slot. Used by the player-name Links to save
+         * the pending pick-restore object that survives the
+         * PlayerPage round-trip.
+         *
+         * Same shape as the fields on publishPickContext except the
+         * callbacks, which are rebuilt on restore.
+         */
+        publishPickInfo?: {
+            slotIndex: number;
+            currentPickedPlayerId: number | null;
+            lockedPosition?: PositionGroup;
+            excludedPlayerIds: number[];
+        };
     /**
      * Player id of the current pick in the slot on the side being
      * picked, or null when the side is empty. Only meaningful in
@@ -7449,6 +7598,17 @@ function ManagerRosterPopup({
             }
             : undefined;
 
+    const pendingPublishPickRestore: PendingPublishPickContext | undefined =
+        publishPickInfo != null
+            ? {
+                slotIndex: publishPickInfo.slotIndex,
+                currentPickedPlayerId:
+                    publishPickInfo.currentPickedPlayerId,
+                lockedPosition: publishPickInfo.lockedPosition,
+                excludedPlayerIds: publishPickInfo.excludedPlayerIds,
+            }
+            : undefined;
+
     /**
   * Renders one roster row with all the props shared by the
   * pinned card and the section cards. Kept as a helper so the
@@ -7476,6 +7636,7 @@ function ManagerRosterPopup({
             }
             pendingPickRestore={pendingPickRestore}
             pendingDirectPickRestore={pendingDirectPickRestore}
+            pendingPublishPickRestore={pendingPublishPickRestore}
             referencePlayerForRestore={referencePlayer}
             currentPickedPlayerId={
                 isReference ? undefined : currentPickedPlayerId
@@ -7984,16 +8145,32 @@ function DirectOfferCard({
         useState<TeamRoster | null>(null);
 
     /**
-     * Local submit state for the "Offrir" call. `submitting`
-     * disables the button while the request is in flight,
-     * `submitSuccess` / `submitError` render the small banner
-     * above the action row.
-     */
+    * Local submit state for the "Offrir" call. `submitting`
+    * disables the button while the request is in flight,
+    * `submitSuccess` / `submitError` render the small banner
+    * above the action row.
+    */
     const [submitting, setSubmitting] = useState(false);
     const [submitSuccess, setSubmitSuccess] =
         useState<string | null>(null);
     const [submitError, setSubmitError] =
         useState<string | null>(null);
+
+    /**
+     * True while the Analyse popup is open. Currently renders only
+     * the skeleton (frame + header + Fermer button); the body will
+     * be filled in later.
+     */
+    const [showAnalyse, setShowAnalyse] = useState(false);
+
+    /**
+     * Active sub-tab inside the Analyse popup.
+     *   'stats'    → player stats comparison
+     *   'contracts' → contracts / cap projection
+     */
+    const [analyseSubView, setAnalyseSubView] = useState<
+        'stats' | 'contracts'
+    >('stats');
 
     /**
      * Slots and note come from the module-level draft store so
@@ -9014,13 +9191,22 @@ function DirectOfferCard({
                     </p>
                 )}
 
-                {/* Action row — two buttons (no "Utiliser comme base") */}
-                <div className='flex flex-wrap items-stretch justify-center gap-1.5'>
+                {/* Action row — three buttons (Analyse / Réinitialiser / Offrir) */}
+                <div className='flex items-stretch gap-1.5'>
+                    <button
+                        type='button'
+                        disabled={submitting}
+                        onClick={() => setShowAnalyse(true)}
+                        className='flex-1 cursor-pointer rounded-md border border-[#00C8FF] bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
+                    >
+                        Analyse
+                    </button>
+
                     <button
                         type='button'
                         disabled={submitting}
                         onClick={handleReset}
-                        className='w-[7.2rem] self-stretch cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40'
+                        className='flex-1 cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40'
                     >
                         Réinitialiser
                     </button>
@@ -9029,7 +9215,7 @@ function DirectOfferCard({
                         type='button'
                         disabled={offerDisabled || submitting}
                         onClick={handleOffer}
-                        className={`w-24 self-stretch rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${offerDisabled || submitting
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${offerDisabled || submitting
                             ? 'cursor-not-allowed bg-zinc-800 text-zinc-500'
                             : 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
                             }`}
@@ -9038,6 +9224,116 @@ function DirectOfferCard({
                     </button>
                 </div>
             </div>
+
+            {showAnalyse &&
+                createPortal(
+                    <div
+                        className='fixed inset-0 z-[100] flex items-center justify-center p-4'
+                        style={{ backgroundColor: 'rgba(8, 13, 26, 0.85)' }}
+                        onClick={() => setShowAnalyse(false)}
+                        role='dialog'
+                        aria-modal='true'
+                        aria-label='Analyse'
+                    >
+                        <div
+                            className='relative flex flex-col overflow-hidden rounded-lg'
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                                width: '90vw',
+                                height: '95vh',
+                                maxWidth: '1400px',
+                                maxHeight: '1500px',
+                                backgroundColor: FRAME_BG,
+                                border: `${OFFER_TUBE_PX}px solid ${OFFER_TUBE_COLOR}`,
+                                boxShadow: [
+                                    `inset 0 0 0 1px ${OFFER_FILAMENT}`,
+                                    `inset 0 0 10px ${OFFER_BLOOM_NEAR}`,
+                                    `inset 0 0 28px ${OFFER_BLOOM_FAR}`,
+                                ].join(', '),
+                            }}
+                        >
+                            <button
+                                type='button'
+                                onClick={() => setShowAnalyse(false)}
+                                className='absolute right-2 top-2 z-10 cursor-pointer rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-black transition-colors hover:bg-red-500'
+                            >
+                                Fermer
+                            </button>
+
+                            <div
+                                className='flex shrink-0 items-center justify-center border-b px-3 py-2'
+                                style={{
+                                    borderColor: 'rgba(0, 168, 255, 0.35)',
+                                    background: HEADER_GRADIENT,
+                                }}
+                            >
+                                <span className='truncate text-xs font-bold uppercase tracking-wider text-white md:text-sm'>
+                                    Analyse
+                                </span>
+                            </div>
+
+                            {/* Segmented sub-toggle: same design as the
+                                main marketplace toggle (Marché /
+                                Créer / Reçues / Envoyées). */}
+                            <div className='shrink-0 px-3 pt-3'>
+                                <div
+                                    className='flex w-full items-center rounded-full border border-[#00A8FF] bg-[#050A18] p-0.5'
+                                    style={{
+                                        boxShadow:
+                                            '0 0 5px rgba(0, 168, 255, 0.5), 0 0 10px rgba(0, 168, 255, 0.28), 0 0 16px rgba(0, 168, 255, 0.1), inset 0 0 5px rgba(0, 168, 255, 0.1)',
+                                    }}
+                                >
+                                    <button
+                                        type='button'
+                                        onClick={() =>
+                                            setAnalyseSubView('stats')
+                                        }
+                                        className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${analyseSubView === 'stats'
+                                                ? 'bg-white text-[#1D1B61]'
+                                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
+                                            }`}
+                                        style={
+                                            analyseSubView === 'stats'
+                                                ? {
+                                                    boxShadow:
+                                                        '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                                    textShadow:
+                                                        '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                                }
+                                                : undefined
+                                        }
+                                    >
+                                        Stats
+                                    </button>
+
+                                    <button
+                                        type='button'
+                                        onClick={() =>
+                                            setAnalyseSubView('contracts')
+                                        }
+                                        className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${analyseSubView === 'contracts'
+                                                ? 'bg-white text-[#1D1B61]'
+                                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
+                                            }`}
+                                        style={
+                                            analyseSubView === 'contracts'
+                                                ? {
+                                                    boxShadow:
+                                                        '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
+                                                    textShadow:
+                                                        '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
+                                                }
+                                                : undefined
+                                        }
+                                    >
+                                        Contrats
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>,
+                    document.body,
+                )}
         </article>
     );
 }

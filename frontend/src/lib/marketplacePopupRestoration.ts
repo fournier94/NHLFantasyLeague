@@ -15,21 +15,27 @@
  *
  * PICK MODES
  *
- * Two distinct pick modes can be carried through the restore:
+ * Three distinct pick modes can be carried through the restore:
  *
  *   - pickContext: the popup was opened from a "Voir les offres"
  *     offer slot. Carries the offer id, the slot, the slot
  *     index, and the cap context. MarketplacePage rebuilds a
- *     fresh onPick backed by the pick store.
+ *     fresh onPick backed by the offer-picks store.
  *
  *   - directPickContext: the popup was opened from a "Créer"
  *     slot. Carries the slot index and the side ('offering' or
  *     'target'), plus the cap context. MarketplacePage rebuilds
  *     a fresh onPick backed by the direct-offer draft store.
  *
- * Only one of the two is set at a time. If both are undefined,
- * the popup was opened by clicking a team name — no pick mode,
- * just a plain roster browse.
+ *   - publishPickContext: the popup was opened from a "Publier
+ *     une annonce" slot. Carries the slot index and the locked
+ *     position, plus the excluded player ids. MarketplacePage
+ *     rebuilds a fresh onPick backed by the publish-offer draft
+ *     store.
+ *
+ * Only one of the three is set at a time. If none are set, the
+ * popup was opened by clicking a team name — no pick mode, just
+ * a plain roster browse.
  *
  * Lifecycle:
  *   - Set by the player Link's onClick, right before navigating.
@@ -149,20 +155,44 @@ export interface PendingDirectPickContext {
     currentPickedPlayerId?: number | null;
 }
 
+/**
+ * Pick context for the "Publier une annonce" tab. When set, the
+ * popup was opened in pick mode from an AddOfferPanel slot.
+ * MarketplacePage rebuilds a fresh onPick backed by the
+ * publish-offer draft store from this on mount.
+ *
+ * The callback signatures are NOT carried here: they are rebuilt
+ * on restore so they target the fresh AddOfferPanel instance
+ * (which reads its slots from the store).
+ */
+export interface PendingPublishPickContext {
+    slotIndex: number;
+    currentPickedPlayerId: number | null;
+    lockedPosition?: MarketplacePopupPosition;
+    excludedPlayerIds: number[];
+}
+
 export interface PendingMarketplacePopup {
     teamId: number;
     teamName: string;
     positionFilter: MarketplacePopupPosition;
     /**
      * Set when the popup was in pick mode for a Voir les offres
-     * slot. Mutually exclusive with directPickContext.
+     * slot. Mutually exclusive with directPickContext and
+     * publishPickContext.
      */
     pickContext?: PendingPickContext;
     /**
      * Set when the popup was in pick mode for a Créer slot.
-     * Mutually exclusive with pickContext.
+     * Mutually exclusive with pickContext and publishPickContext.
      */
     directPickContext?: PendingDirectPickContext;
+    /**
+     * Set when the popup was in pick mode for a Publier une
+     * annonce slot. Mutually exclusive with pickContext and
+     * directPickContext.
+     */
+    publishPickContext?: PendingPublishPickContext;
     /**
      * Full RosterEntry-shaped snapshot of the player on the OTHER
      * side of the trade slot, kept so the popup reopens with its

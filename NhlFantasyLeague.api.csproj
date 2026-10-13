@@ -32,6 +32,7 @@
     <None Remove="frontend\src\lib\marketplaceTradeState.ts" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
     <None Remove="frontend\src\lib\playerNavigation.ts" />
+    <None Remove="frontend\src\lib\publishOfferState.ts" />
     <None Remove="frontend\src\lib\pwaInstall.ts" />
     <None Remove="frontend\src\lib\scrollRestoration.ts" />
     <None Remove="frontend\src\pages\ClassementPage.tsx" />
@@ -73,6 +74,7 @@
     <TypeScriptCompile Include="frontend\src\lib\marketplaceTradeState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />
     <TypeScriptCompile Include="frontend\src\lib\playerNavigation.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\publishOfferState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\pwaInstall.ts" />
     <TypeScriptCompile Include="frontend\src\lib\scrollRestoration.ts" />
     <TypeScriptCompile Include="frontend\src\pages\ClassementPage.tsx" />
