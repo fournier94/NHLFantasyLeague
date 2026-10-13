@@ -522,6 +522,453 @@ namespace NhlFantasyLeague.api.Services
             };
         }
 
+        // =================================================================
+        // Roster shape violations (retrospective audit)
+        //
+        // Reconstructs every team's shape at every distinct history
+        // instant in the season and reports every continuous window
+        // where the shape did not match
+        // 12F/6D/1G active + 4F/2D/1G bench + 3 prospects.
+        //
+        // The shape at instant T is derived from RosterStatusHistory
+        // exactly the way the scoring recompute derives team
+        // ownership: for each player, take the last row with
+        // EffectiveAt <= T. This guarantees the audit and the
+        // standings agree on who owned whom, when.
+        // =================================================================
+
+        /// <summary>
+        /// Earliest EffectiveAt the shape audit will consider.
+        /// History rows before this instant are ignored, so that
+        /// pre-season setup work (initial roster construction,
+        /// roster changes made before the league officially
+        /// opened) does not appear as a violation.
+        ///
+        /// Set to the day before the season officially starts:
+        /// a roster is legally incomplete on the day before
+        /// opening night, and reporting that shape as a
+        /// violation is a false positive.
+        ///
+        /// Change this when the league moves to a new season.
+        /// </summary>
+        private static readonly DateTime ShapeAuditStartUtc =
+            new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc);
+
+        /// <summary>
+        /// Scans the given season's RosterStatusHistory and returns
+        /// every continuous window during which some fantasy team
+        /// had the wrong number of players in each (status, position
+        /// group) bucket.
+        ///
+        /// Teams with zero players at a checkpoint are skipped, so
+        /// the period before the initial roster is populated and
+        /// the state after a full release-all do not appear as
+        /// violations.
+        ///
+        /// Instants are UTC at day precision, matching every other
+        /// RosterStatusHistory row.
+        /// </summary>
+        public async Task<List<RosterShapeViolationDto>>
+            FindRosterShapeViolationsAsync(
+                int? seasonId,
+                CancellationToken ct = default)
+        {
+            var season = await ResolveSeasonAsync(seasonId);
+
+            if (season == null)
+            {
+                return new List<RosterShapeViolationDto>();
+            }
+
+            // Every history row for the season, ordered. This is the
+            // full timeline; everything else is computed in memory.
+            var rows = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Where(h => h.SeasonId == season.Id)
+                .OrderBy(h => h.EffectiveAt)
+                .ThenBy(h => h.Id)
+                .ToListAsync(ct);
+
+            if (rows.Count == 0)
+            {
+                return new List<RosterShapeViolationDto>();
+            }
+
+            // Players referenced by the history, in one query.
+            var playerIds = rows
+                .Select(r => r.PlayerId)
+                .Distinct()
+                .ToList();
+
+            var players = await _dbContext.Players
+                .AsNoTracking()
+                .Where(p => playerIds.Contains(p.Id))
+                .Select(p => new ShapeCheckPlayer
+                {
+                    Id = p.Id,
+                    NhlPlayerId = p.NhlPlayerId,
+                    FirstName = p.FirstName,
+                    LastName = p.LastName,
+                    Position = p.Position,
+                })
+                .ToDictionaryAsync(p => p.Id, ct);
+
+            // Fantasy team names, for the DTO. Teams with history
+            // rows always have a FantasyTeam row, but the fallback
+            // keeps a stray FK-mismatch from crashing the audit.
+            var teamIds = rows
+                .Select(r => r.FantasyTeamId)
+                .Distinct()
+                .ToList();
+
+            var teamNames = await _dbContext.FantasyTeams
+                .AsNoTracking()
+                .Where(t => teamIds.Contains(t.Id))
+                .ToDictionaryAsync(
+                    t => t.Id,
+                    t => t.Name,
+                    ct);
+
+            // Group history by player so the effective row at any
+            // checkpoint is a small linear scan.
+            var rowsByPlayerId = rows
+                .GroupBy(r => r.PlayerId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderBy(r => r.EffectiveAt)
+                          .ThenBy(r => r.Id)
+                          .ToList());
+
+            // Every distinct instant the history changed, filtered
+            // to only include instants at or after the audit start
+            // date. Pre-season setup work is not a violation, and
+            // evaluating those checkpoints would surface dozens of
+            // false positives for teams that were legitimately
+            // incomplete while their roster was still being built.
+            //
+            // Between two consecutive checkpoints, nothing can
+            // change: the shape is constant.
+            var checkpoints = rows
+                .Select(r => r.EffectiveAt)
+                .Where(x => x >= ShapeAuditStartUtc)
+                .Distinct()
+                .OrderBy(x => x)
+                .ToList();
+
+            var allViolations = new List<RosterShapeViolationDto>();
+
+            var openViolationByTeamId =
+                new Dictionary<int, RosterShapeViolationDto>();
+
+            var previousShapeByTeamId =
+                new Dictionary<int, TeamShape>();
+
+            foreach (var checkpoint in checkpoints)
+            {
+                var currentShapeByTeamId = BuildTeamShapesAtCheckpoint(
+                    checkpoint,
+                    rowsByPlayerId,
+                    players);
+
+                // Union of teams seen before and teams seen now, so
+                // a team whose last player just left still gets
+                // processed (and its violation closed).
+                var allTeamIdsInThisCheckpoint = new HashSet<int>();
+
+                foreach (var tid in previousShapeByTeamId.Keys)
+                {
+                    allTeamIdsInThisCheckpoint.Add(tid);
+                }
+
+                foreach (var tid in currentShapeByTeamId.Keys)
+                {
+                    allTeamIdsInThisCheckpoint.Add(tid);
+                }
+
+                foreach (var teamId in allTeamIdsInThisCheckpoint)
+                {
+                    previousShapeByTeamId.TryGetValue(
+                        teamId, out var previousShape);
+
+                    currentShapeByTeamId.TryGetValue(
+                        teamId, out var currentShape);
+
+                    // "Has players" is the gate for the check: an
+                    // empty team is either not-yet-populated or a
+                    // post-reset state, and neither is a shape
+                    // violation.
+                    var previousHasPlayers =
+                        previousShape != null &&
+                        previousShape.Total > 0;
+
+                    var currentHasPlayers =
+                        currentShape != null &&
+                        currentShape.Total > 0;
+
+                    var previousWrong =
+                        previousHasPlayers &&
+                        !previousShape!.MatchesLeagueShape();
+
+                    var currentWrong =
+                        currentHasPlayers &&
+                        !currentShape!.MatchesLeagueShape();
+
+                    if (previousWrong && !currentWrong)
+                    {
+                        // Shape was fixed at this checkpoint. Close
+                        // the open violation.
+                        if (openViolationByTeamId.TryGetValue(
+                                teamId,
+                                out var violation))
+                        {
+                            violation.EndEffectiveAt = checkpoint;
+                            allViolations.Add(violation);
+                            openViolationByTeamId.Remove(teamId);
+                        }
+                    }
+                    else if (!previousWrong && currentWrong)
+                    {
+                        // Shape broke at this checkpoint. Open a new
+                        // violation with the current snapshot.
+                        var teamName = teamNames.GetValueOrDefault(
+                            teamId,
+                            $"Team {teamId}");
+
+                        var violation = new RosterShapeViolationDto
+                        {
+                            FantasyTeamId = teamId,
+                            FantasyTeamName = teamName,
+                            StartEffectiveAt = checkpoint,
+                            ActiveForwards = currentShape!.ActiveF,
+                            ActiveDefensemen = currentShape.ActiveD,
+                            ActiveGoalies = currentShape.ActiveG,
+                            BenchForwards = currentShape.BenchF,
+                            BenchDefensemen = currentShape.BenchD,
+                            BenchGoalies = currentShape.BenchG,
+                            Prospects = currentShape.Prospects,
+                            ExpectedActiveForwards = 12,
+                            ExpectedActiveDefensemen = 6,
+                            ExpectedActiveGoalies = 1,
+                            ExpectedBenchForwards = 4,
+                            ExpectedBenchDefensemen = 2,
+                            ExpectedBenchGoalies = 1,
+                            ExpectedProspects = 3,
+                            Players = currentShape.Players
+                                .OrderBy(p => StatusSortKey(p.RosterStatus))
+                                .ThenBy(p => p.PositionGroup)
+                                .ThenBy(p => p.LastName)
+                                .ToList(),
+                        };
+
+                        openViolationByTeamId[teamId] = violation;
+                    }
+                    // previousWrong && currentWrong: still broken,
+                    // nothing to do; the opening snapshot is kept.
+                    // !previousWrong && !currentWrong: fine, no-op.
+                }
+
+                previousShapeByTeamId = currentShapeByTeamId;
+            }
+
+            // Anything still open at the last checkpoint is ongoing:
+            // EndEffectiveAt stays null.
+            foreach (var violation in openViolationByTeamId.Values)
+            {
+                allViolations.Add(violation);
+            }
+
+            return allViolations
+                .OrderBy(v => v.StartEffectiveAt)
+                .ThenBy(v => v.FantasyTeamName)
+                .ToList();
+        }
+
+        private sealed class ShapeCheckPlayer
+        {
+            public int Id { get; set; }
+            public int NhlPlayerId { get; set; }
+            public string FirstName { get; set; } = string.Empty;
+            public string LastName { get; set; } = string.Empty;
+            public string Position { get; set; } = string.Empty;
+        }
+
+        private sealed class TeamShape
+        {
+            public int ActiveF { get; set; }
+            public int ActiveD { get; set; }
+            public int ActiveG { get; set; }
+
+            public int BenchF { get; set; }
+            public int BenchD { get; set; }
+            public int BenchG { get; set; }
+
+            public int Prospects { get; set; }
+
+            public int Total =>
+                ActiveF + ActiveD + ActiveG +
+                BenchF + BenchD + BenchG +
+                Prospects;
+
+            public List<RosterShapeViolationPlayerDto> Players { get; }
+                = new List<RosterShapeViolationPlayerDto>();
+
+            /// <summary>
+            /// Same check as CheckShapeAfterAsync, but expressed on
+            /// the reconstructed shape instead of on the current
+            /// RosterEntry rows.
+            /// </summary>
+            public bool MatchesLeagueShape() =>
+                ActiveF == 12 &&
+                ActiveD == 6 &&
+                ActiveG == 1 &&
+                BenchF == 4 &&
+                BenchD == 2 &&
+                BenchG == 1 &&
+                Prospects == 3;
+        }
+
+        /// <summary>
+        /// Builds the shape of every fantasy team at one instant, by
+        /// resolving each player's effective history row at that
+        /// instant. Uses the same "last row with EffectiveAt <= T"
+        /// rule as the scoring recompute, so the audit and the
+        /// standings never disagree about who owned whom.
+        ///
+        /// Released rows are skipped: their FantasyTeamId still
+        /// points at the old team, but the player is not on any
+        /// team anymore.
+        /// </summary>
+        private static Dictionary<int, TeamShape> BuildTeamShapesAtCheckpoint(
+            DateTime checkpoint,
+            Dictionary<int, List<RosterStatusHistory>> rowsByPlayerId,
+            Dictionary<int, ShapeCheckPlayer> players)
+        {
+            var result = new Dictionary<int, TeamShape>();
+
+            foreach (var kvp in rowsByPlayerId)
+            {
+                var playerId = kvp.Key;
+                var playerRows = kvp.Value;
+
+                RosterStatusHistory? effective = null;
+
+                foreach (var row in playerRows)
+                {
+                    if (row.EffectiveAt <= checkpoint)
+                    {
+                        effective = row;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                if (effective == null)
+                {
+                    continue;
+                }
+
+                if (effective.RosterStatus == RosterStatus.Released)
+                {
+                    continue;
+                }
+
+                if (!players.TryGetValue(playerId, out var player))
+                {
+                    continue;
+                }
+
+                var group = PositionGroupHelper.Classify(
+                    player.Position);
+
+                // Defensive: every writer validates the position
+                // before it writes a row, so this should never fire.
+                // Skipping a single row is preferable to throwing
+                // and losing the whole audit.
+                if (group == PositionGroup.Unknown)
+                {
+                    continue;
+                }
+
+                if (!result.TryGetValue(
+                        effective.FantasyTeamId,
+                        out var shape))
+                {
+                    shape = new TeamShape();
+                    result[effective.FantasyTeamId] = shape;
+                }
+
+                switch (effective.RosterStatus)
+                {
+                    case RosterStatus.Active:
+                        switch (group)
+                        {
+                            case PositionGroup.Forward:
+                                shape.ActiveF++;
+                                break;
+                            case PositionGroup.Defense:
+                                shape.ActiveD++;
+                                break;
+                            case PositionGroup.Goalie:
+                                shape.ActiveG++;
+                                break;
+                        }
+                        break;
+
+                    case RosterStatus.Bench:
+                        switch (group)
+                        {
+                            case PositionGroup.Forward:
+                                shape.BenchF++;
+                                break;
+                            case PositionGroup.Defense:
+                                shape.BenchD++;
+                                break;
+                            case PositionGroup.Goalie:
+                                shape.BenchG++;
+                                break;
+                        }
+                        break;
+
+                    case RosterStatus.Prospect:
+                        // Position-agnostic, matching CheckShapeAfterAsync.
+                        shape.Prospects++;
+                        break;
+                }
+
+                shape.Players.Add(new RosterShapeViolationPlayerDto
+                {
+                    PlayerId = player.Id,
+                    NhlPlayerId = player.NhlPlayerId,
+                    FirstName = player.FirstName,
+                    LastName = player.LastName,
+                    Position = player.Position,
+                    PositionGroup = group switch
+                    {
+                        PositionGroup.Forward => "F",
+                        PositionGroup.Defense => "D",
+                        PositionGroup.Goalie => "G",
+                        _ => "?",
+                    },
+                    RosterStatus = effective.RosterStatus.ToString(),
+                });
+            }
+
+            return result;
+        }
+
+        private static int StatusSortKey(string status)
+        {
+            return status switch
+            {
+                "Active" => 0,
+                "Bench" => 1,
+                "Prospect" => 2,
+                _ => 3,
+            };
+        }
+
         /// <summary>
         /// Returns the append-only history of one player for one season,
         /// most recent first. Used by the admin audit view.
@@ -560,6 +1007,50 @@ namespace NhlFantasyLeague.api.Services
                     Note = h.Note
                 })
                 .ToListAsync();
+        }
+
+        /// <summary>
+        /// Returns the FULL movement history of one player across every
+        /// season that has history rows. Each row carries the season
+        /// name so a cross-season view can group or label it.
+        ///
+        /// Ordering: newest first (EffectiveAt DESC, then Id DESC).
+        ///
+        /// Used by the admin page's "Historique des mouvements d'un
+        /// joueur" section, which shows one player's status changes
+        /// and team changes across his entire tenure in the league.
+        /// </summary>
+        public async Task<List<RosterStatusHistoryDto>> GetPlayerFullStatusHistoryAsync(
+            int playerId,
+            CancellationToken ct = default)
+        {
+            var rows = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Include(h => h.Player)
+                .Include(h => h.FantasyTeam)
+                .Include(h => h.Season)
+                .Where(h => h.PlayerId == playerId)
+                .OrderByDescending(h => h.EffectiveAt)
+                .ThenByDescending(h => h.Id)
+                .ToListAsync(ct);
+
+            return rows
+                .Select(h => new RosterStatusHistoryDto
+                {
+                    Id = h.Id,
+                    PlayerId = h.PlayerId,
+                    PlayerFirstName = h.Player!.FirstName,
+                    PlayerLastName = h.Player!.LastName,
+                    FantasyTeamId = h.FantasyTeamId,
+                    FantasyTeamName = h.FantasyTeam!.Name,
+                    SeasonId = h.SeasonId,
+                    SeasonName = h.Season?.Name,
+                    RosterStatus = h.RosterStatus.ToString(),
+                    EffectiveAt = h.EffectiveAt,
+                    CreatedAt = h.CreatedAt,
+                    Note = h.Note
+                })
+                .ToList();
         }
 
         /// <summary>
@@ -639,8 +1130,8 @@ namespace NhlFantasyLeague.api.Services
         /// trigger the team-totals recompute so standings update.
         /// </summary>
         public async Task<RosterActionResultDto> UpdateStatusHistoryAsync(
-            int historyId,
-            UpdateRosterStatusHistoryRequest request)
+     int historyId,
+     UpdateRosterStatusHistoryRequest request)
         {
             if (request.EffectiveAt == default)
             {
@@ -657,6 +1148,23 @@ namespace NhlFantasyLeague.api.Services
             }
 
             var normalized = NormalizeEffectiveAt(request.EffectiveAt);
+
+            // Parse the optional status BEFORE we touch anything, so
+            // an invalid value rejects the whole request cleanly.
+            RosterStatus? parsedStatus = null;
+
+            if (!string.IsNullOrWhiteSpace(request.RosterStatus))
+            {
+                if (!TryParseRosterStatus(
+                        request.RosterStatus, out var s))
+                {
+                    return Failure(
+                        $"Invalid RosterStatus '{request.RosterStatus}'. " +
+                        "Use Active, Bench, Prospect or Released.");
+                }
+
+                parsedStatus = s;
+            }
 
             // Load the full history for the same player and season so we
             // can (a) check ordering and (b) find any sibling rows that
@@ -681,22 +1189,6 @@ namespace NhlFantasyLeague.api.Services
                 .Where(h => !sameInstantIds.Contains(h.Id))
                 .ToList();
 
-            // The predecessor is the last unaffected row with
-            // EffectiveAt strictly less than the new instant.
-            var predecessor = unaffected
-                .Where(h => h.EffectiveAt < normalized)
-                .OrderBy(h => h.EffectiveAt)
-                .ThenBy(h => h.Id)
-                .LastOrDefault();
-
-            // The successor is the first unaffected row with
-            // EffectiveAt strictly greater than the new instant.
-            var successor = unaffected
-                .Where(h => h.EffectiveAt > normalized)
-                .OrderBy(h => h.EffectiveAt)
-                .ThenBy(h => h.Id)
-                .FirstOrDefault();
-
             // We also need to make sure we are not colliding with an
             // unaffected row exactly at the new instant (which would
             // create two unrelated rows at the same EffectiveAt).
@@ -710,15 +1202,24 @@ namespace NhlFantasyLeague.api.Services
                     $"at {normalized:yyyy-MM-dd}. Choose a different date.");
             }
 
-            // The "strictly between" check is enforced implicitly by
-            // choosing the predecessor/successor above: as long as both
-            // a predecessor and a successor exist on either side of the
-            // new instant, the row is between them. If they don't, the
-            // row is moving to the very start or the very end of the
-            // chain, which is allowed.
-
+            // Capture the previous state BEFORE any mutation so the
+            // success message can describe what actually changed.
             var previousDate = row.EffectiveAt;
+            var previousStatus = row.RosterStatus;
 
+            // Apply the status change, if requested, ONLY to the
+            // specific row identified by the route id. Siblings can
+            // legitimately hold different statuses, so propagating
+            // the change would corrupt the record.
+            if (parsedStatus.HasValue)
+            {
+                row.RosterStatus = parsedStatus.Value;
+            }
+
+            // Move the EffectiveAt and update the Note on the target
+            // row and its siblings. A trade writes two rows at the
+            // same instant: they represent one moment, so moving the
+            // moment moves both.
             foreach (var sibling in sameInstant)
             {
                 sibling.EffectiveAt = normalized;
@@ -732,13 +1233,25 @@ namespace NhlFantasyLeague.api.Services
 
             await _dbContext.SaveChangesAsync();
 
+            // Build a message that describes every part of the change.
+            var parts = new List<string>
+            {
+                $"date {previousDate:yyyy-MM-dd} -> {normalized:yyyy-MM-dd}",
+                $"{sameInstant.Count} row(s) updated",
+            };
+
+            if (parsedStatus.HasValue &&
+                parsedStatus.Value != previousStatus)
+            {
+                parts.Add(
+                    $"status {previousStatus} -> {parsedStatus.Value}");
+            }
+
             return new RosterActionResultDto
             {
                 Success = true,
-                Message =
-                    $"History row(s) moved from " +
-                    $"{previousDate:yyyy-MM-dd} to {normalized:yyyy-MM-dd} " +
-                    $"({sameInstant.Count} row(s) updated)."
+                Message = "History updated: " +
+                          string.Join("; ", parts) + "."
             };
         }
 
@@ -800,27 +1313,41 @@ namespace NhlFantasyLeague.api.Services
                 return Failure($"Roster entry {request.RosterEntryId} not found.");
             }
 
+            // Capture the current state BEFORE any mutation. These values
+            // go on the "closing" history row when the team changes, and
+            // are used to detect whether the status actually changed.
+            var previousStatus = entry.RosterStatus;
+            var previousTeamId = entry.FantasyTeamId;
+            var previousTeamName =
+                entry.FantasyTeam?.Name ?? $"team {entry.FantasyTeamId}";
+
+            // Parse the requested status and detect a change. A status
+            // value that matches the current one is treated as "no
+            // change" and produces no history row.
+            var newStatus = previousStatus;
+            var statusChanged = false;
+
             if (hasStatus)
             {
-                if (!TryParseRosterStatus(request.RosterStatus, out var rosterStatus))
+                if (!TryParseRosterStatus(request.RosterStatus, out newStatus))
                 {
                     return Failure(
                         $"Invalid RosterStatus '{request.RosterStatus}'. " +
                         "Use Active, Bench or Prospect.");
                 }
 
-                entry.RosterStatus = rosterStatus;
+                statusChanged = newStatus != previousStatus;
             }
 
+            // Detect a team change. A FantasyTeamId that matches the
+            // current team is treated as "no change".
             var teamChanged = false;
-            var oldTeamId = entry.FantasyTeamId;
-            var oldTeamName = entry.FantasyTeam?.Name ?? $"team {entry.FantasyTeamId}";
-            var tradeStatus = entry.RosterStatus;
+            FantasyTeam? targetTeam = null;
 
             if (request.FantasyTeamId.HasValue &&
                 request.FantasyTeamId.Value != entry.FantasyTeamId)
             {
-                var targetTeam = await _dbContext.FantasyTeams
+                targetTeam = await _dbContext.FantasyTeams
                     .FirstOrDefaultAsync(t => t.Id == request.FantasyTeamId.Value);
 
                 if (targetTeam == null)
@@ -828,19 +1355,49 @@ namespace NhlFantasyLeague.api.Services
                     return Failure($"Fantasy team {request.FantasyTeamId.Value} not found.");
                 }
 
-                // Moving a player between fantasy teams is a trade. It
-                // needs a valid EffectiveAt so the recompute can slice
-                // his FP between the two teams.
-                if (request.EffectiveAt == null || request.EffectiveAt == default)
-                {
-                    return Failure(
-                        "EffectiveAt is required when the team changes. " +
-                        "Pass the UTC instant the trade becomes effective.");
-                }
+                teamChanged = true;
+            }
 
+            // Resolve the EffectiveAt for the history rows that this
+            // update may write.
+            //
+            //   - If the caller supplied one (the AdminPage's combined-
+            //     update form always does when the team changes), use
+            //     it as-is.
+            //   - Otherwise, if the team is changing, refuse the update.
+            //     This preserves the existing contract: a team change
+            //     must have a caller-chosen effective day, because the
+            //     recompute uses it to slice the player's FP between
+            //     the two teams.
+            //   - Otherwise (status-only change), fall back to
+            //     NextUtcDayStart. That keeps the change non-retroactive:
+            //     today's games still belong to the pre-change status,
+            //     and the new status takes over from tomorrow.
+            DateTime effectiveAt;
+
+            if (request.EffectiveAt.HasValue &&
+                request.EffectiveAt.Value != default)
+            {
+                effectiveAt = NormalizeEffectiveAt(request.EffectiveAt.Value);
+            }
+            else if (teamChanged)
+            {
+                return Failure(
+                    "EffectiveAt is required when the team changes. " +
+                    "Pass the UTC instant the trade becomes effective.");
+            }
+            else
+            {
+                effectiveAt = NextUtcDayStart();
+            }
+
+            // Apply the mutations.
+            entry.RosterStatus = newStatus;
+
+            if (teamChanged && targetTeam != null)
+            {
                 entry.FantasyTeam = targetTeam;
                 entry.FantasyTeamId = targetTeam.Id;
-                teamChanged = true;
             }
 
             entry.FantasySalary = await ResolveSalaryFromContractsAsync(
@@ -852,26 +1409,60 @@ namespace NhlFantasyLeague.api.Services
                 entry.RosterSlot = request.RosterSlot.Value;
             }
 
-            // Only write trade history when the team actually changed.
-            // Status-only and slot-only updates do not append history:
-            // they are covered by the swap / set-status endpoints, which
-            // write their own rows. This keeps the audit trail exact.
+            // Build the note. The caller's note wins; otherwise a default
+            // that describes what the update actually did is generated, so
+            // the audit view never shows an unexplained row.
+            var defaultNoteParts = new List<string>();
+
+            if (teamChanged)
+            {
+                defaultNoteParts.Add(
+                    $"Trade from '{previousTeamName}' to " +
+                    $"'{entry.FantasyTeam?.Name}'");
+            }
+
+            if (statusChanged)
+            {
+                defaultNoteParts.Add($"{previousStatus} -> {newStatus}");
+            }
+
+            var note = string.IsNullOrWhiteSpace(request.Note)
+                ? (defaultNoteParts.Count > 0
+                    ? string.Join(" | ", defaultNoteParts)
+                    : "Roster update")
+                : request.Note!.Trim();
+
+            // Write the history rows.
+            //
+            // The scoring recompute walks RosterStatusHistory and credits
+            // a game to the player's last Active team at game-day 00:00
+            // UTC. Any update that could change "which team, which status"
+            // must therefore append at least one row, otherwise the change
+            // is invisible to the recompute and old teams would keep
+            // earning FP for players they no longer own, or benched
+            // players would keep earning FP for their old active slot.
+            //
+            // Cases:
+            //   teamChanged && statusChanged
+            //       Close out the old team with the previous status, open
+            //       the new team with the new status.
+            //   teamChanged only
+            //       Close out the old team with its current status, open
+            //       the new team with the same status.
+            //   statusChanged only
+            //       Append one row on the same team with the new status.
+            //   neither changed (slot-only update)
+            //       No history row: the slot is not part of scoring.
             var offersDeleted = 0;
             var responsesDeleted = 0;
 
             if (teamChanged)
             {
-                var effectiveAt = NormalizeEffectiveAt(request.EffectiveAt!.Value);
-
-                var note = string.IsNullOrWhiteSpace(request.Note)
-                    ? $"Trade from '{oldTeamName}' to '{entry.FantasyTeam?.Name}'"
-                    : request.Note!.Trim();
-
                 AddHistoryRow(
                     entry.PlayerId,
-                    oldTeamId,
+                    previousTeamId,
                     entry.SeasonId,
-                    tradeStatus,
+                    previousStatus,
                     effectiveAt,
                     note);
 
@@ -879,17 +1470,26 @@ namespace NhlFantasyLeague.api.Services
                     entry.PlayerId,
                     entry.FantasyTeamId,
                     entry.SeasonId,
-                    tradeStatus,
+                    newStatus,
                     effectiveAt,
                     note);
 
-                // Same cleanup as MovePlayerAsync: this path also
-                // changes a player's team (just via a different
-                // request shape), so every marketplace object that
-                // references him is now stale.
+                // Marketplace cleanup: any active offer or pending
+                // response that references this player is now stale,
+                // because his old team no longer owns him.
                 (offersDeleted, responsesDeleted) =
                     await DeleteMarketplaceObjectsInvolvingPlayersAsync(
                         new[] { entry.PlayerId });
+            }
+            else if (statusChanged)
+            {
+                AddHistoryRow(
+                    entry.PlayerId,
+                    entry.FantasyTeamId,
+                    entry.SeasonId,
+                    newStatus,
+                    effectiveAt,
+                    note);
             }
 
             await _dbContext.SaveChangesAsync();
@@ -906,7 +1506,9 @@ namespace NhlFantasyLeague.api.Services
                 Message = teamChanged
                     ? $"'{PlayerName(entry.Player)}' transferred to '{entry.FantasyTeam?.Name}'." +
                         marketplaceSuffix
-                    : $"'{PlayerName(entry.Player)}' updated on '{entry.FantasyTeam?.Name}'.",
+                    : statusChanged
+                        ? $"'{PlayerName(entry.Player)}' set to {newStatus} on '{entry.FantasyTeam?.Name}'."
+                        : $"'{PlayerName(entry.Player)}' updated on '{entry.FantasyTeam?.Name}'.",
                 Entry = ToRosterEntryDto(entry)
             };
         }

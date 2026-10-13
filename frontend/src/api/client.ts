@@ -571,6 +571,78 @@ export function getRosterGameStatsForDate(
     );
 }
 
+// ---------------------------------------------------------------------
+// Roster shape violations (commissioner audit)
+//
+// Retrospective scan of the season's RosterStatusHistory. Reports
+// every continuous window during which a fantasy team's shape was
+// not 12F/6D/1G active + 4F/2D/1G bench + 3 prospects.
+//
+// Instants are UTC at day precision (00:00:00), matching every
+// other RosterStatusHistory row. Display them with .slice(0, 10)
+// when you only want the calendar day, same convention the
+// existing history table uses.
+// ---------------------------------------------------------------------
+
+export interface RosterShapeViolationPlayer {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    /** "F", "D" or "G". */
+    positionGroup: string;
+    /** "Active", "Bench" or "Prospect". */
+    rosterStatus: string;
+}
+
+export interface RosterShapeViolation {
+    fantasyTeamId: number;
+    fantasyTeamName: string;
+
+    /** UTC instant the wrong shape first became effective. */
+    startEffectiveAt: string;
+
+    /** UTC instant the shape was fixed, or null when still wrong. */
+    endEffectiveAt: string | null;
+
+    // Actual counts during the window (snapshot at start).
+    activeForwards: number;
+    activeDefensemen: number;
+    activeGoalies: number;
+    benchForwards: number;
+    benchDefensemen: number;
+    benchGoalies: number;
+    prospects: number;
+
+    // Expected counts.
+    expectedActiveForwards: number;
+    expectedActiveDefensemen: number;
+    expectedActiveGoalies: number;
+    expectedBenchForwards: number;
+    expectedBenchDefensemen: number;
+    expectedBenchGoalies: number;
+    expectedProspects: number;
+
+    players: RosterShapeViolationPlayer[];
+}
+
+/**
+ * Runs the retrospective shape audit for one season. Cached with
+ * cacheTtlMs 0 so the admin always sees the current scan result;
+ * the computation itself is fast (a few hundred ms on a full
+ * season).
+ */
+export function getRosterShapeViolations(
+    seasonId?: number,
+): Promise<RosterShapeViolation[]> {
+    const query = seasonId != null ? `?seasonId=${seasonId}` : '';
+    return apiGet<RosterShapeViolation[]>(
+        `/Roster/shape-violations${query}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
 /** One player row returned by the roster search (GET /api/Roster/search). */
 export interface PlayerSearchResult {
     playerId: number;
@@ -694,6 +766,11 @@ export interface RosterStatusHistoryRow {
     fantasyTeamId: number;
     fantasyTeamName: string;
     seasonId: number;
+    /**
+     * Display name of the season (e.g. "2026-2027"). Populated by the
+     * cross-season endpoint; null on the per-season endpoint.
+     */
+    seasonName: string | null;
     rosterStatus: string;
     effectiveAt: string;
     createdAt: string;
@@ -702,6 +779,17 @@ export interface RosterStatusHistoryRow {
 
 export interface UpdateRosterStatusHistoryRequest {
     effectiveAt: string;
+    /**
+     * Optional. When provided, replaces the RosterStatus on the
+     * specific history row identified by the route id. Does NOT
+     * apply to sibling rows that share the same EffectiveAt, since
+     * siblings can legitimately hold different statuses (a trade
+     * that also changed status writes two rows with different
+     * statuses at the same instant).
+     *
+     * Accepted values: "Active", "Bench", "Prospect", "Released".
+     */
+    rosterStatus?: string;
     note?: string;
 }
 
@@ -724,6 +812,23 @@ export function getRosterStatusHistory(
     const query = seasonId != null ? `?seasonId=${seasonId}` : '';
     return apiGet<RosterStatusHistoryRow[]>(
         `/Roster/status-history/${playerId}${query}`,
+    );
+}
+
+/**
+ * Full movement history of one player across every season, newest
+ * first. Each row carries the season name so a cross-season view
+ * can label it.
+ *
+ * Commissioner-only. Cached with cacheTtlMs 0 so a just-made
+ * movement shows up on the next visit to the section.
+ */
+export function getPlayerFullStatusHistory(
+    playerId: number,
+): Promise<RosterStatusHistoryRow[]> {
+    return apiGet<RosterStatusHistoryRow[]>(
+        `/Roster/status-history/${playerId}/all`,
+        { cacheTtlMs: 0 },
     );
 }
 

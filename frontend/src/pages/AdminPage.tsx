@@ -19,6 +19,7 @@ import {
     updateRosterEntry,
     deleteStatusHistory,
     getRosterStatusHistory,
+    getPlayerFullStatusHistory,
     recomputeTeamTotals,
     updateStatusHistory,
     getProtectedSalaries,
@@ -35,6 +36,7 @@ import {
     getJobStatus,
     getAcceptedTrades,
     deleteAcceptedTrade,
+    getRosterShapeViolations,
     type DraftPick,
     type RosterStatusHistoryRow,
     type ProtectedSalaryRow,
@@ -46,6 +48,7 @@ import {
     type FantasyTeam,
     type PlayerSearchResult,
     type RosterEntry,
+    type RosterShapeViolation,
     type SystemEventLog,
     type TeamRoster,
     type AcceptedTradeRow,
@@ -169,6 +172,41 @@ const ROSTER_STATUSES = [
     { value: 'Bench', label: 'Banc' },
     { value: 'Prospect', label: 'Prospect' },
 ] as const;
+
+/**
+ * Statuses allowed on a RosterStatusHistory row. "Released" is a
+ * terminal status that only ever appears on history rows, never
+ * on a live RosterEntry. The history edit form needs it so the
+ * admin can correct a mistaken release or mark a past row as
+ * terminal.
+ */
+const ROSTER_STATUSES_WITH_RELEASED = [
+    ...ROSTER_STATUSES,
+    { value: 'Released', label: 'Libéré' },
+] as const;
+
+/**
+ * Parses a season display name like "2026-2027" into the
+ * corresponding NHL season code (20262027). Returns null when the
+ * name does not match the "YYYY-YYYY" format.
+ */
+function seasonCodeFromName(
+    name: string | null | undefined,
+): number | null {
+    if (!name) return null;
+
+    const parts = name.split('-');
+    if (parts.length !== 2) return null;
+
+    const start = Number(parts[0]);
+    const end = Number(parts[1]);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    if (start < 1900 || start > 2200) return null;
+    if (end < 1900 || end > 2200) return null;
+
+    return start * 10000 + end;
+}
 
 const MIN_SEARCH_LENGTH = 2;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -464,6 +502,81 @@ export default function AdminPage() {
     const [draftTransferSuccess, setDraftTransferSuccess] =
         useState<string | null>(null);
 
+    // --- Player movement history section state ---
+    const [movementSearch, setMovementSearch] = useState('');
+    const [movementResults, setMovementResults] = useState<
+        PlayerSearchResult[]
+    >([]);
+    const [movementSearching, setMovementSearching] = useState(false);
+    const [movementSelectedPlayer, setMovementSelectedPlayer] =
+        useState<PlayerSearchResult | null>(null);
+    const [movementHistory, setMovementHistory] = useState<
+        RosterStatusHistoryRow[]
+    >([]);
+    const [movementHistoryLoading, setMovementHistoryLoading] =
+        useState(false);
+    const [movementHistoryError, setMovementHistoryError] =
+        useState<string | null>(null);
+    const [movementHistorySuccess, setMovementHistorySuccess] =
+        useState<string | null>(null);
+    const [movementHistoryBusy, setMovementHistoryBusy] =
+        useState(false);
+
+    // Inline edit state for the movement history table.
+    const [movementEditingRowId, setMovementEditingRowId] =
+        useState<number | null>(null);
+    const [movementEditingEffectiveAt, setMovementEditingEffectiveAt] =
+        useState('');
+    const [movementEditingStatus, setMovementEditingStatus] =
+        useState('Active');
+    const [movementEditingNote, setMovementEditingNote] = useState('');
+
+    // Debounced player search for the movement history section.
+    // Same 300 ms cadence used by the other search inputs in this
+    // page.
+    useEffect(() => {
+        const text = movementSearch.trim();
+
+        if (text.length < MIN_SEARCH_LENGTH || movementSelectedPlayer) {
+            setMovementResults([]);
+            setMovementSearching(false);
+            return;
+        }
+
+        setMovementSearching(true);
+
+        let cancelled = false;
+
+        const timer = setTimeout(() => {
+            searchPlayers(text)
+                .then((data) => {
+                    if (!cancelled) setMovementResults(data);
+                })
+                .catch(() => {
+                    if (!cancelled) setMovementResults([]);
+                })
+                .finally(() => {
+                    if (!cancelled) setMovementSearching(false);
+                });
+        }, SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [movementSearch, movementSelectedPlayer]);
+
+    // --- Shape audit state ---
+    const [shapeViolations, setShapeViolations] = useState<
+        RosterShapeViolation[]
+    >([]);
+    const [shapeViolationsLoading, setShapeViolationsLoading] =
+        useState(false);
+    const [shapeViolationsError, setShapeViolationsError] =
+        useState<string | null>(null);
+    const [shapeViolationsLoaded, setShapeViolationsLoaded] =
+        useState(false);
+
     // Poll the background job while it runs. Stops as soon as the
     // job reports Completed or Failed, so no timer is left running.
     useEffect(() => {
@@ -523,6 +636,158 @@ export default function AdminPage() {
             );
         } finally {
             setRefreshAllStarting(false);
+        }
+    }
+
+    async function handleMovementPlayerSelect(
+        player: PlayerSearchResult,
+    ) {
+        setMovementSelectedPlayer(player);
+        setMovementSearch(`${player.firstName} ${player.lastName}`);
+        setMovementResults([]);
+        setMovementHistory([]);
+        setMovementHistoryError(null);
+        setMovementHistoryLoading(true);
+        setMovementHistorySuccess(null);
+        setMovementEditingRowId(null);
+        setMovementEditingEffectiveAt('');
+        setMovementEditingStatus('Active');
+        setMovementEditingNote('');
+
+        try {
+            const rows = await getPlayerFullStatusHistory(
+                player.playerId,
+            );
+            setMovementHistory(rows);
+        } catch (err) {
+            setMovementHistoryError(
+                err instanceof Error
+                    ? err.message
+                    : 'Erreur inconnue.',
+            );
+        } finally {
+            setMovementHistoryLoading(false);
+        }
+    }
+
+    function handleMovementClear() {
+        setMovementSelectedPlayer(null);
+        setMovementSearch('');
+        setMovementResults([]);
+        setMovementHistory([]);
+        setMovementHistoryError(null);
+        setMovementHistoryLoading(false);
+        setMovementHistorySuccess(null);
+        setMovementEditingRowId(null);
+        setMovementEditingEffectiveAt('');
+        setMovementEditingStatus('Active');
+        setMovementEditingNote('');
+    }
+
+    function beginEditMovementRow(row: RosterStatusHistoryRow) {
+        setMovementEditingRowId(row.id);
+
+        // The backend stores effectiveAt at day precision UTC
+        // ("YYYY-MM-DDT00:00:00Z"). We display the raw UTC
+        // value in the datetime-local input, without any local
+        // timezone conversion, so the round-trip is lossless.
+        setMovementEditingEffectiveAt(row.effectiveAt.slice(0, 16));
+        setMovementEditingStatus(row.rosterStatus);
+        setMovementEditingNote(row.note ?? '');
+        setMovementHistoryError(null);
+        setMovementHistorySuccess(null);
+    }
+
+    function cancelEditMovementRow() {
+        setMovementEditingRowId(null);
+        setMovementEditingEffectiveAt('');
+        setMovementEditingStatus('Active');
+        setMovementEditingNote('');
+    }
+
+    async function saveMovementRow() {
+        if (movementEditingRowId == null) return;
+
+        const trimmed = movementEditingEffectiveAt.trim();
+
+        if (trimmed.length < 16) {
+            setMovementHistoryError('Date invalide.');
+            return;
+        }
+
+        // The input is "YYYY-MM-DDTHH:mm". Treat the whole value
+        // as UTC and complete it to a valid ISO instant. The
+        // backend normalizes to day precision regardless.
+        const effectiveAtIso = `${trimmed}:00Z`;
+
+        // Find the target row so we can recompute the correct
+        // season after the edit.
+        const targetRow = movementHistory.find(
+            (r) => r.id === movementEditingRowId,
+        );
+
+        setMovementHistoryBusy(true);
+        setMovementHistoryError(null);
+        setMovementHistorySuccess(null);
+
+        try {
+            const result = await updateStatusHistory(
+                movementEditingRowId,
+                {
+                    effectiveAt: effectiveAtIso,
+                    rosterStatus: movementEditingStatus,
+                    note: movementEditingNote.trim() || undefined,
+                },
+            );
+
+            // Recompute the season the row belongs to. Falls back
+            // to the current season when the row carries no
+            // season name (older rows created before the season
+            // rows existed).
+            const seasonCode =
+                seasonCodeFromName(targetRow?.seasonName) ??
+                CURRENT_SEASON_NHL_CODE;
+
+            await recomputeTeamTotals(seasonCode);
+
+            // Reload the player's full history so the edited row
+            // shows its new values, and so any other row that
+            // moved with it (siblings sharing the same
+            // EffectiveAt) is refreshed.
+            if (movementSelectedPlayer) {
+                const rows = await getPlayerFullStatusHistory(
+                    movementSelectedPlayer.playerId,
+                );
+                setMovementHistory(rows);
+            }
+
+            setMovementHistorySuccess(result.message);
+            cancelEditMovementRow();
+        } catch (err) {
+            setMovementHistoryError(
+                err instanceof Error
+                    ? err.message
+                    : 'Erreur inconnue.',
+            );
+        } finally {
+            setMovementHistoryBusy(false);
+        }
+    }
+
+    async function handleCheckShapeViolations() {
+        setShapeViolationsLoading(true);
+        setShapeViolationsError(null);
+
+        try {
+            const data = await getRosterShapeViolations();
+            setShapeViolations(data);
+            setShapeViolationsLoaded(true);
+        } catch (err) {
+            setShapeViolationsError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setShapeViolationsLoading(false);
         }
     }
 
@@ -3042,6 +3307,346 @@ export default function AdminPage() {
             </div>
 
             {/* ============================================================
+                Historique des mouvements d'un joueur
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Historique des mouvements d'un joueur
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Recherchez un joueur, puis sélectionnez-le pour
+                    voir l'historique complet de ses changements
+                    d'équipe et de statut, toutes saisons confondues.
+                </p>
+
+                <div className='relative max-w-lg'>
+                    <input
+                        type='text'
+                        value={movementSearch}
+                        autoComplete='off'
+                        onChange={(event) => {
+                            setMovementSearch(event.target.value);
+                            setMovementSelectedPlayer(null);
+                            setMovementHistory([]);
+                            setMovementHistoryError(null);
+                        }}
+                        placeholder='Rechercher un joueur (min. 2 lettres)'
+                        className={selectClass}
+                    />
+
+                    {movementResults.length > 0 && (
+                        <div className='absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg'>
+                            {movementResults.map((player) => (
+                                <button
+                                    key={player.playerId}
+                                    type='button'
+                                    onClick={() =>
+                                        void handleMovementPlayerSelect(
+                                            player,
+                                        )
+                                    }
+                                    className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                >
+                                    <span className='text-foreground'>
+                                        {player.firstName}{' '}
+                                        {player.lastName}
+                                    </span>
+
+                                    <span className='text-xs text-muted-foreground'>
+                                        {player.nhlTeamAbbreviation} ·{' '}
+                                        {player.position}
+                                        {player.fantasyTeamName ? (
+                                            <span className='text-primary'>
+                                                {' '}
+                                                (
+                                                {
+                                                    player.fantasyTeamName
+                                                }
+                                                )
+                                            </span>
+                                        ) : null}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {movementSearching && !movementSelectedPlayer && (
+                    <p className='text-sm text-muted-foreground'>
+                        Recherche...
+                    </p>
+                )}
+
+                {!movementSearching &&
+                    !movementSelectedPlayer &&
+                    movementSearch.trim().length >=
+                    MIN_SEARCH_LENGTH &&
+                    movementResults.length === 0 && (
+                        <p className='text-sm text-muted-foreground'>
+                            Aucun joueur trouvé.
+                        </p>
+                    )}
+
+                {movementSelectedPlayer && (
+                    <>
+                        <div className='flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm'>
+                            <div className='min-w-0'>
+                                <p className='font-medium text-foreground'>
+                                    {movementSelectedPlayer.firstName}{' '}
+                                    {movementSelectedPlayer.lastName}
+                                </p>
+                                <p className='text-xs text-muted-foreground'>
+                                    {
+                                        movementSelectedPlayer.nhlTeamAbbreviation
+                                    }{' '}
+                                    ·{' '}
+                                    {movementSelectedPlayer.position}
+                                    {movementSelectedPlayer.fantasyTeamName && (
+                                        <span className='ml-1 text-primary'>
+                                            ·{' '}
+                                            {
+                                                movementSelectedPlayer.fantasyTeamName
+                                            }
+                                        </span>
+                                    )}
+                                </p>
+                            </div>
+
+                            <button
+                                type='button'
+                                onClick={handleMovementClear}
+                                className='shrink-0 cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                            >
+                                Changer
+                            </button>
+                        </div>
+
+                        {movementHistoryLoading && (
+                            <p className='text-sm text-muted-foreground'>
+                                Chargement de l'historique...
+                            </p>
+                        )}
+
+                        {movementHistoryError && (
+                            <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                                {movementHistoryError}
+                            </p>
+                        )}
+
+                        {!movementHistoryLoading &&
+                            !movementHistoryError &&
+                            movementHistory.length === 0 && (
+                                <p className='text-sm text-muted-foreground'>
+                                    Aucun mouvement enregistré pour ce
+                                    joueur.
+                                </p>
+                            )}
+
+                        {movementHistorySuccess && (
+                            <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                                {movementHistorySuccess}
+                            </p>
+                        )}
+
+                        {!movementHistoryLoading &&
+                            movementHistory.length > 0 && (
+                                <div className='overflow-x-auto rounded-lg border border-border bg-card'>
+                                    <table className='w-full min-w-[820px] text-sm'>
+                                        <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
+                                            <tr>
+                                                <th className='px-2 py-2 text-left font-medium'>
+                                                    Saison
+                                                </th>
+                                                <th className='px-2 py-2 text-left font-medium'>
+                                                    Équipe
+                                                </th>
+                                                <th className='px-2 py-2 text-left font-medium'>
+                                                    Statut
+                                                </th>
+                                                <th className='px-2 py-2 text-left font-medium'>
+                                                    Date effective
+                                                </th>
+                                                <th className='px-2 py-2 text-left font-medium'>
+                                                    Note
+                                                </th>
+                                                <th className='px-2 py-2' />
+                                            </tr>
+                                        </thead>
+                                        <tbody className='text-foreground'>
+                                            {movementHistory.map(
+                                                (row, idx) => {
+                                                    const isEditing =
+                                                        movementEditingRowId ===
+                                                        row.id;
+
+                                                    return (
+                                                        <tr
+                                                            key={row.id}
+                                                            className={
+                                                                idx % 2 ===
+                                                                    0
+                                                                    ? 'bg-transparent'
+                                                                    : 'bg-secondary/20'
+                                                            }
+                                                        >
+                                                            <td className='px-2 py-2 align-top text-muted-foreground'>
+                                                                {row.seasonName ??
+                                                                    `#${row.seasonId}`}
+                                                            </td>
+                                                            <td className='px-2 py-2 align-top'>
+                                                                {
+                                                                    row.fantasyTeamName
+                                                                }
+                                                            </td>
+                                                            <td className='px-2 py-2 align-top'>
+                                                                {isEditing ? (
+                                                                    <select
+                                                                        value={
+                                                                            movementEditingStatus
+                                                                        }
+                                                                        onChange={(
+                                                                            e,
+                                                                        ) =>
+                                                                            setMovementEditingStatus(
+                                                                                e
+                                                                                    .target
+                                                                                    .value,
+                                                                            )
+                                                                        }
+                                                                        className='w-full rounded border border-border bg-background px-2 py-1 text-xs'
+                                                                    >
+                                                                        {ROSTER_STATUSES_WITH_RELEASED.map(
+                                                                            (
+                                                                                s,
+                                                                            ) => (
+                                                                                <option
+                                                                                    key={
+                                                                                        s.value
+                                                                                    }
+                                                                                    value={
+                                                                                        s.value
+                                                                                    }
+                                                                                >
+                                                                                    {
+                                                                                        s.label
+                                                                                    }
+                                                                                </option>
+                                                                            ),
+                                                                        )}
+                                                                    </select>
+                                                                ) : (
+                                                                    row.rosterStatus
+                                                                )}
+                                                            </td>
+                                                            <td className='px-2 py-2 align-top text-muted-foreground'>
+                                                                {isEditing ? (
+                                                                    <input
+                                                                        type='datetime-local'
+                                                                        value={
+                                                                            movementEditingEffectiveAt
+                                                                        }
+                                                                        onChange={(
+                                                                            e,
+                                                                        ) =>
+                                                                            setMovementEditingEffectiveAt(
+                                                                                e
+                                                                                    .target
+                                                                                    .value,
+                                                                            )
+                                                                        }
+                                                                        className='rounded border border-border bg-background px-2 py-1 text-xs'
+                                                                    />
+                                                                ) : (
+                                                                    row.effectiveAt.slice(
+                                                                        0,
+                                                                        10,
+                                                                    )
+                                                                )}
+                                                            </td>
+                                                            <td className='px-2 py-2 align-top text-muted-foreground'>
+                                                                {isEditing ? (
+                                                                    <input
+                                                                        type='text'
+                                                                        value={
+                                                                            movementEditingNote
+                                                                        }
+                                                                        onChange={(
+                                                                            e,
+                                                                        ) =>
+                                                                            setMovementEditingNote(
+                                                                                e
+                                                                                    .target
+                                                                                    .value,
+                                                                            )
+                                                                        }
+                                                                        placeholder='Note (optionnel)'
+                                                                        className='w-full rounded border border-border bg-background px-2 py-1 text-xs'
+                                                                    />
+                                                                ) : (
+                                                                    row.note ??
+                                                                    '—'
+                                                                )}
+                                                            </td>
+                                                            <td className='whitespace-nowrap px-2 py-2 text-right align-top'>
+                                                                {isEditing ? (
+                                                                    <>
+                                                                        <button
+                                                                            type='button'
+                                                                            onClick={() =>
+                                                                                void saveMovementRow()
+                                                                            }
+                                                                            disabled={
+                                                                                movementHistoryBusy
+                                                                            }
+                                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                        >
+                                                                            Enregistrer
+                                                                        </button>
+                                                                        <button
+                                                                            type='button'
+                                                                            onClick={
+                                                                                cancelEditMovementRow
+                                                                            }
+                                                                            disabled={
+                                                                                movementHistoryBusy
+                                                                            }
+                                                                            className='ml-2 cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                        >
+                                                                            Annuler
+                                                                        </button>
+                                                                    </>
+                                                                ) : (
+                                                                    <button
+                                                                        type='button'
+                                                                        onClick={() =>
+                                                                            beginEditMovementRow(
+                                                                                row,
+                                                                            )
+                                                                        }
+                                                                        disabled={
+                                                                            movementHistoryBusy
+                                                                        }
+                                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                    >
+                                                                        Modifier
+                                                                    </button>
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                },
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                    </>
+                )}
+            </div>
+
+            {/* ============================================================
                 Trades en attentes
                 ============================================================ */}
             <div className='max-w-4xl space-y-3'>
@@ -3404,6 +4009,208 @@ export default function AdminPage() {
                         ? 'Transfert...'
                         : 'Transférer le choix'}
                 </button>
+            </div>
+
+            {/* ============================================================
+                Audit des effectifs invalides
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Audit des effectifs invalides
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Scanne l'historique de la saison et affiche chaque
+                    période pendant laquelle une équipe n'avait pas la
+                    structure requise : 12F/6D/1G actifs, 4F/2D/1G sur
+                    le banc, 3 prospects. Les dates sont celles de la
+                    journée où le changement est devenu effectif.
+                </p>
+
+                {shapeViolationsError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {shapeViolationsError}
+                    </p>
+                )}
+
+                <button
+                    type='button'
+                    onClick={() => void handleCheckShapeViolations()}
+                    disabled={shapeViolationsLoading}
+                    className={primaryButtonClass}
+                >
+                    {shapeViolationsLoading
+                        ? 'Vérification...'
+                        : 'Lancer la vérification'}
+                </button>
+
+                {shapeViolationsLoaded &&
+                    !shapeViolationsLoading &&
+                    shapeViolations.length === 0 && (
+                        <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                            Aucun effectif invalide trouvé dans
+                            l'historique de la saison.
+                        </p>
+                    )}
+
+                {shapeViolations.map((v, idx) => {
+                    const startDate = v.startEffectiveAt.slice(0, 10);
+                    const endDate = v.endEffectiveAt
+                        ? v.endEffectiveAt.slice(0, 10)
+                        : null;
+                    const isOngoing = endDate === null;
+
+                    const activeFWrong =
+                        v.activeForwards !== v.expectedActiveForwards;
+                    const activeDWrong =
+                        v.activeDefensemen !==
+                        v.expectedActiveDefensemen;
+                    const activeGWrong =
+                        v.activeGoalies !== v.expectedActiveGoalies;
+                    const benchFWrong =
+                        v.benchForwards !== v.expectedBenchForwards;
+                    const benchDWrong =
+                        v.benchDefensemen !== v.expectedBenchDefensemen;
+                    const benchGWrong =
+                        v.benchGoalies !== v.expectedBenchGoalies;
+                    const prospectsWrong =
+                        v.prospects !== v.expectedProspects;
+
+                    return (
+                        <div
+                            key={`${v.fantasyTeamId}-${v.startEffectiveAt}-${idx}`}
+                            className='rounded-lg border border-border bg-card p-3'
+                        >
+                            <div className='flex flex-wrap items-baseline justify-between gap-2'>
+                                <span className='text-sm font-semibold text-foreground'>
+                                    {v.fantasyTeamName}
+                                </span>
+                                <span className='text-xs text-muted-foreground'>
+                                    {startDate}
+                                    {endDate
+                                        ? ` → ${endDate}`
+                                        : ' → en cours'}
+                                </span>
+                            </div>
+
+                            <div className='mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs tabular-nums sm:grid-cols-4'>
+                                <span className='text-muted-foreground'>
+                                    Actifs
+                                </span>
+                                <span
+                                    className={
+                                        activeFWrong ||
+                                            activeDWrong ||
+                                            activeGWrong
+                                            ? 'text-destructive font-semibold'
+                                            : 'text-foreground'
+                                    }
+                                >
+                                    {v.activeForwards}F /{' '}
+                                    {v.activeDefensemen}D /{' '}
+                                    {v.activeGoalies}G
+                                </span>
+                                <span className='text-muted-foreground'>
+                                    Attendu
+                                </span>
+                                <span className='text-foreground'>
+                                    {v.expectedActiveForwards}F /{' '}
+                                    {v.expectedActiveDefensemen}D /{' '}
+                                    {v.expectedActiveGoalies}G
+                                </span>
+
+                                <span className='text-muted-foreground'>
+                                    Banc
+                                </span>
+                                <span
+                                    className={
+                                        benchFWrong ||
+                                            benchDWrong ||
+                                            benchGWrong
+                                            ? 'text-destructive font-semibold'
+                                            : 'text-foreground'
+                                    }
+                                >
+                                    {v.benchForwards}F /{' '}
+                                    {v.benchDefensemen}D /{' '}
+                                    {v.benchGoalies}G
+                                </span>
+                                <span className='text-muted-foreground'>
+                                    Attendu
+                                </span>
+                                <span className='text-foreground'>
+                                    {v.expectedBenchForwards}F /{' '}
+                                    {v.expectedBenchDefensemen}D /{' '}
+                                    {v.expectedBenchGoalies}G
+                                </span>
+
+                                <span className='text-muted-foreground'>
+                                    Prospects
+                                </span>
+                                <span
+                                    className={
+                                        prospectsWrong
+                                            ? 'text-destructive font-semibold'
+                                            : 'text-foreground'
+                                    }
+                                >
+                                    {v.prospects}
+                                </span>
+                                <span className='text-muted-foreground'>
+                                    Attendu
+                                </span>
+                                <span className='text-foreground'>
+                                    {v.expectedProspects}
+                                </span>
+                            </div>
+
+                            {isOngoing && (
+                                <p className='mt-2 text-xs font-semibold text-destructive'>
+                                    Cette structure est encore invalide
+                                    aujourd'hui.
+                                </p>
+                            )}
+
+                            {v.players.length > 0 && (
+                                <details className='mt-2'>
+                                    <summary className='cursor-pointer text-xs font-medium text-[#7DD3FC] hover:text-[#00E5FF]'>
+                                        Voir les {v.players.length} joueur(s)
+                                        au début de la période
+                                    </summary>
+                                    <ul className='mt-1 space-y-0.5 text-xs'>
+                                        {v.players.map((p) => (
+                                            <li
+                                                key={p.playerId}
+                                                className='flex items-center gap-2 text-foreground'
+                                            >
+                                                <span
+                                                    className={
+                                                        p.rosterStatus ===
+                                                            'Active'
+                                                            ? 'text-[#00F0FF]'
+                                                            : p.rosterStatus ===
+                                                                'Bench'
+                                                                ? 'text-amber-400'
+                                                                : 'text-muted-foreground'
+                                                    }
+                                                >
+                                                    [{p.rosterStatus}]
+                                                </span>
+                                                <span>
+                                                    {p.firstName}{' '}
+                                                    {p.lastName}
+                                                </span>
+                                                <span className='text-muted-foreground'>
+                                                    ({p.positionGroup})
+                                                </span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </details>
+                            )}
+                        </div>
+                    );
+                })}
             </div>
 
             {/* ============================================================

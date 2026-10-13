@@ -12,8 +12,8 @@ namespace NhlFantasyLeague.api.Controllers
     ///
     /// Mutations (assign / move / release / release-all / update / swap /
     /// set-status / backfill / history edit / history delete) are
-    /// commissioner-only. Reads (team roster, search, status history) are
-    /// available to any authenticated user.
+    /// commissioner-only. Reads (team roster, search, status history,
+    /// shape audit) are available to any authenticated user.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
@@ -221,6 +221,31 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
+        /// Returns every continuous window during which some fantasy
+        /// team's roster shape was not
+        /// 12F/6D/1G active + 4F/2D/1G bench + 3 prospects.
+        ///
+        /// Each window carries its start date, its end date (or null
+        /// when still wrong), the counts that broke it, and the
+        /// roster that produced them. Same day-precision UTC
+        /// instants as every other RosterStatusHistory row.
+        ///
+        /// Optional ?seasonId= targets a specific season; the
+        /// current season is used when omitted.
+        /// </summary>
+        [HttpGet("shape-violations")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
+        public async Task<IActionResult> GetShapeViolations(
+            [FromQuery] int? seasonId,
+            CancellationToken ct = default)
+        {
+            var violations = await _rosterAdminService
+                .FindRosterShapeViolationsAsync(seasonId, ct);
+
+            return Ok(violations);
+        }
+
+        /// <summary>
         /// Atomically swaps the RosterStatus of two players on the same
         /// fantasy team at the same effective instant. Enforces same
         /// position group and the exact league shape
@@ -277,6 +302,28 @@ namespace NhlFantasyLeague.api.Controllers
         {
             var history = await _rosterAdminService
                 .GetRosterStatusHistoryAsync(playerId, seasonId);
+
+            return Ok(history);
+        }
+
+        /// <summary>
+        /// Returns the FULL movement history of one player across
+        /// every season that has history rows, newest first. Each
+        /// row carries the season name so a cross-season view can
+        /// group or label it.
+        ///
+        /// Used by the admin page's "Historique des mouvements d'un
+        /// joueur" section. Commissioner-only.
+        /// </summary>
+        /// <param name="playerId">Player id (Player.Id).</param>
+        [HttpGet("status-history/{playerId}/all")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
+        public async Task<IActionResult> GetPlayerFullStatusHistory(
+            int playerId,
+            CancellationToken ct = default)
+        {
+            var history = await _rosterAdminService
+                .GetPlayerFullStatusHistoryAsync(playerId, ct);
 
             return Ok(history);
         }
