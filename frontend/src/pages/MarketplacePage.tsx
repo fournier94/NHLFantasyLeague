@@ -17,6 +17,7 @@ import {
     createTradeOffer,
     rejectTradeOfferResponse,
     getLeagueTeams,
+    getTeamDraftPicks,
     getTeamRoster,
     listReceivedResponses,
     listSentResponses,
@@ -25,6 +26,7 @@ import {
     respondToTradeOffer,
     updateTradeOffer,
     type CreateTradeOfferSlotRequest,
+    type DraftPick,
     type FantasyTeam,
     type PlayerContractLine,
     type RespondToTradeOfferPick,
@@ -44,6 +46,12 @@ import {
     type PendingPickContext,
     type TradeCapContext,
 } from '@/lib/marketplacePopupRestoration';
+import {
+    getMarketplaceSection,
+    setMarketplaceSection,
+} from '@/lib/marketplaceSectionState';
+import * as DraftPicks from '@/lib/marketplacePicksState';
+import { TradePicksSlot } from '@/components/marketplace/TradePicksSlot';
 import {
     getDirectOfferDraft,
     resetDirectOfferSlotsAndNote,
@@ -715,8 +723,15 @@ const TEAM_NAME_BUTTON_STYLE: React.CSSProperties = {
 export default function MarketplacePage() {
     const { user } = useAuth();
 
-    // Default view: browse (Regarder les offres).
-    const [view, setView] = useState<View>('browse');
+    // Restore the last section the user was on. Only read on the very
+    // first mount: useState's initializer runs once, and the
+    // browseSubView useState further down reads the same store the
+    // same way. Every change is persisted back by the sync effect
+    // below, so a remount (after clicking a player name and coming
+    // back via Fermer or browser Back) lands on the same tab.
+    const [view, setView] = useState<View>(
+        () => getMarketplaceSection().view,
+    );
     const [browseRefreshTick, setBrowseRefreshTick] = useState(0);
 
     /**
@@ -1174,7 +1189,15 @@ export default function MarketplacePage() {
   */
     const [browseSubView, setBrowseSubView] = useState<
         'view' | 'mine' | 'publish'
-    >('view');
+    >(() => getMarketplaceSection().browseSubView);
+
+    // Persist the current section on every change so a remount
+    // restores it. Covers every transition: browse sub-tabs, the
+    // Créer tab, the Reçues / Envoyées tabs, and the post-publish
+    // jump back to "Vos offres actives".
+    useEffect(() => {
+        setMarketplaceSection({ view, browseSubView });
+    }, [view, browseSubView]);
 
     /**
      * Offer currently being edited, or null when the user is
@@ -1867,6 +1890,72 @@ function AddOfferPanel({
         token: number;
     } | null>(null);
 
+    // -----------------------------------------------------------------
+    // Draft picks ("Ajouter des choix de repêchage")
+    //
+    // A public offer only carries the creator's picks. The pick list
+    // is stored in the module-level picks store under
+    // PUBLISH_CREATOR_KEY so it survives a PlayerPage round-trip.
+    //
+    // When editing an existing offer (initialOffer is set), the
+    // store is pre-loaded from the offer's picks on mount, so the
+    // user starts from what the offer currently carries rather than
+    // a stale list from a previous publish.
+    // -----------------------------------------------------------------
+
+    const [availablePicks, setAvailablePicks] = useState<DraftPick[]>(
+        [],
+    );
+
+    const publishPickIds = useSyncExternalStore(
+        DraftPicks.subscribeToPicks,
+        () => DraftPicks.getPicks(DraftPicks.PUBLISH_CREATOR_KEY),
+    );
+
+    const selectedPicks = useMemo(
+        () =>
+            publishPickIds
+                .map((id) => availablePicks.find((p) => p.id === id))
+                .filter((p): p is DraftPick => p != null),
+        [publishPickIds, availablePicks],
+    );
+
+    // Fetch the creator's picks once, when the team is known.
+    useEffect(() => {
+        if (teamId == null) {
+            setAvailablePicks([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        getTeamDraftPicks(teamId)
+            .then((data) => {
+                if (!cancelled) setAvailablePicks(data);
+            })
+            .catch(() => {
+                if (!cancelled) setAvailablePicks([]);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [teamId]);
+
+    // Seed the store from initialOffer (edit mode) or reset it
+    // (fresh publish). Runs only when initialOffer changes, so a
+    // mid-edit re-render does not clobber the user's selections.
+    useEffect(() => {
+        if (initialOffer) {
+            DraftPicks.setPicks(
+                DraftPicks.PUBLISH_CREATOR_KEY,
+                initialOffer.picks.map((p) => p.id),
+            );
+        } else {
+            DraftPicks.clearPublishPicks();
+        }
+    }, [initialOffer]);
+
     /**
      * The user's roster, loaded once so the preview popup can resolve
      * each slot's offered player (name, position, contracts).
@@ -1899,6 +1988,7 @@ function AddOfferPanel({
             status: 'Active',
             isMine: true,
             isNew: false,
+            picks: selectedPicks,
             slots: slots
                 .filter(slotIsComplete)
                 .map((s, i) => {
@@ -1958,7 +2048,7 @@ function AddOfferPanel({
                     };
                 }),
         }),
-        [slots, note, entries, teamId, teamName],
+        [slots, note, entries, teamId, teamName, selectedPicks],
     );
 
     useEffect(() => {
@@ -2115,6 +2205,7 @@ function AddOfferPanel({
         setSlots([{ ...EMPTY_SLOT }]);
         setNote('');
         setShowNote(false);
+        DraftPicks.clearPublishPicks();
         setSubmitError(null);
         setSubmitSuccess(null);
     }
@@ -2217,6 +2308,7 @@ function AddOfferPanel({
                     .filter(slotIsComplete)
                     .map(slotToRequest),
                 note: note.trim() === '' ? null : note.trim(),
+                draftPickIds: publishPickIds.slice(),
             };
 
             if (initialOffer) {
@@ -2243,6 +2335,12 @@ function AddOfferPanel({
             if (!initialOffer) {
                 handleResetAll();
             }
+
+            // Clear the picks store unconditionally. In create
+            // mode handleResetAll already did it (idempotent), but
+            // in edit mode we need to clear it here so a subsequent
+            // publish starts from a clean list.
+            DraftPicks.clearPublishPicks();
 
             onPublished();
         } catch (err) {
@@ -2363,6 +2461,42 @@ function AddOfferPanel({
                     }
                 />
             ))}
+
+            {/* Draft picks section. A public offer only carries the
+                creator's picks, so this slot has a single column. The
+                section is always visible: unlike an offer card, a
+                published offer is empty by default and picks are an
+                expected part of the announcement. */}
+            <div
+                className='rounded-lg border px-3 py-3'
+                style={{
+                    borderColor: FRAME_BORDER,
+                    backgroundColor: FRAME_BG,
+                    boxShadow: FRAME_GLOW,
+                }}
+            >
+                <p className='mb-2 text-center text-xs font-semibold uppercase tracking-wider text-[#00E5FF]'>
+                    Choix de repêchage
+                </p>
+
+                <TradePicksSlot
+                    selectedPicks={selectedPicks}
+                    availablePicks={availablePicks}
+                    editable
+                    onAddPick={(id) =>
+                        DraftPicks.addPick(
+                            DraftPicks.PUBLISH_CREATOR_KEY,
+                            id,
+                        )
+                    }
+                    onRemovePick={(id) =>
+                        DraftPicks.removePick(
+                            DraftPicks.PUBLISH_CREATOR_KEY,
+                            id,
+                        )
+                    }
+                />
+            </div>
 
             <div
                 className='sticky bottom-0 z-30 mt-3 flex w-full flex-col gap-2'
@@ -3472,6 +3606,9 @@ function responseToOfferShape(
         status: response.status,
         isMine: false,
         isNew: false,
+        picks: response.creatorPicks ?? [],
+        requestedPicks: response.requestedPicks ?? [],
+        respondingPicks: response.respondingPicks ?? [],
         slots: response.slots.map((s) => ({
             slotIndex: s.slotIndex,
             positionGroup: s.positionGroup,
@@ -4767,6 +4904,139 @@ function OfferCard({
         () => getPicksForOffer(offer.id),
     );
 
+    // -----------------------------------------------------------------
+    // Draft picks ("Ajouter des choix de repêchage")
+    //
+    // Three sources feed the picks slot:
+    //
+    //   - offer.picks            : creator-side picks, server data.
+    //                              Read-only on every card.
+    //
+    //   - offer.respondingPicks  : responder-side picks, server data.
+    //                              Only present on response cards
+    //                              (Reçues / Envoyées). Read-only.
+    //
+    //   - DraftPicks store       : responder-side picks the connected
+    //                              user is currently building. Only
+    //                              used when the user can respond.
+    //
+    // Responder's draft picks IDs come from the store; the full
+    // DraftPick objects come from a getTeamDraftPicks call against
+    // the responding team, fetched once when the card mounts.
+    // -----------------------------------------------------------------
+
+    const responderDraftPickIds = useSyncExternalStore(
+        DraftPicks.subscribeToPicks,
+        () =>
+            DraftPicks.getPicks(
+                DraftPicks.offerPicksKey(offer.id, 'responder'),
+            ),
+    );
+
+    /**
+     * Ids of the extra picks the connected user is asking the offer's
+     * creator to give, on top of whatever the offer already carries.
+     * Stored under the offer:requested key so it survives a PlayerPage
+     * round-trip. Only used in "Voir les offres" (swapSides = true).
+     */
+    const requestedDraftPickIds = useSyncExternalStore(
+        DraftPicks.subscribeToPicks,
+        () =>
+            DraftPicks.getPicks(
+                DraftPicks.offerPicksKey(offer.id, 'requested'),
+            ),
+    );
+
+    const [responderAvailablePicks, setResponderAvailablePicks] =
+        useState<DraftPick[]>([]);
+
+    useEffect(() => {
+        if (rightTeamId == null) {
+            setResponderAvailablePicks([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        getTeamDraftPicks(rightTeamId)
+            .then((data) => {
+                if (!cancelled) setResponderAvailablePicks(data);
+            })
+            .catch(() => {
+                if (!cancelled) setResponderAvailablePicks([]);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [rightTeamId]);
+
+    /**
+     * Picks owned by the offer's creator, used by the "Ajouter un
+     * choix" dropdown on the creator's side of the picks slot in
+     * "Voir les offres". The dropdown needs the full list of the
+     * creator's picks so the responder can request any of them; the
+     * offer's own picks (offer.picks) are already filtered out by
+     * TradePicksSlot because they are in the selected list.
+     */
+    const [creatorAvailablePicks, setCreatorAvailablePicks] =
+        useState<DraftPick[]>([]);
+
+    useEffect(() => {
+        if (!swapSides) {
+            setCreatorAvailablePicks([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        getTeamDraftPicks(offer.createdByFantasyTeamId)
+            .then((data) => {
+                if (!cancelled) setCreatorAvailablePicks(data);
+            })
+            .catch(() => {
+                if (!cancelled) setCreatorAvailablePicks([]);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [swapSides, offer.createdByFantasyTeamId]);
+
+    const creatorPicks = offer.picks;
+
+    const responderPicks = useMemo(() => {
+        if (offer.respondingPicks != null) {
+            return offer.respondingPicks;
+        }
+
+        return responderDraftPickIds
+            .map((id) =>
+                responderAvailablePicks.find((p) => p.id === id),
+            )
+            .filter((p): p is DraftPick => p != null);
+    }, [
+        offer.respondingPicks,
+        responderDraftPickIds,
+        responderAvailablePicks,
+    ]);
+
+    const responderPicksEditable =
+        canRespond && offer.respondingPicks == null;
+
+    const hasAnyPicks =
+        offer.picks.length > 0 ||
+        (offer.respondingPicks?.length ?? 0) > 0 ||
+        responderDraftPickIds.length > 0;
+
+    /**
+     * Whether the picks slot is rendered at all. The slot is always
+     * expanded (no collapse toggle) and its two columns are always
+     * present. It is only omitted entirely when there is nothing to
+     * show AND the user cannot add picks.
+     */
+    const showPicksSlot = canRespond || hasAnyPicks;
+
     /**
      * Matching user players for each slot: position group must match
      * and every demand criterion must be satisfied. Already-picked
@@ -5077,6 +5347,7 @@ function OfferCard({
      */
     function handleResetPicks() {
         clearPicksForOffer(offer.id);
+        DraftPicks.clearOfferPicks(offer.id);
         setRespondSuccess(null);
         setRespondError(null);
     }
@@ -5126,6 +5397,9 @@ function OfferCard({
         try {
             const result = await respondToTradeOffer(offer.id, {
                 picks: picksArray,
+                draftPickIds: responderDraftPickIds.slice(),
+                requestedDraftPickIds:
+                    requestedDraftPickIds.slice(),
             });
 
             if (result.success) {
@@ -5137,11 +5411,18 @@ function OfferCard({
                 // he still gets confirmation that the offer went
                 // through.
                 //
-                // Also drop the store entry: without this, a
-                // subsequent mount of the same offer (should it
-                // ever come back into view) would restore the
-                // picks we just submitted.
+                // Two stores to clear:
+                //   - marketplaceTradeState (per-slot player
+                //     picks): clearPicksForOffer.
+                //   - marketplacePicksState (draft picks, all
+                //     three sides: responder / requested /
+                //     creator): clearOfferPicks.
+                //
+                // Without these, a subsequent mount of the same
+                // offer (should it ever come back into view)
+                // would restore the picks we just submitted.
                 clearPicksForOffer(offer.id);
+                DraftPicks.clearOfferPicks(offer.id);
             } else {
                 setRespondError(result.message);
             }
@@ -5793,6 +6074,191 @@ function OfferCard({
                         })}
                     </div>
                 </div>
+
+                {/* Draft picks slot. Rendered between the player
+                    slots and the note. Always expanded, two columns
+                    (one per side).
+
+                    LEFT column: the responder's side on a browse
+                    offer (swapSides = true), the creator's side on a
+                    response card or own offer (swapSides = false).
+
+                    RIGHT column: the mirror.
+
+                    On a browse offer (Voir les offres), both sides
+                    are editable:
+                      - left  = the responder's own picks he is
+                                putting in the answer,
+                      - right = the offer creator's picks, split
+                                between the offer's own picks (locked,
+                                already in the trade) and the picks
+                                the responder is asking the creator
+                                to add (removable).
+
+                    On a response card or an own offer, both sides
+                    are read-only server data. The right column on a
+                    response card shows the responder's picks; the
+                    left column shows the creator's picks including
+                    the requested additions. */}
+                {showPicksSlot && (
+                    <div
+                        className='grid grid-cols-[1fr_auto_1fr] items-stretch px-1 py-2'
+                        style={{
+                            borderTop:
+                                '1px dashed rgba(0, 168, 255, 0.15)',
+                        }}
+                    >
+                        {/* ---- LEFT column ---- */}
+                        {swapSides ? (
+                            // Browse offer: the responder's own picks,
+                            // editable.
+                            <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                                <TradePicksSlot
+                                    selectedPicks={responderPicks}
+                                    availablePicks={
+                                        responderAvailablePicks
+                                    }
+                                    editable={responderPicksEditable}
+                                    onAddPick={(id) =>
+                                        DraftPicks.addPick(
+                                            DraftPicks.offerPicksKey(
+                                                offer.id,
+                                                'responder',
+                                            ),
+                                            id,
+                                        )
+                                    }
+                                    onRemovePick={(id) =>
+                                        DraftPicks.removePick(
+                                            DraftPicks.offerPicksKey(
+                                                offer.id,
+                                                'responder',
+                                            ),
+                                            id,
+                                        )
+                                    }
+                                />
+                            </div>
+                        ) : (
+                            // Response card or own offer: the creator's
+                            // side, read-only. Includes the offer's
+                            // own picks plus any extra picks the
+                            // responder requested (only present on
+                            // response cards).
+                            <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                                <TradePicksSlot
+                                    selectedPicks={[
+                                        ...creatorPicks,
+                                        ...(offer.requestedPicks ?? []),
+                                    ]}
+                                    availablePicks={[]}
+                                    editable={false}
+                                    lockedPickIds={[
+                                        ...creatorPicks.map(
+                                            (p) => p.id,
+                                        ),
+                                        ...(offer.requestedPicks ?? [])
+                                            .map((p) => p.id),
+                                    ]}
+                                    onAddPick={() => {
+                                        // Not reachable: editable is
+                                        // false so TradePicksSlot does
+                                        // not render the button.
+                                    }}
+                                    onRemovePick={() => {
+                                        // Not reachable: editable is
+                                        // false so no × is drawn.
+                                    }}
+                                />
+                            </div>
+                        )}
+
+                        <div
+                            aria-hidden='true'
+                            className={SLOT_ARROW_COL}
+                        />
+
+                        {/* ---- RIGHT column ---- */}
+                        {swapSides ? (
+                            // Browse offer: the creator's side. The
+                            // offer's own picks are locked (already in
+                            // the trade, the responder cannot remove
+                            // them). The responder can add additional
+                            // requested picks, stored under the
+                            // offer:requested key.
+                            <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                                <TradePicksSlot
+                                    selectedPicks={[
+                                        ...creatorPicks,
+                                        ...requestedDraftPickIds
+                                            .map((id) =>
+                                                creatorAvailablePicks.find(
+                                                    (p) => p.id === id,
+                                                ),
+                                            )
+                                            .filter(
+                                                (
+                                                    p,
+                                                ): p is DraftPick =>
+                                                    p != null,
+                                            ),
+                                    ]}
+                                    availablePicks={
+                                        creatorAvailablePicks
+                                    }
+                                    editable={canRespond}
+                                    lockedPickIds={creatorPicks.map(
+                                        (p) => p.id,
+                                    )}
+                                    onAddPick={(id) =>
+                                        DraftPicks.addPick(
+                                            DraftPicks.offerPicksKey(
+                                                offer.id,
+                                                'requested',
+                                            ),
+                                            id,
+                                        )
+                                    }
+                                    onRemovePick={(id) =>
+                                        DraftPicks.removePick(
+                                            DraftPicks.offerPicksKey(
+                                                offer.id,
+                                                'requested',
+                                            ),
+                                            id,
+                                        )
+                                    }
+                                />
+                            </div>
+                        ) : (
+                            // Response card or own offer: the
+                            // responder's side, read-only. On own
+                            // offers and previews this is typically
+                            // empty; on response cards it is the
+                            // responder's picks from the server.
+                            <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                                <TradePicksSlot
+                                    selectedPicks={
+                                        offer.respondingPicks ?? []
+                                    }
+                                    availablePicks={[]}
+                                    editable={false}
+                                    lockedPickIds={(
+                                        offer.respondingPicks ?? []
+                                    ).map((p) => p.id)}
+                                    onAddPick={() => {
+                                        // Not reachable: editable is
+                                        // false.
+                                    }}
+                                    onRemovePick={() => {
+                                        // Not reachable: editable is
+                                        // false.
+                                    }}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {offer.note && (
                     <p className='rounded-md border border-[#00A8FF]/25 bg-[#00A8FF]/5 px-2 py-1.5 text-sm italic text-[#FFC72C]'>
@@ -7447,6 +7913,111 @@ function DirectOfferCard({
         return map;
     }, [targetRoster]);
 
+    // -----------------------------------------------------------------
+    // Draft picks ("Ajouter des choix de repêchage")
+    //
+    // The Créer tab has two sides, so it has two pick lists: one on
+    // the connected user's team (offering) and one on the target
+    // team. Each list is stored under its own key in the module-level
+    // picks store, which lets it survive a PlayerPage round-trip.
+    //
+    // Selected pick ids come from the store; the full DraftPick
+    // objects come from a getTeamDraftPicks call against each team,
+    // fetched once when the corresponding team is known.
+    // -----------------------------------------------------------------
+
+    const [connectedAvailablePicks, setConnectedAvailablePicks] =
+        useState<DraftPick[]>([]);
+
+    const [targetAvailablePicks, setTargetAvailablePicks] =
+        useState<DraftPick[]>([]);
+
+    const connectedPickIds = useSyncExternalStore(
+        DraftPicks.subscribeToPicks,
+        () => DraftPicks.getPicks(DraftPicks.DIRECT_OFFERING_KEY),
+    );
+
+    const targetPickIds = useSyncExternalStore(
+        DraftPicks.subscribeToPicks,
+        () => DraftPicks.getPicks(DraftPicks.DIRECT_TARGET_KEY),
+    );
+
+    // Fetch the connected team's picks once.
+    useEffect(() => {
+        let cancelled = false;
+
+        getTeamDraftPicks(connectedTeamId)
+            .then((data) => {
+                if (!cancelled) setConnectedAvailablePicks(data);
+            })
+            .catch(() => {
+                if (!cancelled) setConnectedAvailablePicks([]);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [connectedTeamId]);
+
+    // Fetch the target team's picks whenever the target changes.
+    useEffect(() => {
+        if (targetTeamId == null) {
+            setTargetAvailablePicks([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        getTeamDraftPicks(targetTeamId)
+            .then((data) => {
+                if (!cancelled) setTargetAvailablePicks(data);
+            })
+            .catch(() => {
+                if (!cancelled) setTargetAvailablePicks([]);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [targetTeamId]);
+
+    const connectedSelectedPicks = useMemo(
+        () =>
+            connectedPickIds
+                .map((id) =>
+                    connectedAvailablePicks.find((p) => p.id === id),
+                )
+                .filter((p): p is DraftPick => p != null),
+        [connectedPickIds, connectedAvailablePicks],
+    );
+
+    const targetSelectedPicks = useMemo(
+        () =>
+            targetPickIds
+                .map((id) =>
+                    targetAvailablePicks.find((p) => p.id === id),
+                )
+                .filter((p): p is DraftPick => p != null),
+        [targetPickIds, targetAvailablePicks],
+    );
+
+    // Clear the target-side picks when the target team changes.
+    //
+    // Track the previous team id in a ref so the effect does NOT
+    // fire on the initial mount: a remount after a PlayerPage
+    // round-trip must preserve the restored target picks, which
+    // belong to the still-selected team.
+    const prevTargetTeamIdRef = useRef<number | null>(targetTeamId);
+
+    useEffect(() => {
+        if (prevTargetTeamIdRef.current === targetTeamId) {
+            return;
+        }
+
+        prevTargetTeamIdRef.current = targetTeamId;
+        DraftPicks.clearPicks(DraftPicks.DIRECT_TARGET_KEY);
+    }, [targetTeamId]);
+
     const seasonSalaryCap =
         connectedRoster?.futureCapBySeason[0]?.salaryCap ?? 0;
 
@@ -7614,8 +8185,9 @@ function DirectOfferCard({
     function handleReset() {
         // Keep the selected target team: the user is starting a
         // new offer to the SAME manager he picked before. Only
-        // the players and the message are cleared.
+        // the players, the picks and the message are cleared.
         resetDirectOfferSlotsAndNote();
+        DraftPicks.clearDirectPicks();
         setSubmitSuccess(null);
         setSubmitError(null);
     }
@@ -7657,16 +8229,19 @@ function DirectOfferCard({
                 targetTeamId,
                 slots: requestSlots,
                 note: note.trim() === '' ? null : note.trim(),
+                connectedDraftPickIds: connectedPickIds.slice(),
+                targetDraftPickIds: targetPickIds.slice(),
             });
 
             if (result.success) {
                 setSubmitSuccess(result.message);
 
-                // Reset the slots and the note. The selected target
-                // team is deliberately kept so the user can fire
-                // off another offer to the same manager without
-                // re-selecting him.
+                // Reset the slots, the picks and the note. The
+                // selected target team is deliberately kept so the
+                // user can fire off another offer to the same
+                // manager without re-selecting him.
                 resetDirectOfferSlotsAndNote();
+                DraftPicks.clearDirectPicks();
             } else {
                 setSubmitError(result.message);
             }
@@ -8173,10 +8748,75 @@ function DirectOfferCard({
                 <button
                     type='button'
                     onClick={addSlot}
-                    className='w-full cursor-pointer rounded-lg bg-emerald-500 px-3 py-1 text-sm font-bold uppercase tracking-wide text-emerald-950 transition-colors hover:bg-emerald-400'
+                    className='w-full cursor-pointer rounded-md border border-emerald-500 bg-transparent px-3 py-1 text-[0.7rem] font-bold uppercase tracking-wide text-emerald-500 transition-colors hover:bg-emerald-500/10 md:text-xs'
                 >
                     Ajouter un joueur
                 </button>
+
+                {/* Draft picks slot. Two columns: the connected user's
+                    picks on the left, the target team's picks on the
+                    right. Both sides are always editable, so both
+                    "Ajouter un choix" buttons are visible from the
+                    start. */}
+                <div
+                    className='grid grid-cols-[1fr_auto_1fr] items-stretch px-1 py-2'
+                    style={{
+                        borderTop:
+                            '1px dashed rgba(0, 168, 255, 0.15)',
+                    }}
+                >
+                    <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                        <TradePicksSlot
+                            selectedPicks={connectedSelectedPicks}
+                            availablePicks={
+                                connectedAvailablePicks
+                            }
+                            editable
+                            onAddPick={(id) =>
+                                DraftPicks.addPick(
+                                    DraftPicks.DIRECT_OFFERING_KEY,
+                                    id,
+                                )
+                            }
+                            onRemovePick={(id) =>
+                                DraftPicks.removePick(
+                                    DraftPicks.DIRECT_OFFERING_KEY,
+                                    id,
+                                )
+                            }
+                        />
+                    </div>
+
+                    <div
+                        aria-hidden='true'
+                        className={SLOT_ARROW_COL}
+                    />
+
+                    <div className='flex min-w-0 flex-col items-center justify-start text-center'>
+                        <TradePicksSlot
+                            selectedPicks={targetSelectedPicks}
+                            availablePicks={
+                                targetAvailablePicks
+                            }
+                            editable={
+                                targetTeamId != null &&
+                                targetTeamName != null
+                            }
+                            onAddPick={(id) =>
+                                DraftPicks.addPick(
+                                    DraftPicks.DIRECT_TARGET_KEY,
+                                    id,
+                                )
+                            }
+                            onRemovePick={(id) =>
+                                DraftPicks.removePick(
+                                    DraftPicks.DIRECT_TARGET_KEY,
+                                    id,
+                                )
+                            }
+                        />
+                    </div>
+                </div>
 
                 {/* Message (same style as Publier une annonce) */}
                 <div>

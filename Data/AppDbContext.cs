@@ -85,6 +85,12 @@ namespace NhlFantasyLeague.api.Data
         public DbSet<TradeOfferSlot> TradeOfferSlots { get; set; }
 
         /// <summary>
+        /// Draft picks attached to a marketplace offer, on the
+        /// creator's offering side. Referenced, not transferred.
+        /// </summary>
+        public DbSet<TradeOfferPick> TradeOfferPicks { get; set; }
+
+        /// <summary>
         /// Per-user memory of which marketplace offers a user has
         /// already seen. One row per (UserId, TradeOfferId); only its
         /// existence matters (it drives the "Nouvelle offre" badge).
@@ -104,6 +110,22 @@ namespace NhlFantasyLeague.api.Data
         /// of the original offer.
         /// </summary>
         public DbSet<TradeOfferResponseSlot> TradeOfferResponseSlots { get; set; }
+
+        /// <summary>
+        /// Draft picks attached to a marketplace response, on the
+        /// responder's side. Referenced, not transferred.
+        /// </summary>
+        public DbSet<TradeOfferResponsePick> TradeOfferResponsePicks { get; set; }
+
+        /// <summary>
+        /// Draft picks the responder is REQUESTING from the offer
+        /// creator, attached to a marketplace response. Added to
+        /// whatever the offer already carries. Referenced, not
+        /// transferred.
+        /// </summary>
+        public DbSet<TradeOfferResponseRequestedPick>
+            TradeOfferResponseRequestedPicks
+        { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -648,6 +670,30 @@ namespace NhlFantasyLeague.api.Data
                 .IsUnique();
 
             // -----------------------------------------------------------------
+            // TradeOfferPick (Marketplace — creator's draft picks)
+            // -----------------------------------------------------------------
+
+            // Cascade from TradeOffer: deleting an offer drops its
+            // pick references too. Restrict on DraftPick: a pick
+            // referenced by any offer cannot be deleted.
+            modelBuilder.Entity<TradeOfferPick>()
+                .HasOne(p => p.TradeOffer)
+                .WithMany(o => o.Picks)
+                .HasForeignKey(p => p.TradeOfferId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferPick>()
+                .HasOne(p => p.DraftPick)
+                .WithMany()
+                .HasForeignKey(p => p.DraftPickId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // One pick per offer, no duplicates.
+            modelBuilder.Entity<TradeOfferPick>()
+                .HasIndex(p => new { p.TradeOfferId, p.DraftPickId })
+                .IsUnique();
+
+            // -----------------------------------------------------------------
             // TradeOfferView (per-user "already seen" marker)
             // -----------------------------------------------------------------
 
@@ -718,6 +764,58 @@ namespace NhlFantasyLeague.api.Data
             // One pick per slot per response.
             modelBuilder.Entity<TradeOfferResponseSlot>()
                 .HasIndex(s => new { s.TradeOfferResponseId, s.SlotIndex })
+                .IsUnique();
+
+            // -----------------------------------------------------------------
+            // TradeOfferResponsePick (Marketplace — responder's picks)
+            // -----------------------------------------------------------------
+
+            // Cascade from the response: deleting a response drops its
+            // pick references too. Restrict on DraftPick for the same
+            // reason as TradeOfferPick.
+            modelBuilder.Entity<TradeOfferResponsePick>()
+                .HasOne(p => p.TradeOfferResponse)
+                .WithMany(r => r.Picks)
+                .HasForeignKey(p => p.TradeOfferResponseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferResponsePick>()
+                .HasOne(p => p.DraftPick)
+                .WithMany()
+                .HasForeignKey(p => p.DraftPickId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // One pick per response, no duplicates.
+            modelBuilder.Entity<TradeOfferResponsePick>()
+                .HasIndex(p => new { p.TradeOfferResponseId, p.DraftPickId })
+                .IsUnique();
+
+            // -----------------------------------------------------------------
+            // TradeOfferResponseRequestedPick (Marketplace — requested picks)
+            // -----------------------------------------------------------------
+
+            // Cascade from the response: deleting a response drops its
+            // requested pick rows too. Restrict on DraftPick for the
+            // same reason as TradeOfferResponsePick.
+            modelBuilder.Entity<TradeOfferResponseRequestedPick>()
+                .HasOne(p => p.TradeOfferResponse)
+                .WithMany(r => r.RequestedPicks)
+                .HasForeignKey(p => p.TradeOfferResponseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferResponseRequestedPick>()
+                .HasOne(p => p.DraftPick)
+                .WithMany()
+                .HasForeignKey(p => p.DraftPickId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // One request per response, no duplicates.
+            modelBuilder.Entity<TradeOfferResponseRequestedPick>()
+                .HasIndex(p => new
+                {
+                    p.TradeOfferResponseId,
+                    p.DraftPickId
+                })
                 .IsUnique();
         }
     }

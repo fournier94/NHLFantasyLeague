@@ -178,6 +178,16 @@ function statusLabel(status: string): string {
 }
 
 /**
+ * Display label for one draft pick on an accepted trade card.
+ * Same format as the marketplace pick chips: "Year, Ronde N,
+ * OriginalOwnerTeamName". No pick number — the real order is set
+ * by the annual lottery and is unknown at trade time.
+ */
+function formatAcceptedTradePick(pick: DraftPick): string {
+    return `${pick.draftYear}, Ronde ${pick.round}, ${pick.originalOwnerFantasyTeamName}`;
+}
+
+/**
  * Formats a UTC ISO timestamp as a short, human-readable "time
  * since" string: "À l'instant", "Il y a 5 min", "Il y a 2 h",
  * "Il y a 3 j". Falls back to a full date when the value is more
@@ -3173,6 +3183,61 @@ export default function AdminPage() {
                                         </li>
                                     ))}
                                 </ul>
+
+                                {(trade.offerCreatorPicks.length > 0 ||
+                                    trade.respondingPicks.length > 0) && (
+                                        <div className='mt-2 space-y-1'>
+                                            {trade.offerCreatorPicks.length > 0 && (
+                                                <div className='rounded border border-[#00E5FF]/30 bg-[#00E5FF]/5 px-2 py-1'>
+                                                    <p className='text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC]'>
+                                                        Choix de{' '}
+                                                        {
+                                                            trade.offerCreatorTeamName
+                                                        }
+                                                    </p>
+                                                    <ul className='mt-0.5 space-y-0.5'>
+                                                        {trade.offerCreatorPicks.map(
+                                                            (pick) => (
+                                                                <li
+                                                                    key={pick.id}
+                                                                    className='text-xs text-foreground'
+                                                                >
+                                                                    {formatAcceptedTradePick(
+                                                                        pick,
+                                                                    )}
+                                                                </li>
+                                                            ),
+                                                        )}
+                                                    </ul>
+                                                </div>
+                                            )}
+
+                                            {trade.respondingPicks.length > 0 && (
+                                                <div className='rounded border border-[#00E5FF]/30 bg-[#00E5FF]/5 px-2 py-1'>
+                                                    <p className='text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC]'>
+                                                        Choix de{' '}
+                                                        {
+                                                            trade.respondingTeamName
+                                                        }
+                                                    </p>
+                                                    <ul className='mt-0.5 space-y-0.5'>
+                                                        {trade.respondingPicks.map(
+                                                            (pick) => (
+                                                                <li
+                                                                    key={pick.id}
+                                                                    className='text-xs text-foreground'
+                                                                >
+                                                                    {formatAcceptedTradePick(
+                                                                        pick,
+                                                                    )}
+                                                                </li>
+                                                            ),
+                                                        )}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                             </div>
                         ))}
                     </div>

@@ -1806,14 +1806,38 @@ export interface TradeOffer {
     isNew: boolean;
 
     /**
-     * Responding team, only set on shapes synthesized from a
-     * TradeOfferResponse. When present, the card header renders this
-     * team name in the right column instead of the connected user.
-     */
+  * Responding team, only set on shapes synthesized from a
+  * TradeOfferResponse. When present, the card header renders this
+  * team name in the right column instead of the connected user.
+  */
     respondingFantasyTeamId?: number;
     respondingFantasyTeamName?: string;
 
     slots: TradeOfferSlot[];
+
+    /**
+   * Draft picks the offer's creator is putting on the table.
+   * Referenced, not transferred. Empty when the offer carries no
+   * picks. Ordered by year, then round.
+   */
+    picks: DraftPick[];
+
+    /**
+     * Extra picks the responding team asked the creator to give,
+     * on top of `picks`. Only populated on shapes synthesized from
+     * a TradeOfferResponse (Reçues / Envoyées panels). Undefined on
+     * real TradeOffers, where the responder's request comes from
+     * the local draft store.
+     */
+    requestedPicks?: DraftPick[];
+
+    /**
+     * Draft picks the responding team is putting on the table. Only
+     * populated on shapes synthesized from a TradeOfferResponse
+     * (Reçues / Envoyées panels). Undefined on real TradeOffers, where
+     * the responder's picks come from the local draft store.
+     */
+    respondingPicks?: DraftPick[];
 }
 
 /** One slot of a create-trade-offer request. */
@@ -1842,6 +1866,12 @@ export interface CreateTradeOfferSlotRequest {
 export interface CreateTradeOfferRequest {
     slots: CreateTradeOfferSlotRequest[];
     note?: string | null;
+    /**
+     * Ids of the creator's draft picks being offered. Each id must
+     * reference a DraftPick owned by the creator's team. Referenced,
+     * not transferred. Replaces the offer's pick list on an update.
+     */
+    draftPickIds?: number[];
 }
 
 /**
@@ -1930,6 +1960,19 @@ export interface RespondToTradeOfferPick {
 
 export interface RespondToTradeOfferRequest {
     picks: RespondToTradeOfferPick[];
+    /**
+     * Ids of the responding team's draft picks being offered. Each
+     * id must reference a DraftPick owned by the responding team.
+     * Referenced, not transferred.
+     */
+    draftPickIds?: number[];
+    /**
+     * Ids of the offer CREATOR's draft picks the responding team
+     * is requesting on top of whatever the offer already carries.
+     * Each id must reference a DraftPick owned by the offer's
+     * creator. Referenced, not transferred.
+     */
+    requestedDraftPickIds?: number[];
 }
 
 /** One slot of a received response. Mirrors TradeOfferResponseSlotDto. */
@@ -2027,6 +2070,28 @@ export interface TradeOfferResponse {
     createdAt: string;
     status: string;
     slots: TradeOfferResponseSlot[];
+
+    /**
+    * Draft picks the original offer's creator is putting on the
+    * table. Rendered on the LEFT side of the response card.
+    * Referenced, not transferred.
+    */
+    creatorPicks: DraftPick[];
+
+    /**
+     * Extra draft picks the responding team asked the offer's
+     * creator to give on top of `creatorPicks`. Same side of the
+     * card (creator's column), same rules. Referenced, not
+     * transferred.
+     */
+    requestedPicks: DraftPick[];
+
+    /**
+     * Draft picks the responding team is putting on the table.
+     * Rendered on the RIGHT side of the response card. Referenced,
+     * not transferred.
+     */
+    respondingPicks: DraftPick[];
 }
 
 /** Result of POST /Marketplace/offers/{id}/respond. */
@@ -2076,6 +2141,16 @@ export interface CreateDirectOfferRequest {
     targetTeamId: number;
     slots: CreateDirectOfferSlotRequest[];
     note?: string | null;
+    /**
+     * Ids of the calling user's draft picks being offered. Must be
+     * owned by the calling user's team.
+     */
+    connectedDraftPickIds?: number[];
+    /**
+     * Ids of the target team's draft picks the calling user wants
+     * back. Must be owned by the target team.
+     */
+    targetDraftPickIds?: number[];
 }
 
 /**
@@ -2197,6 +2272,20 @@ export interface AcceptedTradeRow {
     createdAt: string;
     note: string | null;
     slots: AcceptedTradeSlot[];
+    /**
+     * Draft picks the offer creator is giving away, from the
+     * original offer.
+     */
+    offerCreatorPicks: DraftPick[];
+    /**
+     * Extra draft picks the offer creator is giving away, requested
+     * by the responding team on top of the offer's own picks.
+     */
+    requestedPicks: DraftPick[];
+    /**
+     * Draft picks the responding team is giving away.
+     */
+    respondingPicks: DraftPick[];
 }
 
 /**

@@ -1788,6 +1788,30 @@ namespace NhlFantasyLeague.api.Migrations
                     b.ToTable("TradeOffers");
                 });
 
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferPick", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("DraftPickId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TradeOfferId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DraftPickId");
+
+                    b.HasIndex("TradeOfferId", "DraftPickId")
+                        .IsUnique();
+
+                    b.ToTable("TradeOfferPicks");
+                });
+
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponse", b =>
                 {
                     b.Property<int>("Id")
@@ -1816,6 +1840,54 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("TradeOfferId", "CreatedAt");
 
                     b.ToTable("TradeOfferResponses");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponsePick", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("DraftPickId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TradeOfferResponseId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DraftPickId");
+
+                    b.HasIndex("TradeOfferResponseId", "DraftPickId")
+                        .IsUnique();
+
+                    b.ToTable("TradeOfferResponsePicks");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseRequestedPick", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("DraftPickId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TradeOfferResponseId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DraftPickId");
+
+                    b.HasIndex("TradeOfferResponseId", "DraftPickId")
+                        .IsUnique();
+
+                    b.ToTable("TradeOfferResponseRequestedPicks");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseSlot", b =>
@@ -2489,6 +2561,25 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Navigation("Season");
                 });
 
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferPick", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.DraftPick", "DraftPick")
+                        .WithMany()
+                        .HasForeignKey("DraftPickId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.TradeOffer", "TradeOffer")
+                        .WithMany("Picks")
+                        .HasForeignKey("TradeOfferId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DraftPick");
+
+                    b.Navigation("TradeOffer");
+                });
+
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponse", b =>
                 {
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "RespondingFantasyTeam")
@@ -2506,6 +2597,44 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Navigation("RespondingFantasyTeam");
 
                     b.Navigation("TradeOffer");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponsePick", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.DraftPick", "DraftPick")
+                        .WithMany()
+                        .HasForeignKey("DraftPickId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.TradeOfferResponse", "TradeOfferResponse")
+                        .WithMany("Picks")
+                        .HasForeignKey("TradeOfferResponseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DraftPick");
+
+                    b.Navigation("TradeOfferResponse");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseRequestedPick", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.DraftPick", "DraftPick")
+                        .WithMany()
+                        .HasForeignKey("DraftPickId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.TradeOfferResponse", "TradeOfferResponse")
+                        .WithMany("RequestedPicks")
+                        .HasForeignKey("TradeOfferResponseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DraftPick");
+
+                    b.Navigation("TradeOfferResponse");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseSlot", b =>
@@ -2600,11 +2729,17 @@ namespace NhlFantasyLeague.api.Migrations
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOffer", b =>
                 {
+                    b.Navigation("Picks");
+
                     b.Navigation("Slots");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponse", b =>
                 {
+                    b.Navigation("Picks");
+
+                    b.Navigation("RequestedPicks");
+
                     b.Navigation("Slots");
                 });
 #pragma warning restore 612, 618

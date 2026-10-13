@@ -577,9 +577,9 @@ namespace NhlFantasyLeague.api.Services
         }
 
         public async Task<TradeOfferActionResultDto> CreateOfferAsync(
-            int userId,
-            CreateTradeOfferRequest request,
-            CancellationToken ct = default)
+     int userId,
+     CreateTradeOfferRequest request,
+     CancellationToken ct = default)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -608,6 +608,15 @@ namespace NhlFantasyLeague.api.Services
             if (validationError != null)
             {
                 return Failure(validationError);
+            }
+
+            var (picksError, validPickIds) =
+                await ValidateDraftPicksBelongToTeamAsync(
+                    teamId, request.DraftPickIds, ct);
+
+            if (picksError != null)
+            {
+                return Failure(picksError);
             }
 
             var offer = new TradeOffer
@@ -647,6 +656,14 @@ namespace NhlFantasyLeague.api.Services
                 });
             }
 
+            foreach (var pickId in validPickIds!)
+            {
+                offer.Picks.Add(new TradeOfferPick
+                {
+                    DraftPickId = pickId,
+                });
+            }
+
             _dbContext.TradeOffers.Add(offer);
             await _dbContext.SaveChangesAsync(ct);
 
@@ -675,8 +692,8 @@ namespace NhlFantasyLeague.api.Services
         }
 
         /// <summary>
-        /// Replaces the slot list and the note of an existing offer
-        /// owned by the calling team.
+        /// Replaces the slot list, the pick list and the note of an
+        /// existing offer owned by the calling team.
         ///
         /// IDENTITY IS PRESERVED: the TradeOffer row itself is not
         /// deleted and re-created, so its Id, its CreatedAt, and every
@@ -686,10 +703,11 @@ namespace NhlFantasyLeague.api.Services
         ///
         /// REFUSES TO EDIT WHEN A RESPONSE IS IN FLIGHT: if any
         /// Pending or Accepted response exists on the offer, the
-        /// update is refused. Replacing the offered players or the
-        /// demand criteria underneath a responder would silently
-        /// invalidate the picks they already submitted, and the
-        /// correct fix is to cancel the offer and publish a new one.
+        /// update is refused. Replacing the offered players, the
+        /// demand criteria or the offered picks underneath a
+        /// responder would silently invalidate the picks they already
+        /// submitted, and the correct fix is to cancel the offer and
+        /// publish a new one.
         ///
         /// Rejected / Cancelled responses are left in place as
         /// historical rows — every panel filters them out, so they
@@ -715,6 +733,7 @@ namespace NhlFantasyLeague.api.Services
 
             var offer = await _dbContext.TradeOffers
                 .Include(o => o.Slots)
+                .Include(o => o.Picks)
                 .FirstOrDefaultAsync(o => o.Id == offerId, ct);
 
             if (offer == null)
@@ -765,6 +784,15 @@ namespace NhlFantasyLeague.api.Services
                 return Failure(validationError);
             }
 
+            var (picksError, validPickIds) =
+                await ValidateDraftPicksBelongToTeamAsync(
+                    teamId, request.DraftPickIds, ct);
+
+            if (picksError != null)
+            {
+                return Failure(picksError);
+            }
+
             // Replace the slots in place. Materialize the current
             // collection before removing so we can mutate it while
             // iterating. EF Core orders the DELETEs before the
@@ -801,6 +829,22 @@ namespace NhlFantasyLeague.api.Services
                 });
             }
 
+            // Same treatment for picks: materialize, remove, then
+            // re-add from the request. The unique index on
+            // (TradeOfferId, DraftPickId) is satisfied because EF
+            // orders the DELETEs first.
+            var oldPicks = offer.Picks.ToList();
+            _dbContext.TradeOfferPicks.RemoveRange(oldPicks);
+            offer.Picks.Clear();
+
+            foreach (var pickId in validPickIds!)
+            {
+                offer.Picks.Add(new TradeOfferPick
+                {
+                    DraftPickId = pickId,
+                });
+            }
+
             offer.Note = string.IsNullOrWhiteSpace(request.Note)
                 ? null
                 : request.Note.Trim();
@@ -824,9 +868,9 @@ namespace NhlFantasyLeague.api.Services
         }
 
         public async Task<List<TradeOfferDto>> ListActiveOffersAsync(
-            int userId,
-            bool includeMine,
-            CancellationToken ct = default)
+      int userId,
+      bool includeMine,
+      CancellationToken ct = default)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -892,6 +936,9 @@ offeredPlayerIds, ct);
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 offeredPlayerIds, ct);
 
+            var picksByOfferId = await LoadOfferPicksByOfferIdAsync(
+                offerIds, ct);
+
             var creatorTeamIds = offers
                 .Select(o => o.CreatedByFantasyTeamId)
                 .Distinct()
@@ -907,7 +954,8 @@ offeredPlayerIds, ct);
                     contractsByPlayerId,
                     statsByPlayerId,
                     seenIds,
-                    creatorTeamCapInfo))
+                    creatorTeamCapInfo,
+                    picksByOfferId))
                 .ToList();
         }
 
@@ -1014,10 +1062,10 @@ offeredPlayerIds, ct);
         }
 
         public async Task<TradeOfferActionResultDto> RespondToOfferAsync(
-            int userId,
-            int offerId,
-            RespondToTradeOfferRequest request,
-            CancellationToken ct = default)
+     int userId,
+     int offerId,
+     RespondToTradeOfferRequest request,
+     CancellationToken ct = default)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -1143,6 +1191,56 @@ offeredPlayerIds, ct);
                 }
             }
 
+            // Validate the responding team's draft picks. Every id
+            // must reference a pick whose CURRENT owner is the
+            // responding team.
+            var (picksError, validPickIds) =
+                await ValidateDraftPicksBelongToTeamAsync(
+                    respondingTeamId, request.DraftPickIds, ct);
+
+            if (picksError != null)
+            {
+                return Failure(picksError);
+            }
+
+            // Validate the REQUESTED draft picks. These belong to
+            // the offer's creator (the responding team is asking
+            // the creator to give them), not to the responder.
+            var (requestedError, validRequestedIds) =
+                await ValidateDraftPicksBelongToTeamAsync(
+                    offer.CreatedByFantasyTeamId,
+                    request.RequestedDraftPickIds,
+                    ct);
+
+            if (requestedError != null)
+            {
+                return Failure(requestedError);
+            }
+
+            // A requested pick must not already be in the offer's
+            // own pick list — the responder should not be able to
+            // "request" what is already offered, it would double-
+            // count on accept.
+            if (validRequestedIds != null && validRequestedIds.Count > 0)
+            {
+                var offerPickIds = await _dbContext.TradeOfferPicks
+                    .AsNoTracking()
+                    .Where(p => p.TradeOfferId == offerId)
+                    .Select(p => p.DraftPickId)
+                    .ToListAsync(ct);
+
+                var overlap = validRequestedIds
+                    .Intersect(offerPickIds)
+                    .ToList();
+
+                if (overlap.Count > 0)
+                {
+                    return Failure(
+                        "Un choix de repêchage demandé fait déjà " +
+                        "partie de l'offre originale.");
+                }
+            }
+
             var response = new TradeOfferResponse
             {
                 TradeOfferId = offerId,
@@ -1158,6 +1256,23 @@ offeredPlayerIds, ct);
                     SlotIndex = pick.SlotIndex,
                     RespondingPlayerId = pick.RespondingPlayerId,
                 });
+            }
+
+            foreach (var pickId in validPickIds!)
+            {
+                response.Picks.Add(new TradeOfferResponsePick
+                {
+                    DraftPickId = pickId,
+                });
+            }
+
+            foreach (var pickId in validRequestedIds!)
+            {
+                response.RequestedPicks.Add(
+                    new TradeOfferResponseRequestedPick
+                    {
+                        DraftPickId = pickId,
+                    });
             }
 
             _dbContext.TradeOfferResponses.Add(response);
@@ -1205,9 +1320,9 @@ offeredPlayerIds, ct);
         /// dangling offer with no response.
         /// </summary>
         public async Task<TradeOfferActionResultDto> CreateDirectOfferAsync(
-            int userId,
-            CreateDirectOfferRequest request,
-            CancellationToken ct = default)
+      int userId,
+      CreateDirectOfferRequest request,
+      CancellationToken ct = default)
         {
             // ---- 1. Resolve the calling user's team ------------------
             var user = await _dbContext.Users
@@ -1339,10 +1454,32 @@ offeredPlayerIds, ct);
                 }
             }
 
+            // ---- 6b. Validate both sides' draft picks ----------------
+            // Connected picks must belong to the connected team;
+            // target picks must belong to the target team.
+            var (connectedPicksError, connectedPickIds) =
+                await ValidateDraftPicksBelongToTeamAsync(
+                    connectedTeamId, request.ConnectedDraftPickIds, ct);
+
+            if (connectedPicksError != null)
+            {
+                return Failure(connectedPicksError);
+            }
+
+            var (targetPicksError, targetPickIds) =
+                await ValidateDraftPicksBelongToTeamAsync(
+                    request.TargetTeamId, request.TargetDraftPickIds, ct);
+
+            if (targetPicksError != null)
+            {
+                return Failure(targetPicksError);
+            }
+
             // ---- 7. Create the TradeOffer ----------------------------
             // Creator = target team (see the method doc for why).
             // Offering players = the TARGET team's players, because
             // they are what the offer's "left" side displays.
+            // Offering picks = the TARGET team's picks, same rule.
             var offer = new TradeOffer
             {
                 CreatedByFantasyTeamId = request.TargetTeamId,
@@ -1377,12 +1514,21 @@ offeredPlayerIds, ct);
                 });
             }
 
+            foreach (var pickId in targetPickIds!)
+            {
+                offer.Picks.Add(new TradeOfferPick
+                {
+                    DraftPickId = pickId,
+                });
+            }
+
             _dbContext.TradeOffers.Add(offer);
             await _dbContext.SaveChangesAsync(ct);
 
             // ---- 8. Create the TradeOfferResponse --------------------
             // Responder = connected user's team. Responding players =
-            // the CONNECTED user's players.
+            // the CONNECTED user's players. Responding picks = the
+            // CONNECTED user's picks, same rule.
             var response = new TradeOfferResponse
             {
                 TradeOfferId = offer.Id,
@@ -1399,6 +1545,14 @@ offeredPlayerIds, ct);
                 {
                     SlotIndex = i,
                     RespondingPlayerId = slot.ConnectedPlayerId,
+                });
+            }
+
+            foreach (var pickId in connectedPickIds!)
+            {
+                response.Picks.Add(new TradeOfferResponsePick
+                {
+                    DraftPickId = pickId,
                 });
             }
 
@@ -1423,8 +1577,8 @@ offeredPlayerIds, ct);
         }
 
         public async Task<List<TradeOfferResponseDto>> ListReceivedResponsesAsync(
-            int userId,
-            CancellationToken ct = default)
+     int userId,
+     CancellationToken ct = default)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -1483,6 +1637,28 @@ r.Status == TradeOfferResponseStatus.Accepted))
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 playerIds, ct);
 
+            // Draft picks: the offer's creator-side picks, and the
+            // response's responder-side picks. Two queries.
+            var offerIds = responses
+                .Select(r => r.TradeOfferId)
+                .Distinct()
+                .ToList();
+
+            var responseIds = responses
+                .Select(r => r.Id)
+                .Distinct()
+                .ToList();
+
+            var offerPicksByOfferId =
+       await LoadOfferPicksByOfferIdAsync(offerIds, ct);
+
+            var responsePicksByResponseId =
+                await LoadResponsePicksByResponseIdAsync(responseIds, ct);
+
+            var requestedPicksByResponseId =
+                await LoadRequestedPicksByResponseIdAsync(
+                    responseIds, ct);
+
             // Cap info for both sides of every response.
             var teamIds = responses
                 .Select(r => r.TradeOffer.CreatedByFantasyTeamId)
@@ -1498,13 +1674,16 @@ r.Status == TradeOfferResponseStatus.Accepted))
          r,
          contractsByPlayerId,
          statsByPlayerId,
-         teamCapInfo))
+         teamCapInfo,
+         offerPicksByOfferId,
+         responsePicksByResponseId,
+         requestedPicksByResponseId))
      .ToList();
         }
 
         public async Task<List<TradeOfferResponseDto>> ListSentResponsesAsync(
-            int userId,
-            CancellationToken ct = default)
+      int userId,
+      CancellationToken ct = default)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -1563,6 +1742,27 @@ r.Status == TradeOfferResponseStatus.Accepted))
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 playerIds, ct);
 
+            // Draft picks: same shape as ListReceivedResponsesAsync.
+            var offerIds = responses
+                .Select(r => r.TradeOfferId)
+                .Distinct()
+                .ToList();
+
+            var responseIds = responses
+                .Select(r => r.Id)
+                .Distinct()
+                .ToList();
+
+            var offerPicksByOfferId =
+       await LoadOfferPicksByOfferIdAsync(offerIds, ct);
+
+            var responsePicksByResponseId =
+                await LoadResponsePicksByResponseIdAsync(responseIds, ct);
+
+            var requestedPicksByResponseId =
+                await LoadRequestedPicksByResponseIdAsync(
+                    responseIds, ct);
+
             // Cap info for both sides of every response. One query,
             // covers every team that appears.
             var teamIds = responses
@@ -1579,7 +1779,10 @@ r.Status == TradeOfferResponseStatus.Accepted))
          r,
          contractsByPlayerId,
          statsByPlayerId,
-         teamCapInfo))
+         teamCapInfo,
+         offerPicksByOfferId,
+         responsePicksByResponseId,
+         requestedPicksByResponseId))
      .ToList();
         }
 
@@ -1792,7 +1995,7 @@ r.Status == TradeOfferResponseStatus.Accepted))
         /// Commissioner-only at the controller layer.
         /// </summary>
         public async Task<List<AdminAcceptedTradeDto>>
-            ListAcceptedTradesAsync(CancellationToken ct = default)
+      ListAcceptedTradesAsync(CancellationToken ct = default)
         {
             var responses = await _dbContext.TradeOfferResponses
                 .AsNoTracking()
@@ -1810,6 +2013,31 @@ r.Status == TradeOfferResponseStatus.Accepted))
                     r.Status == TradeOfferResponseStatus.Accepted)
                 .OrderByDescending(r => r.CreatedAt)
                 .ToListAsync(ct);
+
+            if (responses.Count == 0)
+            {
+                return new List<AdminAcceptedTradeDto>();
+            }
+
+            var offerIds = responses
+                .Select(r => r.TradeOfferId)
+                .Distinct()
+                .ToList();
+
+            var responseIds = responses
+                .Select(r => r.Id)
+                .Distinct()
+                .ToList();
+
+            var offerPicksByOfferId =
+       await LoadOfferPicksByOfferIdAsync(offerIds, ct);
+
+            var responsePicksByResponseId =
+                await LoadResponsePicksByResponseIdAsync(responseIds, ct);
+
+            var requestedPicksByResponseId =
+                await LoadRequestedPicksByResponseIdAsync(
+                    responseIds, ct);
 
             return responses
                 .Select(r =>
@@ -1879,6 +2107,18 @@ r.Status == TradeOfferResponseStatus.Accepted))
                                 };
                             })
                             .ToList(),
+
+                        OfferCreatorPicks = offerPicksByOfferId
+                            .GetValueOrDefault(r.TradeOfferId)
+                            ?? new List<DraftPickDto>(),
+
+                        RequestedPicks = requestedPicksByResponseId
+                            .GetValueOrDefault(r.Id)
+                            ?? new List<DraftPickDto>(),
+
+                        RespondingPicks = responsePicksByResponseId
+                            .GetValueOrDefault(r.Id)
+                            ?? new List<DraftPickDto>(),
                     };
                 })
                 .ToList();
@@ -1936,9 +2176,9 @@ r.Status == TradeOfferResponseStatus.Accepted))
         }
 
         private async Task<TradeOfferDto?> LoadOfferDtoAsync(
-            int offerId,
-            int userId,
-            CancellationToken ct)
+       int offerId,
+       int userId,
+       CancellationToken ct)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -1970,6 +2210,9 @@ offeredPlayerIds, ct);
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 offeredPlayerIds, ct);
 
+            var picksByOfferId = await LoadOfferPicksByOfferIdAsync(
+                new[] { offer.Id }, ct);
+
             var creatorTeamCapInfo = await LoadCreatorTeamCapInfoAsync(
                 new[] { offer.CreatedByFantasyTeamId },
                 ct);
@@ -1980,12 +2223,13 @@ offeredPlayerIds, ct);
                 contractsByPlayerId,
                 statsByPlayerId,
                 seenOfferIds: null,
-                creatorTeamCapInfo);
+                creatorTeamCapInfo,
+                picksByOfferId);
         }
 
         private async Task<TradeOfferResponseDto?> LoadResponseDtoAsync(
-     int responseId,
-     CancellationToken ct)
+int responseId,
+CancellationToken ct)
         {
             var response = await _dbContext.TradeOfferResponses
      .AsNoTracking()
@@ -2026,6 +2270,17 @@ offeredPlayerIds, ct);
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 playerIds, ct);
 
+            var offerPicksByOfferId = await LoadOfferPicksByOfferIdAsync(
+      new[] { response.TradeOfferId }, ct);
+
+            var responsePicksByResponseId =
+                await LoadResponsePicksByResponseIdAsync(
+                    new[] { response.Id }, ct);
+
+            var requestedPicksByResponseId =
+                await LoadRequestedPicksByResponseIdAsync(
+                    new[] { response.Id }, ct);
+
             var teamCapInfo = await LoadCreatorTeamCapInfoAsync(
                 new[]
                 {
@@ -2038,7 +2293,10 @@ offeredPlayerIds, ct);
                 response,
                 contractsByPlayerId,
                 statsByPlayerId,
-                teamCapInfo);
+                teamCapInfo,
+                offerPicksByOfferId,
+                responsePicksByResponseId,
+                requestedPicksByResponseId);
         }
 
         private async Task<Dictionary<int, List<PlayerContract>>>
@@ -2059,6 +2317,214 @@ offeredPlayerIds, ct);
             return contracts
                 .GroupBy(c => c.PlayerId)
                 .ToDictionary(g => g.Key, g => g.ToList());
+        }
+
+        // -----------------------------------------------------------------
+        // Draft pick helpers (Marketplace)
+        //
+        // Draft picks are attached to offers and responses by
+        // reference, never by transfer. See TradeOfferPick /
+        // TradeOfferResponsePick for the rationale.
+        // -----------------------------------------------------------------
+
+        /// <summary>
+        /// Maps a DraftPick entity to its DTO. Same shape as
+        /// DraftPickController.GetTeamDraftPicks so the marketplace
+        /// and the Mon équipe page render picks identically.
+        /// </summary>
+        private static DraftPickDto ToDraftPickDto(DraftPick p)
+        {
+            return new DraftPickDto
+            {
+                Id = p.Id,
+                DraftId = p.DraftId,
+                DraftYear = p.Draft.Season.NhlSeasonCode / 10000,
+                NhlSeasonCode = p.Draft.Season.NhlSeasonCode,
+                SeasonName = p.Draft.Season.Name,
+                Round = p.Round,
+                PickNumber = p.PickNumber,
+                OriginalOwnerFantasyTeamId =
+                    p.OriginalOwnerFantasyTeamId,
+                OriginalOwnerFantasyTeamName =
+                    p.OriginalOwnerFantasyTeam?.Name ?? string.Empty,
+                CurrentOwnerFantasyTeamId =
+                    p.CurrentOwnerFantasyTeamId,
+                IsOriginallyOwned =
+                    p.OriginalOwnerFantasyTeamId ==
+                    p.CurrentOwnerFantasyTeamId,
+            };
+        }
+
+        /// <summary>
+        /// Bulk-loads the draft picks attached to a set of offers,
+        /// keyed by TradeOfferId. Ordering is stable: year, then
+        /// round, then pick number.
+        /// </summary>
+        private async Task<Dictionary<int, List<DraftPickDto>>>
+            LoadOfferPicksByOfferIdAsync(
+                IReadOnlyCollection<int> offerIds,
+                CancellationToken ct)
+        {
+            if (offerIds.Count == 0)
+            {
+                return new Dictionary<int, List<DraftPickDto>>();
+            }
+
+            var rows = await _dbContext.TradeOfferPicks
+                .AsNoTracking()
+                .Where(p => offerIds.Contains(p.TradeOfferId))
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.Draft)
+                        .ThenInclude(d => d.Season)
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.OriginalOwnerFantasyTeam)
+                .ToListAsync(ct);
+
+            return rows
+                .GroupBy(r => r.TradeOfferId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .Select(r => ToDraftPickDto(r.DraftPick))
+                        .OrderBy(p => p.NhlSeasonCode)
+                        .ThenBy(p => p.Round)
+                        .ThenBy(p => p.PickNumber)
+                        .ToList());
+        }
+
+        /// <summary>
+        /// Bulk-loads the draft picks attached to a set of responses,
+        /// keyed by TradeOfferResponseId. Ordering is the same as
+        /// <see cref="LoadOfferPicksByOfferIdAsync"/>.
+        /// </summary>
+        private async Task<Dictionary<int, List<DraftPickDto>>>
+            LoadResponsePicksByResponseIdAsync(
+                IReadOnlyCollection<int> responseIds,
+                CancellationToken ct)
+        {
+            if (responseIds.Count == 0)
+            {
+                return new Dictionary<int, List<DraftPickDto>>();
+            }
+
+            var rows = await _dbContext.TradeOfferResponsePicks
+                .AsNoTracking()
+                .Where(p => responseIds.Contains(p.TradeOfferResponseId))
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.Draft)
+                        .ThenInclude(d => d.Season)
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.OriginalOwnerFantasyTeam)
+                .ToListAsync(ct);
+
+            return rows
+      .GroupBy(r => r.TradeOfferResponseId)
+      .ToDictionary(
+          g => g.Key,
+          g => g
+              .Select(r => ToDraftPickDto(r.DraftPick))
+              .OrderBy(p => p.NhlSeasonCode)
+              .ThenBy(p => p.Round)
+              .ThenBy(p => p.PickNumber)
+              .ToList());
+        }
+
+        /// <summary>
+        /// Bulk-loads the draft picks the responder requested from
+        /// the offer's creator, keyed by TradeOfferResponseId.
+        /// Same ordering rule as the other pick loaders.
+        /// </summary>
+        private async Task<Dictionary<int, List<DraftPickDto>>>
+            LoadRequestedPicksByResponseIdAsync(
+                IReadOnlyCollection<int> responseIds,
+                CancellationToken ct)
+        {
+            if (responseIds.Count == 0)
+            {
+                return new Dictionary<int, List<DraftPickDto>>();
+            }
+
+            var rows = await _dbContext.TradeOfferResponseRequestedPicks
+                .AsNoTracking()
+                .Where(p => responseIds.Contains(p.TradeOfferResponseId))
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.Draft)
+                        .ThenInclude(d => d.Season)
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.OriginalOwnerFantasyTeam)
+                .ToListAsync(ct);
+
+            return rows
+                .GroupBy(r => r.TradeOfferResponseId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .Select(r => ToDraftPickDto(r.DraftPick))
+                        .OrderBy(p => p.NhlSeasonCode)
+                        .ThenBy(p => p.Round)
+                        .ThenBy(p => p.PickNumber)
+                        .ToList());
+        }
+
+        /// <summary>
+        /// Validates a list of draft pick ids for a given team:
+        ///
+        ///   - No duplicates in the incoming list.
+        ///   - Every id references an existing DraftPick whose
+        ///     CurrentOwnerFantasyTeamId is the given team. Ownership
+        ///     is checked against the CURRENT owner, not the
+        ///     original owner — a pick that was traded away cannot
+        ///     be offered by its old owner.
+        ///   - At most 20 picks in one list.
+        ///
+        /// Returns (null, the de-duplicated ordered ids) on success,
+        /// or (a French error message, null) on failure.
+        /// </summary>
+        private async Task<(string? Error, List<int>? ValidIds)>
+            ValidateDraftPicksBelongToTeamAsync(
+                int teamId,
+                IList<int>? draftPickIds,
+                CancellationToken ct)
+        {
+            if (draftPickIds == null || draftPickIds.Count == 0)
+            {
+                return (null, new List<int>());
+            }
+
+            if (draftPickIds.Count > 20)
+            {
+                return (
+                    "Maximum 20 choix de repêchage par transaction.",
+                    null);
+            }
+
+            var distinct = draftPickIds.Distinct().ToList();
+
+            if (distinct.Count != draftPickIds.Count)
+            {
+                return (
+                    "Le même choix de repêchage ne peut pas apparaître " +
+                    "deux fois.",
+                    null);
+            }
+
+            var owned = await _dbContext.DraftPicks
+                .AsNoTracking()
+                .Where(p =>
+                    distinct.Contains(p.Id) &&
+                    p.CurrentOwnerFantasyTeamId == teamId)
+                .Select(p => p.Id)
+                .ToListAsync(ct);
+
+            if (owned.Count != distinct.Count)
+            {
+                return (
+                    "Un ou plusieurs choix de repêchage ne sont pas " +
+                    "sur cette équipe.",
+                    null);
+            }
+
+            return (null, distinct);
         }
 
         private static (
@@ -2140,14 +2606,15 @@ offeredPlayerIds, ct);
         }
 
         private static TradeOfferDto ToDto(
-   TradeOffer offer,
-   int? userTeamId,
-   IReadOnlyDictionary<int, List<PlayerContract>>?
-       contractsByPlayerId = null,
-   IReadOnlyDictionary<int, PlayerStatLines>?
-       statsByPlayerId = null,
-   IReadOnlySet<int>? seenOfferIds = null,
-   CreatorTeamCapInfo? creatorTeamCapInfo = null)
+TradeOffer offer,
+int? userTeamId,
+IReadOnlyDictionary<int, List<PlayerContract>>?
+contractsByPlayerId = null,
+IReadOnlyDictionary<int, PlayerStatLines>?
+statsByPlayerId = null,
+IReadOnlySet<int>? seenOfferIds = null,
+CreatorTeamCapInfo? creatorTeamCapInfo = null,
+IReadOnlyDictionary<int, List<DraftPickDto>>? picksByOfferId = null)
         {
             // Creator's current cap hit. Null when the caller did
             // not provide cap info — the received / sent panels
@@ -2248,6 +2715,11 @@ offeredPlayerIds, ct);
                         };
                     })
                     .ToList(),
+
+                Picks = picksByOfferId != null &&
+                        picksByOfferId.TryGetValue(offer.Id, out var picks)
+                    ? picks
+                    : new List<DraftPickDto>(),
             };
         }
 
@@ -2255,7 +2727,10 @@ offeredPlayerIds, ct);
 TradeOfferResponse response,
 IReadOnlyDictionary<int, List<PlayerContract>> contractsByPlayerId,
 IReadOnlyDictionary<int, PlayerStatLines> statsByPlayerId,
-CreatorTeamCapInfo? teamCapInfo = null)
+CreatorTeamCapInfo? teamCapInfo = null,
+IReadOnlyDictionary<int, List<DraftPickDto>>? offerPicksByOfferId = null,
+IReadOnlyDictionary<int, List<DraftPickDto>>? responsePicksByResponseId = null,
+IReadOnlyDictionary<int, List<DraftPickDto>>? requestedPicksByResponseId = null)
         {
             var offerSlotsByIndex = response.TradeOffer.Slots
                 .ToDictionary(s => s.SlotIndex);
@@ -2390,6 +2865,27 @@ CreatorTeamCapInfo? teamCapInfo = null)
                         };
                     })
                     .ToList(),
+
+                CreatorPicks =
+                    offerPicksByOfferId != null &&
+                    offerPicksByOfferId.TryGetValue(
+                        response.TradeOfferId, out var creatorPicks)
+                        ? creatorPicks
+                        : new List<DraftPickDto>(),
+
+                RequestedPicks =
+                    requestedPicksByResponseId != null &&
+                    requestedPicksByResponseId.TryGetValue(
+                        response.Id, out var requestedPicks)
+                        ? requestedPicks
+                        : new List<DraftPickDto>(),
+
+                RespondingPicks =
+                    responsePicksByResponseId != null &&
+                    responsePicksByResponseId.TryGetValue(
+                        response.Id, out var respondingPicks)
+                        ? respondingPicks
+                        : new List<DraftPickDto>(),
             };
         }
 

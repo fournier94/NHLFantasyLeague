@@ -18,13 +18,16 @@
   <ItemGroup>
     <None Remove="frontend\src\components\layout\HealthBanner.tsx" />
     <None Remove="frontend\src\components\layout\IosShareHint.tsx" />
+    <None Remove="frontend\src\components\marketplace\TradePicksSlot.tsx" />
     <None Remove="frontend\src\components\ui\AuraButton.tsx" />
     <None Remove="frontend\src\components\ui\NeonTitle.tsx" />
     <None Remove="frontend\src\lib\auraConfig.ts" />
     <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\AuthContext.tsx" />
     <None Remove="frontend\src\lib\directOfferState.ts" />
+    <None Remove="frontend\src\lib\marketplacePicksState.ts" />
     <None Remove="frontend\src\lib\marketplacePopupRestoration.ts" />
+    <None Remove="frontend\src\lib\marketplaceSectionState.ts" />
     <None Remove="frontend\src\lib\marketplaceTradeState.ts" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
     <None Remove="frontend\src\lib\playerNavigation.ts" />
@@ -55,13 +58,16 @@
   <ItemGroup>
     <TypeScriptCompile Include="frontend\src\components\layout\HealthBanner.tsx" />
     <TypeScriptCompile Include="frontend\src\components\layout\IosShareHint.tsx" />
+    <TypeScriptCompile Include="frontend\src\components\marketplace\TradePicksSlot.tsx" />
     <TypeScriptCompile Include="frontend\src\components\ui\AuraButton.tsx" />
     <TypeScriptCompile Include="frontend\src\components\ui\NeonTitle.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\auraConfig.ts" />
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\directOfferState.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplacePicksState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplacePopupRestoration.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplaceSectionState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceTradeState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />
     <TypeScriptCompile Include="frontend\src\lib\playerNavigation.ts" />
