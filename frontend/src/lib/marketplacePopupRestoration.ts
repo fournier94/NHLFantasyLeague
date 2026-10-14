@@ -128,6 +128,21 @@ export interface PendingPickContext {
     slotIndex: number;
     slot: TradeOfferSlot;
     capContext?: TradeCapContext;
+    excludedPlayerIds?: number[];
+    side?: 'responding' | 'offering';
+    /**
+     * Player to render as the sticky reference card at the top of
+     * the roster popup, or null when there is none.
+     *
+     * Reflects the responder's current override / clear state for
+     * the offering side: a cleared slot passes null, an overridden
+     * slot passes the override player, and an untouched slot passes
+     * the offer creator's own offering player. Built by OfferCard
+     * (which has both the override store and the creator roster)
+     * rather than by the parent, so the reference always matches
+     * what the offering side is currently displaying.
+     */
+    referencePlayer?: RosterEntry | null;
 }
 
 /**

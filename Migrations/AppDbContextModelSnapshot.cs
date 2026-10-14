@@ -1766,6 +1766,9 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("CreatedByFantasyTeamId")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("IsDirectOffer")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Note")
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
@@ -1823,6 +1826,10 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Note")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
                     b.Property<int>("RespondingFantasyTeamId")
                         .HasColumnType("integer");
 
@@ -1866,6 +1873,30 @@ namespace NhlFantasyLeague.api.Migrations
                     b.ToTable("TradeOfferResponsePicks");
                 });
 
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseRemovedPick", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("DraftPickId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TradeOfferResponseId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DraftPickId");
+
+                    b.HasIndex("TradeOfferResponseId", "DraftPickId")
+                        .IsUnique();
+
+                    b.ToTable("TradeOfferResponseRemovedPicks");
+                });
+
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseRequestedPick", b =>
                 {
                     b.Property<int>("Id")
@@ -1898,7 +1929,15 @@ namespace NhlFantasyLeague.api.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<int>("RespondingPlayerId")
+                    b.Property<int?>("OfferingPlayerOverrideId")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("RemoveOfferingPlayer")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<int?>("RespondingPlayerId")
                         .HasColumnType("integer");
 
                     b.Property<int>("SlotIndex")
@@ -1908,6 +1947,8 @@ namespace NhlFantasyLeague.api.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("OfferingPlayerOverrideId");
 
                     b.HasIndex("RespondingPlayerId");
 
@@ -1951,39 +1992,6 @@ namespace NhlFantasyLeague.api.Migrations
                         .HasColumnType("integer");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int?>("DemandMaxAge")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal?>("DemandMaxSalary")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<int?>("DemandMinContractYears")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("DemandMinPointsLastYear")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("EnforceDemandMaxAge")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("EnforceDemandMaxSalary")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("EnforceDemandMinContractYears")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("EnforceDemandMinPointsLastYear")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
 
                     b.Property<int?>("OfferingPlayerId")
                         .HasColumnType("integer");
@@ -2645,6 +2653,25 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Navigation("TradeOfferResponse");
                 });
 
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseRemovedPick", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.DraftPick", "DraftPick")
+                        .WithMany()
+                        .HasForeignKey("DraftPickId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.TradeOfferResponse", "TradeOfferResponse")
+                        .WithMany("RemovedPicks")
+                        .HasForeignKey("TradeOfferResponseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DraftPick");
+
+                    b.Navigation("TradeOfferResponse");
+                });
+
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseRequestedPick", b =>
                 {
                     b.HasOne("NhlFantasyLeague.api.Models.DraftPick", "DraftPick")
@@ -2666,17 +2693,23 @@ namespace NhlFantasyLeague.api.Migrations
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponseSlot", b =>
                 {
+                    b.HasOne("NhlFantasyLeague.api.Models.Player", "OfferingPlayerOverride")
+                        .WithMany()
+                        .HasForeignKey("OfferingPlayerOverrideId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("NhlFantasyLeague.api.Models.Player", "RespondingPlayer")
                         .WithMany()
                         .HasForeignKey("RespondingPlayerId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("NhlFantasyLeague.api.Models.TradeOfferResponse", "TradeOfferResponse")
                         .WithMany("Slots")
                         .HasForeignKey("TradeOfferResponseId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("OfferingPlayerOverride");
 
                     b.Navigation("RespondingPlayer");
 
@@ -2783,6 +2816,8 @@ namespace NhlFantasyLeague.api.Migrations
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOfferResponse", b =>
                 {
                     b.Navigation("Picks");
+
+                    b.Navigation("RemovedPicks");
 
                     b.Navigation("RequestedPicks");
 

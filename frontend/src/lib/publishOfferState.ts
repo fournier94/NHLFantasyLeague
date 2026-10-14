@@ -13,36 +13,20 @@
  *
  * Same pattern as directOfferState.ts: useSyncExternalStore-
  * compatible, ephemeral, no persistence across reloads.
+ *
+ * A slot is just an offered player. There is no demanded position
+ * and no demand criterias. The backend still requires a valid
+ * F/D/G on every slot, but that value is derived from the offered
+ * player's own position at submit time (see slotToRequest in
+ * MarketplacePage.tsx), so it never lives in state.
  */
 
-export type PublishPositionGroup = 'F' | 'D' | 'G';
-
 export interface PublishSlotState {
-    positionGroup: PublishPositionGroup | '';
     offeringPlayerId: number | null;
-    firstHandled: 'player' | 'position' | null;
-    minContractYears: string;
-    maxSalary: string;
-    maxAge: string;
-    minPointsLastYear: string;
-    enforceMinContractYears: boolean;
-    enforceMaxSalary: boolean;
-    enforceMaxAge: boolean;
-    enforceMinPointsLastYear: boolean;
 }
 
 export const EMPTY_PUBLISH_SLOT: PublishSlotState = {
-    positionGroup: '',
     offeringPlayerId: null,
-    firstHandled: null,
-    minContractYears: '',
-    maxSalary: '',
-    maxAge: '',
-    minPointsLastYear: '',
-    enforceMinContractYears: false,
-    enforceMaxSalary: false,
-    enforceMaxAge: false,
-    enforceMinPointsLastYear: false,
 };
 
 export interface PublishOfferDraft {
@@ -108,8 +92,7 @@ export function resetPublishDraft(): void {
         d.editingOfferId === null &&
         d.note === '' &&
         d.slots.length === 1 &&
-        d.slots[0].offeringPlayerId === null &&
-        d.slots[0].positionGroup === ''
+        d.slots[0].offeringPlayerId === null
     ) {
         return;
     }
@@ -137,20 +120,14 @@ export function pickPublishSlot(
 }
 
 /**
- * Clears the picked player for one slot. The position group is
- * preserved, matching the previous behaviour.
+ * Clears the picked player for one slot.
  */
 export function clearPublishSlot(slotIndex: number): void {
     updatePublishDraft((d) => ({
         ...d,
         slots: d.slots.map((s, i) =>
             i === slotIndex
-                ? {
-                    ...s,
-                    offeringPlayerId: null,
-                    firstHandled:
-                        s.positionGroup !== '' ? 'position' : null,
-                }
+                ? { ...s, offeringPlayerId: null }
                 : s,
         ),
     }));

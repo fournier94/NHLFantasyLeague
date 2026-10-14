@@ -628,21 +628,9 @@ namespace NhlFantasyLeague.api.Services
                 {
                     SlotIndex = i,
                     PositionGroup = slot.PositionGroup
-           .Trim()
-           .ToUpperInvariant(),
+                        .Trim()
+                        .ToUpperInvariant(),
                     OfferingPlayerId = slot.OfferingPlayerId,
-                    DemandMinContractYears = slot.DemandMinContractYears,
-                    DemandMaxSalary = slot.DemandMaxSalary,
-                    DemandMaxAge = slot.DemandMaxAge,
-                    DemandMinPointsLastYear = slot.DemandMinPointsLastYear,
-                    EnforceDemandMinContractYears =
-           slot.EnforceDemandMinContractYears,
-                    EnforceDemandMaxSalary =
-           slot.EnforceDemandMaxSalary,
-                    EnforceDemandMaxAge =
-           slot.EnforceDemandMaxAge,
-                    EnforceDemandMinPointsLastYear =
-           slot.EnforceDemandMinPointsLastYear,
                 });
             }
 
@@ -685,11 +673,24 @@ namespace NhlFantasyLeague.api.Services
         /// Replaces the slot list, the pick list and the note of an
         /// existing offer owned by the calling team.
         ///
-        /// IDENTITY IS PRESERVED: the TradeOffer row itself is not
-        /// deleted and re-created, so its Id, its CreatedAt, and every
-        /// per-user "seen" marker stay valid. On the browse list the
-        /// modified offer keeps its position and does not pop up as
-        /// "Nouvelle offre" again.
+        /// TREATED AS A NEW OFFER: a modification is visible to every
+        /// other manager exactly like a fresh publication. The
+        /// modified offer jumps to the top of the browse list, gets
+        /// the "Nouvelle offre" chip again, and pushes the navbar
+        /// notification badge up by one for every manager who had
+        /// previously seen it. Two things make that happen:
+        ///
+        ///   - CreatedAt is bumped to now, so the browse list (which
+        ///     orders by CreatedAt DESC) puts it back on top.
+        ///
+        ///   - Every per-user "seen" marker for this offer, except
+        ///     the creator's own, is deleted. On the next browse
+        ///     poll or notification poll (60 s), IsNew flips back to
+        ///     true and the badge count goes up.
+        ///
+        /// The TradeOffer row itself is preserved (its Id is stable),
+        /// so any client state that references the offer by id still
+        /// resolves. Only CreatedAt moves.
         ///
         /// REFUSES TO EDIT WHEN A RESPONSE IS IN FLIGHT: if any
         /// Pending or Accepted response exists on the offer, the
@@ -801,21 +802,9 @@ namespace NhlFantasyLeague.api.Services
                 {
                     SlotIndex = i,
                     PositionGroup = slot.PositionGroup
-           .Trim()
-           .ToUpperInvariant(),
+                        .Trim()
+                        .ToUpperInvariant(),
                     OfferingPlayerId = slot.OfferingPlayerId,
-                    DemandMinContractYears = slot.DemandMinContractYears,
-                    DemandMaxSalary = slot.DemandMaxSalary,
-                    DemandMaxAge = slot.DemandMaxAge,
-                    DemandMinPointsLastYear = slot.DemandMinPointsLastYear,
-                    EnforceDemandMinContractYears =
-           slot.EnforceDemandMinContractYears,
-                    EnforceDemandMaxSalary =
-           slot.EnforceDemandMaxSalary,
-                    EnforceDemandMaxAge =
-           slot.EnforceDemandMaxAge,
-                    EnforceDemandMinPointsLastYear =
-           slot.EnforceDemandMinPointsLastYear,
                 });
             }
 
@@ -836,8 +825,43 @@ namespace NhlFantasyLeague.api.Services
             }
 
             offer.Note = string.IsNullOrWhiteSpace(request.Note)
-                ? null
-                : request.Note.Trim();
+        ? null
+        : request.Note.Trim();
+
+            // Treat the modified offer as a brand-new publication
+            // from every other manager's point of view.
+            //
+            // 1. Bump CreatedAt so the offer jumps to the top of the
+            //    browse list, which orders by CreatedAt DESC.
+            //
+            // 2. Drop every per-user "seen" marker for this offer
+            //    except the creator's own. On the next browse poll,
+            //    IsNew flips back to true for every other user. On
+            //    the next notification poll (60 s), their navbar
+            //    badge count goes up by one.
+            //
+            // The creator's own marker is preserved so his "Vos
+            // offres actives" panel does not mark his own offer as
+            // new to himself, and so the row he re-inserts on his
+            // next visit is not doubled.
+            //
+            // This is safe here because the earlier guard already
+            // refused the update if any Pending or Accepted response
+            // existed on the offer, so there is no responder in
+            // flight whose state could be invalidated by the
+            // reshuffle.
+            offer.CreatedAt = DateTime.UtcNow;
+
+            var otherViewRows = await _dbContext.TradeOfferViews
+                .Where(v =>
+                    v.TradeOfferId == offer.Id &&
+                    v.UserId != userId)
+                .ToListAsync(ct);
+
+            if (otherViewRows.Count > 0)
+            {
+                _dbContext.TradeOfferViews.RemoveRange(otherViewRows);
+            }
 
             await _dbContext.SaveChangesAsync(ct);
 
@@ -869,15 +893,17 @@ namespace NhlFantasyLeague.api.Services
             var userTeamId = user?.FantasyTeamId;
 
             var offers = await _dbContext.TradeOffers
-        .AsNoTracking()
-        .Include(o => o.CreatedByFantasyTeam)
-        .Include(o => o.Season)
-        .Include(o => o.Slots)
-            .ThenInclude(s => s.OfferingPlayer)
-                .ThenInclude(p => p!.NhlTeam)
-        .Where(o => o.Status == TradeOfferStatus.Active)
-        .OrderByDescending(o => o.CreatedAt)
-        .ToListAsync(ct);
+.AsNoTracking()
+.Include(o => o.CreatedByFantasyTeam)
+.Include(o => o.Season)
+.Include(o => o.Slots)
+    .ThenInclude(s => s.OfferingPlayer)
+        .ThenInclude(p => p!.NhlTeam)
+.Where(o =>
+    o.Status == TradeOfferStatus.Active &&
+    !o.IsDirectOffer)
+.OrderByDescending(o => o.CreatedAt)
+.ToListAsync(ct);
 
             if (!includeMine && userTeamId.HasValue)
             {
@@ -1057,13 +1083,14 @@ offeredPlayerIds, ct);
                 .Select(r => r.TradeOfferId);
 
             var unseenOffers = await _dbContext.TradeOffers
-                .AsNoTracking()
-                .Where(o =>
-                    o.Status == TradeOfferStatus.Active &&
-                    o.CreatedByFantasyTeamId != myTeamId &&
-                    !seenOfferIds.Contains(o.Id) &&
-                    !respondedOfferIds.Contains(o.Id))
-                .CountAsync(ct);
+     .AsNoTracking()
+     .Where(o =>
+         o.Status == TradeOfferStatus.Active &&
+         !o.IsDirectOffer &&
+         o.CreatedByFantasyTeamId != myTeamId &&
+         !seenOfferIds.Contains(o.Id) &&
+         !respondedOfferIds.Contains(o.Id))
+     .CountAsync(ct);
 
             // --- Unseen responses -----------------------------------------
             var seenResponseIds = _dbContext.TradeOfferResponseViews
@@ -1264,20 +1291,48 @@ offeredPlayerIds, ct);
                     "Vous avez deja repondu a cette offre.");
             }
 
-            if (request.Picks == null || request.Picks.Count == 0)
-            {
-                return Failure(
-                    "Fournissez un joueur pour chaque demande de l'offre.");
-            }
-
             var offerSlotsByIndex = offer.Slots
-                .ToDictionary(s => s.SlotIndex);
+      .ToDictionary(s => s.SlotIndex);
 
-            if (request.Picks.Count != offerSlotsByIndex.Count)
+            var baseSlotCount = offerSlotsByIndex.Count;
+
+            // A response must contain at least one thing: a
+            // responding player, an offering override, a responding
+            // draft pick, a requested draft pick, or a free-text
+            // Note. Beyond that, the trade is allowed to be as
+            // unbalanced as the managers want: the responder can
+            // fill zero base slots, some of them, or all of them,
+            // and can add extras or attach picks without any
+            // matching requirement on the other side.
+            //
+            // Note-only responses are deliberately allowed: the
+            // league is a private friend group, and managers use
+            // the response to ask "what would you offer for this
+            // player?" without committing to a full shape.
+            var hasAnyPlayers =
+                request.Picks != null &&
+                request.Picks.Count > 0;
+
+            var hasAnyDraftPicks =
+       (request.DraftPickIds != null &&
+           request.DraftPickIds.Count > 0) ||
+       (request.RequestedDraftPickIds != null &&
+           request.RequestedDraftPickIds.Count > 0) ||
+       (request.RemovedCreatorDraftPickIds != null &&
+           request.RemovedCreatorDraftPickIds.Count > 0);
+
+            var trimmedNote =
+                string.IsNullOrWhiteSpace(request.Note)
+                    ? null
+                    : request.Note.Trim();
+
+            var hasAnyNote = trimmedNote != null;
+
+            if (!hasAnyPlayers && !hasAnyDraftPicks && !hasAnyNote)
             {
                 return Failure(
-                    $"Vous devez offrir un joueur pour chacun des " +
-                    $"{offerSlotsByIndex.Count} emplacement(s).");
+                    "Votre réponse doit contenir au moins un joueur, " +
+                    "un choix de repêchage, ou un message.");
             }
 
             var season = await Data.SeasonQueries.GetCurrentSeasonAsync(
@@ -1303,33 +1358,75 @@ offeredPlayerIds, ct);
 
             var seenRespondingPlayerIds = new HashSet<int>();
 
+            // Players on the offer creator's roster, loaded once so
+            // overrides can be validated without a per-slot query.
+            var creatorRosterPlayerIds = (await _dbContext.RosterEntries
+                .AsNoTracking()
+                .Where(e =>
+                    e.FantasyTeamId == offer.CreatedByFantasyTeamId &&
+                    e.SeasonId == season.Id)
+                .Select(e => e.PlayerId)
+                .ToListAsync(ct))
+                .ToHashSet();
+
+            var seenOverrides = new HashSet<int>();
+
             foreach (var pick in request.Picks)
             {
-                if (!offerSlotsByIndex.TryGetValue(
-                        pick.SlotIndex, out var offerSlot))
+                if (pick.SlotIndex < baseSlotCount &&
+                    !offerSlotsByIndex.ContainsKey(pick.SlotIndex))
                 {
                     return Failure(
                         $"L'emplacement {pick.SlotIndex + 1} n'existe " +
                         "pas dans cette offre.");
                 }
 
-                if (!seenRespondingPlayerIds.Add(pick.RespondingPlayerId))
+                if (pick.RespondingPlayerId.HasValue)
                 {
-                    return Failure(
-                        "Le meme joueur ne peut pas repondre a deux " +
-                        "emplacements de la meme offre.");
+                    if (!seenRespondingPlayerIds.Add(
+                            pick.RespondingPlayerId.Value))
+                    {
+                        return Failure(
+                            "Le meme joueur ne peut pas repondre a deux " +
+                            "emplacements de la meme offre.");
+                    }
+
+                    if (!rosterByPlayerId.ContainsKey(
+                            pick.RespondingPlayerId.Value))
+                    {
+                        return Failure(
+                            $"Le joueur {pick.RespondingPlayerId.Value} " +
+                            "n'est pas sur votre equipe pour la saison en cours.");
+                    }
                 }
 
-                // The responding player's position is deliberately
-                // NOT checked against the slot's PositionGroup.
-                // Managers can respond with a player of any position;
-                // the slot's announced PositionGroup is a preference.
-                if (!rosterByPlayerId.ContainsKey(
-                        pick.RespondingPlayerId))
+                if (pick.RemoveOfferingPlayer &&
+       pick.OfferingPlayerOverrideId.HasValue)
                 {
                     return Failure(
-                        $"Le joueur {pick.RespondingPlayerId} " +
-                        "n'est pas sur votre equipe pour la saison en cours.");
+                        "Un emplacement ne peut pas en meme temps " +
+                        "retirer le joueur de l'autre equipe et le " +
+                        "remplacer par un autre.");
+                }
+
+                if (pick.OfferingPlayerOverrideId.HasValue)
+                {
+                    if (!seenOverrides.Add(
+                            pick.OfferingPlayerOverrideId.Value))
+                    {
+                        return Failure(
+                            "Le meme joueur de l'autre equipe ne peut pas " +
+                            "apparaitre deux fois dans votre reponse.");
+                    }
+
+                    if (!creatorRosterPlayerIds.Contains(
+                            pick.OfferingPlayerOverrideId.Value))
+                    {
+                        return Failure(
+                            $"Le joueur {pick.OfferingPlayerOverrideId.Value} " +
+                            "n'est pas sur l'equipe de l'autre " +
+                            "gestionnaire pour la saison en cours.");
+                    }
                 }
             }
 
@@ -1383,12 +1480,64 @@ offeredPlayerIds, ct);
                 }
             }
 
+            // Validate the removed creator picks. Each id must
+            // reference one of the offer's OWN picks (TradeOfferPick)
+            // — a responder cannot remove something the creator never
+            // put on the table.
+            var rawRemovedIds =
+                request.RemovedCreatorDraftPickIds
+                ?? new List<int>();
+
+            var distinctRemovedIds = rawRemovedIds
+                .Distinct()
+                .ToList();
+
+            if (distinctRemovedIds.Count != rawRemovedIds.Count)
+            {
+                return Failure(
+                    "Un même choix de repêchage ne peut pas être retiré " +
+                    "deux fois.");
+            }
+
+            if (distinctRemovedIds.Count > 20)
+            {
+                return Failure(
+                    "Maximum 20 choix de repêchage retirés par réponse.");
+            }
+
+            var validRemovedIds = new List<int>();
+
+            if (distinctRemovedIds.Count > 0)
+            {
+                var offerOwnedPickIds = await _dbContext.TradeOfferPicks
+                    .AsNoTracking()
+                    .Where(p => p.TradeOfferId == offerId)
+                    .Select(p => p.DraftPickId)
+                    .ToListAsync(ct);
+
+                var offerOwnedPickSet =
+                    offerOwnedPickIds.ToHashSet();
+
+                foreach (var pickId in distinctRemovedIds)
+                {
+                    if (!offerOwnedPickSet.Contains(pickId))
+                    {
+                        return Failure(
+                            "Un choix de repêchage retiré ne fait pas " +
+                            "partie de l'offre originale.");
+                    }
+
+                    validRemovedIds.Add(pickId);
+                }
+            }
+
             var response = new TradeOfferResponse
             {
                 TradeOfferId = offerId,
                 RespondingFantasyTeamId = respondingTeamId,
                 CreatedAt = DateTime.UtcNow,
                 Status = TradeOfferResponseStatus.Pending,
+                Note = trimmedNote,
             };
 
             foreach (var pick in request.Picks)
@@ -1397,6 +1546,11 @@ offeredPlayerIds, ct);
                 {
                     SlotIndex = pick.SlotIndex,
                     RespondingPlayerId = pick.RespondingPlayerId,
+                    OfferingPlayerOverrideId =
+                        pick.RemoveOfferingPlayer
+                            ? null
+                            : pick.OfferingPlayerOverrideId,
+                    RemoveOfferingPlayer = pick.RemoveOfferingPlayer,
                 });
             }
 
@@ -1412,6 +1566,15 @@ offeredPlayerIds, ct);
             {
                 response.RequestedPicks.Add(
                     new TradeOfferResponseRequestedPick
+                    {
+                        DraftPickId = pickId,
+                    });
+            }
+
+            foreach (var pickId in validRemovedIds)
+            {
+                response.RemovedPicks.Add(
+                    new TradeOfferResponseRemovedPick
                     {
                         DraftPickId = pickId,
                     });
@@ -1498,13 +1661,31 @@ offeredPlayerIds, ct);
             }
 
             // ---- 3. Slot shape ---------------------------------------
-            if (request.Slots == null || request.Slots.Count == 0)
+            //
+            // A direct offer must carry at least one player OR at
+            // least one draft pick. Picks-only offers (zero players,
+            // one or more picks) are allowed, and so are unbalanced
+            // player counts across the two sides.
+            var slotCount = request.Slots?.Count ?? 0;
+            var connectedPickCount =
+                request.ConnectedDraftPickIds?.Count ?? 0;
+            var targetPickCount =
+                request.TargetDraftPickIds?.Count ?? 0;
+
+            var hasAnyNote =
+                !string.IsNullOrWhiteSpace(request.Note);
+
+            if (slotCount == 0 &&
+                connectedPickCount == 0 &&
+                targetPickCount == 0 &&
+                !hasAnyNote)
             {
                 return Failure(
-                    "Ajoutez au moins un joueur a votre offre.");
+                    "Ajoutez au moins un joueur, un choix de " +
+                    "repêchage, ou un message à votre offre.");
             }
 
-            if (request.Slots.Count > 10)
+            if (slotCount > 10)
             {
                 return Failure("Maximum 10 joueurs par offre.");
             }
@@ -1545,21 +1726,36 @@ offeredPlayerIds, ct);
                 .ToDictionary(g => g.Key, g => g.First());
 
             // ---- 6. Validate each slot -------------------------------
+            //
+            // Unbalanced direct offers are allowed: each slot may
+            // carry a player on both sides, only on the connected
+            // side, or only on the target side. A slot that is
+            // empty on both sides is rejected.
             var seenConnected = new HashSet<int>();
             var seenTarget = new HashSet<int>();
 
-            for (var i = 0; i < request.Slots.Count; i++)
+            for (var i = 0; i < slotCount; i++)
             {
-                var slot = request.Slots[i];
+                var slot = request.Slots![i];
 
-                if (!seenConnected.Add(slot.ConnectedPlayerId))
+                if (!slot.ConnectedPlayerId.HasValue &&
+                    !slot.TargetPlayerId.HasValue)
+                {
+                    return Failure(
+                        $"L'emplacement {i + 1} ne contient aucun " +
+                        "joueur d'un cote ou de l'autre.");
+                }
+
+                if (slot.ConnectedPlayerId.HasValue &&
+                    !seenConnected.Add(slot.ConnectedPlayerId.Value))
                 {
                     return Failure(
                         "Le meme joueur ne peut pas apparaitre deux " +
                         "fois dans votre offre.");
                 }
 
-                if (!seenTarget.Add(slot.TargetPlayerId))
+                if (slot.TargetPlayerId.HasValue &&
+                    !seenTarget.Add(slot.TargetPlayerId.Value))
                 {
                     return Failure(
                         "Le meme joueur de l'equipe cible ne peut pas " +
@@ -1571,19 +1767,21 @@ offeredPlayerIds, ct);
                 // positions across the slot, which makes negotiation
                 // easier when two managers value different position
                 // groups.
-                if (!connectedByPlayerId.ContainsKey(
-                        slot.ConnectedPlayerId))
+                if (slot.ConnectedPlayerId.HasValue &&
+                    !connectedByPlayerId.ContainsKey(
+                        slot.ConnectedPlayerId.Value))
                 {
                     return Failure(
-                        $"Le joueur {slot.ConnectedPlayerId} n'est " +
+                        $"Le joueur {slot.ConnectedPlayerId.Value} n'est " +
                         "pas sur votre equipe pour la saison en cours.");
                 }
 
-                if (!targetByPlayerId.ContainsKey(
-                        slot.TargetPlayerId))
+                if (slot.TargetPlayerId.HasValue &&
+                    !targetByPlayerId.ContainsKey(
+                        slot.TargetPlayerId.Value))
                 {
                     return Failure(
-                        $"Le joueur {slot.TargetPlayerId} n'est pas " +
+                        $"Le joueur {slot.TargetPlayerId.Value} n'est pas " +
                         "sur l'equipe cible pour la saison en cours.");
                 }
             }
@@ -1614,37 +1812,54 @@ offeredPlayerIds, ct);
             // Offering players = the TARGET team's players, because
             // they are what the offer's "left" side displays.
             // Offering picks = the TARGET team's picks, same rule.
+            //
+            // The note is NOT stored on the offer. On a direct
+            // offer, the calling user is the one who wrote the
+            // message; the "creator" of the offer is the target
+            // team, who did not write anything. Putting the note on
+            // the offer would make the target's "Vos offres
+            // actives" card show a message he never wrote. The note
+            // goes on the response instead (step 8 below), which is
+            // what the Reçues and Envoyées panels render.
+            var trimmedNote = string.IsNullOrWhiteSpace(request.Note)
+                ? null
+                : request.Note.Trim();
+
             var offer = new TradeOffer
             {
                 CreatedByFantasyTeamId = request.TargetTeamId,
                 SeasonId = season.Id,
                 CreatedAt = DateTime.UtcNow,
-                Note = string.IsNullOrWhiteSpace(request.Note)
-                    ? null
-                    : request.Note.Trim(),
+                Note = null,
                 Status = TradeOfferStatus.Active,
+
+                // Mark the row as a private proposal so no code
+                // path treats it as a public annonce. Everything
+                // that builds a browse list or a browse-badge
+                // count filters on this flag.
+                IsDirectOffer = true,
             };
 
-            for (var i = 0; i < request.Slots.Count; i++)
+            for (var i = 0; i < slotCount; i++)
             {
-                var slot = request.Slots[i];
-                var targetEntry = targetByPlayerId[slot.TargetPlayerId];
-                var targetGroup = PositionGroupHelper.Classify(
-                    targetEntry.Player?.Position);
+                var slot = request.Slots![i];
+
+                // Position group comes from whichever side has a
+                // player. On a slot where only the connected user is
+                // giving a player, we fall back to his position so
+                // the field is still meaningful for display.
+                var positionSourcePlayer = slot.TargetPlayerId.HasValue
+                    ? targetByPlayerId[slot.TargetPlayerId.Value].Player
+                    : connectedByPlayerId[slot.ConnectedPlayerId!.Value].Player;
+
+                var positionGroup = PositionGroupHelper.Classify(
+                    positionSourcePlayer?.Position);
 
                 offer.Slots.Add(new TradeOfferSlot
                 {
                     SlotIndex = i,
-                    PositionGroup = PositionGroupToCode(targetGroup),
+                    PositionGroup = PositionGroupToCode(positionGroup),
                     OfferingPlayerId = slot.TargetPlayerId,
-                    DemandMinContractYears = null,
-                    DemandMaxSalary = null,
-                    DemandMaxAge = null,
-                    DemandMinPointsLastYear = null,
-                    EnforceDemandMinContractYears = true,
-                    EnforceDemandMaxSalary = true,
-                    EnforceDemandMaxAge = true,
-                    EnforceDemandMinPointsLastYear = true,
                 });
             }
 
@@ -1663,17 +1878,30 @@ offeredPlayerIds, ct);
             // Responder = connected user's team. Responding players =
             // the CONNECTED user's players. Responding picks = the
             // CONNECTED user's picks, same rule.
+            //
+            // The note travels on the response (see step 7): it is
+            // the calling user's own message, and both the Reçues
+            // panel (target's view) and the Envoyées panel
+            // (caller's own view) read it from here.
             var response = new TradeOfferResponse
             {
                 TradeOfferId = offer.Id,
                 RespondingFantasyTeamId = connectedTeamId,
                 CreatedAt = DateTime.UtcNow,
                 Status = TradeOfferResponseStatus.Pending,
+                Note = trimmedNote,
             };
 
-            for (var i = 0; i < request.Slots.Count; i++)
+            // One response slot per offer slot, keeping the 1:1 slot
+            // mapping intact. On unbalanced direct offers, a slot
+            // where the connected user is not giving a player still
+            // gets a response row, but with a null RespondingPlayerId.
+            // That preserves the pairing so the response DTO can
+            // render the target's offering player for every slot
+            // without any special-case logic.
+            for (var i = 0; i < slotCount; i++)
             {
-                var slot = request.Slots[i];
+                var slot = request.Slots![i];
 
                 response.Slots.Add(new TradeOfferResponseSlot
                 {
@@ -1729,16 +1957,19 @@ offeredPlayerIds, ct);
 .AsNoTracking()
 .Include(r => r.TradeOffer)
 .ThenInclude(o => o.Slots)
-  .ThenInclude(s => s.OfferingPlayer)
-      .ThenInclude(p => p!.NhlTeam)
+.ThenInclude(s => s.OfferingPlayer)
+.ThenInclude(p => p!.NhlTeam)
 .Include(r => r.TradeOffer)
 .ThenInclude(o => o.CreatedByFantasyTeam)
 .Include(r => r.TradeOffer)
 .ThenInclude(o => o.Season)
 .Include(r => r.RespondingFantasyTeam)
-.Include(r => r.Slots)
-.ThenInclude(s => s.RespondingPlayer)
-  .ThenInclude(p => p!.NhlTeam)
+      .Include(r => r.Slots)
+          .ThenInclude(s => s.RespondingPlayer)
+              .ThenInclude(p => p!.NhlTeam)
+      .Include(r => r.Slots)
+          .ThenInclude(s => s.OfferingPlayerOverride)
+              .ThenInclude(p => p!.NhlTeam)
 .Where(r =>
 r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
 r.TradeOffer.Status == TradeOfferStatus.Active &&
@@ -1755,15 +1986,21 @@ r.Status == TradeOfferResponseStatus.Accepted))
             // Both sides of every slot: the offering player from the
             // original offer, and the responding player.
             var playerIds = responses
-                .SelectMany(r => r.Slots)
-                .Select(s => s.RespondingPlayerId)
-                .Concat(
-                    responses
-                        .SelectMany(r => r.TradeOffer.Slots)
-                        .Where(s => s.OfferingPlayerId.HasValue)
-                        .Select(s => s.OfferingPlayerId!.Value))
-                .Distinct()
-                .ToList();
+      .SelectMany(r => r.Slots)
+      .Where(s => s.RespondingPlayerId.HasValue)
+      .Select(s => s.RespondingPlayerId!.Value)
+      .Concat(
+          responses
+              .SelectMany(r => r.Slots)
+              .Where(s => s.OfferingPlayerOverrideId.HasValue)
+              .Select(s => s.OfferingPlayerOverrideId!.Value))
+      .Concat(
+          responses
+              .SelectMany(r => r.TradeOffer.Slots)
+              .Where(s => s.OfferingPlayerId.HasValue)
+              .Select(s => s.OfferingPlayerId!.Value))
+      .Distinct()
+      .ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
                 playerIds, ct);
@@ -1790,7 +2027,11 @@ r.Status == TradeOfferResponseStatus.Accepted))
                 await LoadResponsePicksByResponseIdAsync(responseIds, ct);
 
             var requestedPicksByResponseId =
-                await LoadRequestedPicksByResponseIdAsync(
+     await LoadRequestedPicksByResponseIdAsync(
+         responseIds, ct);
+
+            var removedPicksByResponseId =
+                await LoadRemovedCreatorPicksByResponseIdAsync(
                     responseIds, ct);
 
             // Cap info for both sides of every response.
@@ -1824,7 +2065,8 @@ r.Status == TradeOfferResponseStatus.Accepted))
          offerPicksByOfferId,
          responsePicksByResponseId,
          requestedPicksByResponseId,
-         seenResponseIds))
+         seenResponseIds,
+         removedPicksByResponseId))
      .ToList();
         }
 
@@ -1847,8 +2089,8 @@ r.Status == TradeOfferResponseStatus.Accepted))
 .AsNoTracking()
 .Include(r => r.TradeOffer)
 .ThenInclude(o => o.Slots)
-   .ThenInclude(s => s.OfferingPlayer)
-       .ThenInclude(p => p!.NhlTeam)
+.ThenInclude(s => s.OfferingPlayer)
+.ThenInclude(p => p!.NhlTeam)
 .Include(r => r.TradeOffer)
 .ThenInclude(o => o.CreatedByFantasyTeam)
 .Include(r => r.TradeOffer)
@@ -1856,7 +2098,10 @@ r.Status == TradeOfferResponseStatus.Accepted))
 .Include(r => r.RespondingFantasyTeam)
 .Include(r => r.Slots)
 .ThenInclude(s => s.RespondingPlayer)
-   .ThenInclude(p => p!.NhlTeam)
+.ThenInclude(p => p!.NhlTeam)
+.Include(r => r.Slots)
+.ThenInclude(s => s.OfferingPlayerOverride)
+.ThenInclude(p => p!.NhlTeam)
 .Where(r =>
 r.RespondingFantasyTeamId == myTeamId &&
 r.TradeOffer.Status == TradeOfferStatus.Active &&
@@ -1873,15 +2118,21 @@ r.Status == TradeOfferResponseStatus.Accepted))
             // Both sides of every slot: the offering player from the
             // original offer, and the responding player.
             var playerIds = responses
+        .SelectMany(r => r.Slots)
+        .Where(s => s.RespondingPlayerId.HasValue)
+        .Select(s => s.RespondingPlayerId!.Value)
+        .Concat(
+            responses
                 .SelectMany(r => r.Slots)
-                .Select(s => s.RespondingPlayerId)
-                .Concat(
-                    responses
-                        .SelectMany(r => r.TradeOffer.Slots)
-                        .Where(s => s.OfferingPlayerId.HasValue)
-                        .Select(s => s.OfferingPlayerId!.Value))
-                .Distinct()
-                .ToList();
+                .Where(s => s.OfferingPlayerOverrideId.HasValue)
+                .Select(s => s.OfferingPlayerOverrideId!.Value))
+        .Concat(
+            responses
+                .SelectMany(r => r.TradeOffer.Slots)
+                .Where(s => s.OfferingPlayerId.HasValue)
+                .Select(s => s.OfferingPlayerId!.Value))
+        .Distinct()
+        .ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
                 playerIds, ct);
@@ -1907,7 +2158,11 @@ r.Status == TradeOfferResponseStatus.Accepted))
                 await LoadResponsePicksByResponseIdAsync(responseIds, ct);
 
             var requestedPicksByResponseId =
-                await LoadRequestedPicksByResponseIdAsync(
+     await LoadRequestedPicksByResponseIdAsync(
+         responseIds, ct);
+
+            var removedPicksByResponseId =
+                await LoadRemovedCreatorPicksByResponseIdAsync(
                     responseIds, ct);
 
             // Cap info for both sides of every response. One query,
@@ -1929,7 +2184,9 @@ r.Status == TradeOfferResponseStatus.Accepted))
          teamCapInfo,
          offerPicksByOfferId,
          responsePicksByResponseId,
-         requestedPicksByResponseId))
+         requestedPicksByResponseId,
+         null,
+         removedPicksByResponseId))
      .ToList();
         }
 
@@ -2158,21 +2415,24 @@ r.Status == TradeOfferResponseStatus.Accepted))
       ListAcceptedTradesAsync(CancellationToken ct = default)
         {
             var responses = await _dbContext.TradeOfferResponses
-                .AsNoTracking()
-                .Include(r => r.TradeOffer)
-                    .ThenInclude(o => o.CreatedByFantasyTeam)
-                .Include(r => r.TradeOffer)
-                    .ThenInclude(o => o.Slots)
-                        .ThenInclude(s => s.OfferingPlayer)
-                            .ThenInclude(p => p!.NhlTeam)
-                .Include(r => r.RespondingFantasyTeam)
-                .Include(r => r.Slots)
-                    .ThenInclude(s => s.RespondingPlayer)
-                        .ThenInclude(p => p!.NhlTeam)
-                .Where(r =>
-                    r.Status == TradeOfferResponseStatus.Accepted)
-                .OrderByDescending(r => r.CreatedAt)
-                .ToListAsync(ct);
+     .AsNoTracking()
+     .Include(r => r.TradeOffer)
+         .ThenInclude(o => o.CreatedByFantasyTeam)
+     .Include(r => r.TradeOffer)
+         .ThenInclude(o => o.Slots)
+             .ThenInclude(s => s.OfferingPlayer)
+                 .ThenInclude(p => p!.NhlTeam)
+     .Include(r => r.RespondingFantasyTeam)
+     .Include(r => r.Slots)
+         .ThenInclude(s => s.RespondingPlayer)
+             .ThenInclude(p => p!.NhlTeam)
+     .Include(r => r.Slots)
+         .ThenInclude(s => s.OfferingPlayerOverride)
+             .ThenInclude(p => p!.NhlTeam)
+     .Where(r =>
+         r.Status == TradeOfferResponseStatus.Accepted)
+     .OrderByDescending(r => r.CreatedAt)
+     .ToListAsync(ct);
 
             if (responses.Count == 0)
             {
@@ -2196,7 +2456,11 @@ r.Status == TradeOfferResponseStatus.Accepted))
                 await LoadResponsePicksByResponseIdAsync(responseIds, ct);
 
             var requestedPicksByResponseId =
-                await LoadRequestedPicksByResponseIdAsync(
+      await LoadRequestedPicksByResponseIdAsync(
+          responseIds, ct);
+
+            var removedPicksByResponseId =
+                await LoadRemovedCreatorPicksByResponseIdAsync(
                     responseIds, ct);
 
             return responses
@@ -2277,6 +2541,10 @@ r.Status == TradeOfferResponseStatus.Accepted))
                             ?? new List<DraftPickDto>(),
 
                         RespondingPicks = responsePicksByResponseId
+                            .GetValueOrDefault(r.Id)
+                            ?? new List<DraftPickDto>(),
+
+                        RemovedCreatorPicks = removedPicksByResponseId
                             .GetValueOrDefault(r.Id)
                             ?? new List<DraftPickDto>(),
                     };
@@ -2392,20 +2660,23 @@ int responseId,
 CancellationToken ct)
         {
             var response = await _dbContext.TradeOfferResponses
-     .AsNoTracking()
-     .Include(r => r.TradeOffer)
-         .ThenInclude(o => o.Slots)
-             .ThenInclude(s => s.OfferingPlayer)
-                 .ThenInclude(p => p!.NhlTeam)
-     .Include(r => r.TradeOffer)
-         .ThenInclude(o => o.CreatedByFantasyTeam)
-     .Include(r => r.TradeOffer)
-         .ThenInclude(o => o.Season)
-     .Include(r => r.RespondingFantasyTeam)
-     .Include(r => r.Slots)
-         .ThenInclude(s => s.RespondingPlayer)
-             .ThenInclude(p => p!.NhlTeam)
-     .FirstOrDefaultAsync(r => r.Id == responseId, ct);
+.AsNoTracking()
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.Slots)
+   .ThenInclude(s => s.OfferingPlayer)
+       .ThenInclude(p => p!.NhlTeam)
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.CreatedByFantasyTeam)
+.Include(r => r.TradeOffer)
+.ThenInclude(o => o.Season)
+.Include(r => r.RespondingFantasyTeam)
+.Include(r => r.Slots)
+.ThenInclude(s => s.RespondingPlayer)
+   .ThenInclude(p => p!.NhlTeam)
+.Include(r => r.Slots)
+.ThenInclude(s => s.OfferingPlayerOverride)
+   .ThenInclude(p => p!.NhlTeam)
+.FirstOrDefaultAsync(r => r.Id == responseId, ct);
 
             if (response == null)
             {
@@ -2416,13 +2687,18 @@ CancellationToken ct)
             // the offering player from the original offer, and the
             // responding player.
             var playerIds = response.Slots
-     .Select(s => s.RespondingPlayerId)
-     .Concat(
-         response.TradeOffer.Slots
-             .Where(s => s.OfferingPlayerId.HasValue)
-             .Select(s => s.OfferingPlayerId!.Value))
-     .Distinct()
-     .ToList();
+.Where(s => s.RespondingPlayerId.HasValue)
+.Select(s => s.RespondingPlayerId!.Value)
+.Concat(
+ response.Slots
+     .Where(s => s.OfferingPlayerOverrideId.HasValue)
+     .Select(s => s.OfferingPlayerOverrideId!.Value))
+.Concat(
+ response.TradeOffer.Slots
+     .Where(s => s.OfferingPlayerId.HasValue)
+     .Select(s => s.OfferingPlayerId!.Value))
+.Distinct()
+.ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
                 playerIds, ct);
@@ -2438,7 +2714,11 @@ CancellationToken ct)
                     new[] { response.Id }, ct);
 
             var requestedPicksByResponseId =
-                await LoadRequestedPicksByResponseIdAsync(
+       await LoadRequestedPicksByResponseIdAsync(
+           new[] { response.Id }, ct);
+
+            var removedPicksByResponseId =
+                await LoadRemovedCreatorPicksByResponseIdAsync(
                     new[] { response.Id }, ct);
 
             var teamCapInfo = await LoadCreatorTeamCapInfoAsync(
@@ -2456,7 +2736,9 @@ CancellationToken ct)
                 teamCapInfo,
                 offerPicksByOfferId,
                 responsePicksByResponseId,
-                requestedPicksByResponseId);
+                requestedPicksByResponseId,
+                null,
+                removedPicksByResponseId);
         }
 
         private async Task<Dictionary<int, List<PlayerContract>>>
@@ -2605,6 +2887,43 @@ CancellationToken ct)
             }
 
             var rows = await _dbContext.TradeOfferResponseRequestedPicks
+                .AsNoTracking()
+                .Where(p => responseIds.Contains(p.TradeOfferResponseId))
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.Draft)
+                        .ThenInclude(d => d.Season)
+                .Include(p => p.DraftPick)
+                    .ThenInclude(d => d.OriginalOwnerFantasyTeam)
+                .ToListAsync(ct);
+
+            return rows
+        .GroupBy(r => r.TradeOfferResponseId)
+        .ToDictionary(
+            g => g.Key,
+            g => g
+                .Select(r => ToDraftPickDto(r.DraftPick))
+                .OrderBy(p => p.NhlSeasonCode)
+                .ThenBy(p => p.Round)
+                .ThenBy(p => p.PickNumber)
+                .ToList());
+        }
+
+        /// <summary>
+        /// Bulk-loads the draft picks the responder REMOVED from the
+        /// offer's own pick list, keyed by TradeOfferResponseId.
+        /// Same ordering rule as the other pick loaders.
+        /// </summary>
+        private async Task<Dictionary<int, List<DraftPickDto>>>
+            LoadRemovedCreatorPicksByResponseIdAsync(
+                IReadOnlyCollection<int> responseIds,
+                CancellationToken ct)
+        {
+            if (responseIds.Count == 0)
+            {
+                return new Dictionary<int, List<DraftPickDto>>();
+            }
+
+            var rows = await _dbContext.TradeOfferResponseRemovedPicks
                 .AsNoTracking()
                 .Where(p => responseIds.Contains(p.TradeOfferResponseId))
                 .Include(p => p.DraftPick)
@@ -2840,38 +3159,24 @@ IReadOnlyDictionary<int, List<DraftPickDto>>? picksByOfferId = null)
                             PositionGroup = s.PositionGroup,
                             OfferingPlayerId = s.OfferingPlayerId,
                             OfferingPlayerNhlPlayerId =
-            s.OfferingPlayer?.NhlPlayerId,
+           s.OfferingPlayer?.NhlPlayerId,
                             OfferingPlayerFirstName =
-            s.OfferingPlayer?.FirstName,
+           s.OfferingPlayer?.FirstName,
                             OfferingPlayerLastName =
-                                s.OfferingPlayer?.LastName,
+           s.OfferingPlayer?.LastName,
                             OfferingPlayerNhlTeam =
-                                s.OfferingPlayer?.NhlTeam?.Abbreviation,
+           s.OfferingPlayer?.NhlTeam?.Abbreviation,
                             OfferingPlayerPosition =
-                                s.OfferingPlayer?.Position,
+           s.OfferingPlayer?.Position,
                             OfferingPlayerAge = CalculateAge(
-                                s.OfferingPlayer?.BirthDate),
+           s.OfferingPlayer?.BirthDate),
                             OfferingPlayerRosterStatus = offeringStatus,
                             OfferingPlayerCurrentContract = current,
                             OfferingPlayerSecondContract = second,
                             OfferingPlayerCurrentSeasonStats =
-                                currentStats,
+           currentStats,
                             OfferingPlayerLastSeasonStats =
-                                previousStats,
-                            DemandMinContractYears =
-                                s.DemandMinContractYears,
-                            DemandMaxSalary = s.DemandMaxSalary,
-                            DemandMaxAge = s.DemandMaxAge,
-                            DemandMinPointsLastYear =
-                                s.DemandMinPointsLastYear,
-                            EnforceDemandMinContractYears =
-                                s.EnforceDemandMinContractYears,
-                            EnforceDemandMaxSalary =
-                                s.EnforceDemandMaxSalary,
-                            EnforceDemandMaxAge =
-                                s.EnforceDemandMaxAge,
-                            EnforceDemandMinPointsLastYear =
-                                s.EnforceDemandMinPointsLastYear,
+           previousStats,
                         };
                     })
                     .ToList(),
@@ -2891,7 +3196,8 @@ CreatorTeamCapInfo? teamCapInfo = null,
 IReadOnlyDictionary<int, List<DraftPickDto>>? offerPicksByOfferId = null,
 IReadOnlyDictionary<int, List<DraftPickDto>>? responsePicksByResponseId = null,
 IReadOnlyDictionary<int, List<DraftPickDto>>? requestedPicksByResponseId = null,
-IReadOnlySet<int>? seenResponseIds = null)
+IReadOnlySet<int>? seenResponseIds = null,
+IReadOnlyDictionary<int, List<DraftPickDto>>? removedPicksByResponseId = null)
         {
             var offerSlotsByIndex = response.TradeOffer.Slots
                 .ToDictionary(s => s.SlotIndex);
@@ -2923,6 +3229,7 @@ IReadOnlySet<int>? seenResponseIds = null)
                 Id = response.Id,
                 TradeOfferId = response.TradeOfferId,
                 TradeOfferNote = response.TradeOffer.Note,
+                Note = response.Note,
                 TradeOfferCreatedByFantasyTeamId =
                     response.TradeOffer.CreatedByFantasyTeamId,
                 TradeOfferCreatedByFantasyTeamName =
@@ -2967,38 +3274,58 @@ IReadOnlySet<int>? seenResponseIds = null)
                                 s.RespondingPlayerId,
                                 statsByPlayerId);
 
-                        // ---- LEFT side: offering player on the original offer ----
+                        // ---- LEFT side: offering player.
+                        //
+                        // Three cases:
+                        //   - RemoveOfferingPlayer: the responder
+                        //     explicitly emptied the offering side,
+                        //     so show nothing regardless of what the
+                        //     offer slot's own player was.
+                        //   - OfferingPlayerOverride: use that
+                        //     player.
+                        //   - Otherwise: use the offer slot's own
+                        //     OfferingPlayer.
+                        var effectiveOfferingPlayer =
+                            s.RemoveOfferingPlayer
+                                ? null
+                                : (s.OfferingPlayerOverride
+                                    ?? offerSlot?.OfferingPlayer);
+
+                        var effectiveOfferingPlayerId =
+                            effectiveOfferingPlayer?.Id;
+
                         var (offeringCurrent, offeringSecond) =
                             ResolveContractLinesForSlot(
-                                offerSlot?.OfferingPlayerId,
+                                effectiveOfferingPlayerId,
                                 contractsByPlayerId);
 
                         var (offeringCurrentStats, offeringPrevStats) =
                             ResolveStatLinesForSlot(
-                                offerSlot?.OfferingPlayerId,
+                                effectiveOfferingPlayerId,
                                 statsByPlayerId);
 
                         return new TradeOfferResponseSlotDto
                         {
                             SlotIndex = s.SlotIndex,
                             PositionGroup =
-                                offerSlot?.PositionGroup ?? string.Empty,
+          offerSlot?.PositionGroup ?? string.Empty,
 
-                            // LEFT: offering side, copied from the
-                            // original offer slot.
-                            OfferingPlayerId = offerSlot?.OfferingPlayerId,
+                            RemoveOfferingPlayer =
+          s.RemoveOfferingPlayer,
+
+                            OfferingPlayerId = effectiveOfferingPlayerId,
                             OfferingPlayerNhlPlayerId =
-                                offerSlot?.OfferingPlayer?.NhlPlayerId,
+                                effectiveOfferingPlayer?.NhlPlayerId,
                             OfferingPlayerFirstName =
-                                offerSlot?.OfferingPlayer?.FirstName,
+                                effectiveOfferingPlayer?.FirstName,
                             OfferingPlayerLastName =
-                                offerSlot?.OfferingPlayer?.LastName,
+                                effectiveOfferingPlayer?.LastName,
                             OfferingPlayerNhlTeam =
-                                offerSlot?.OfferingPlayer?.NhlTeam?.Abbreviation,
+                                effectiveOfferingPlayer?.NhlTeam?.Abbreviation,
                             OfferingPlayerPosition =
-                                offerSlot?.OfferingPlayer?.Position,
+                                effectiveOfferingPlayer?.Position,
                             OfferingPlayerAge = CalculateAge(
-                                offerSlot?.OfferingPlayer?.BirthDate),
+                                effectiveOfferingPlayer?.BirthDate),
                             OfferingPlayerCurrentContract = offeringCurrent,
                             OfferingPlayerSecondContract = offeringSecond,
                             OfferingPlayerCurrentSeasonStats =
@@ -3026,14 +3353,6 @@ IReadOnlySet<int>? seenResponseIds = null)
                                 respondCurrentStats,
                             RespondingPlayerLastSeasonStats =
                                 respondPrevStats,
-
-                            // Demand filters (kept on the DTO).
-                            DemandMinContractYears =
-                                offerSlot?.DemandMinContractYears,
-                            DemandMaxSalary = offerSlot?.DemandMaxSalary,
-                            DemandMaxAge = offerSlot?.DemandMaxAge,
-                            DemandMinPointsLastYear =
-                                offerSlot?.DemandMinPointsLastYear,
                         };
                     })
                     .ToList(),
@@ -3057,6 +3376,13 @@ IReadOnlySet<int>? seenResponseIds = null)
                     responsePicksByResponseId.TryGetValue(
                         response.Id, out var respondingPicks)
                         ? respondingPicks
+                        : new List<DraftPickDto>(),
+
+                RemovedCreatorPicks =
+                    removedPicksByResponseId != null &&
+                    removedPicksByResponseId.TryGetValue(
+                        response.Id, out var removedPicks)
+                        ? removedPicks
                         : new List<DraftPickDto>(),
             };
         }

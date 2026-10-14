@@ -25,9 +25,13 @@
     <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\AuthContext.tsx" />
     <None Remove="frontend\src\lib\directOfferState.ts" />
+    <None Remove="frontend\src\lib\marketplaceExtraResponderSlots.ts" />
     <None Remove="frontend\src\lib\marketplaceNotificationsStore.ts" />
+    <None Remove="frontend\src\lib\marketplaceOfferingOverrides.ts" />
     <None Remove="frontend\src\lib\marketplacePicksState.ts" />
     <None Remove="frontend\src\lib\marketplacePopupRestoration.ts" />
+    <None Remove="frontend\src\lib\marketplaceRemovedCreatorPicksState.ts" />
+    <None Remove="frontend\src\lib\marketplaceResponseNotesState.ts" />
     <None Remove="frontend\src\lib\marketplaceSectionState.ts" />
     <None Remove="frontend\src\lib\marketplaceTradeState.ts" />
     <None Remove="frontend\src\lib\nhlTeamColors.ts" />
@@ -67,9 +71,13 @@
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\directOfferState.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplaceExtraResponderSlots.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceNotificationsStore.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplaceOfferingOverrides.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplacePicksState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplacePopupRestoration.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplaceRemovedCreatorPicksState.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplaceResponseNotesState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceSectionState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceTradeState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\nhlTeamColors.ts" />

@@ -136,6 +136,16 @@ namespace NhlFantasyLeague.api.Data
             TradeOfferResponseRequestedPicks
         { get; set; }
 
+        /// <summary>
+        /// Draft picks the responder is REMOVING from the offer's
+        /// own pick list, attached to a marketplace response.
+        /// Subtracted from whatever the offer already carries.
+        /// Referenced, not transferred.
+        /// </summary>
+        public DbSet<TradeOfferResponseRemovedPick>
+            TradeOfferResponseRemovedPicks
+        { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Identity first, so all its table config is registered.
@@ -644,35 +654,8 @@ namespace NhlFantasyLeague.api.Data
                 .OnDelete(DeleteBehavior.Restrict);
 
             modelBuilder.Entity<TradeOfferSlot>()
-                .Property(s => s.PositionGroup)
-                .HasMaxLength(1);
-
-            modelBuilder.Entity<TradeOfferSlot>()
-         .Property(s => s.DemandMaxSalary)
-         .HasPrecision(18, 2);
-
-            // Every per-criterion strict flag defaults to true, which
-            // is what every existing row gets when these columns are
-            // added by the migration. It also means an omitted field
-            // in the create-offer JSON body keeps the strict
-            // behavior. An explicit false flips that one criterion to
-            // "display as a preference, do not filter the responder's
-            // dropdown".
-            modelBuilder.Entity<TradeOfferSlot>()
-                .Property(s => s.EnforceDemandMinContractYears)
-                .HasDefaultValue(true);
-
-            modelBuilder.Entity<TradeOfferSlot>()
-                .Property(s => s.EnforceDemandMaxSalary)
-                .HasDefaultValue(true);
-
-            modelBuilder.Entity<TradeOfferSlot>()
-                .Property(s => s.EnforceDemandMaxAge)
-                .HasDefaultValue(true);
-
-            modelBuilder.Entity<TradeOfferSlot>()
-                .Property(s => s.EnforceDemandMinPointsLastYear)
-                .HasDefaultValue(true);
+      .Property(s => s.PositionGroup)
+      .HasMaxLength(1);
 
             modelBuilder.Entity<TradeOfferSlot>()
                 .HasIndex(s => new { s.TradeOfferId, s.SlotIndex })
@@ -774,8 +757,15 @@ namespace NhlFantasyLeague.api.Data
 
             // Status is stored as its string name so the DB is readable.
             modelBuilder.Entity<TradeOfferResponse>()
-                .Property(r => r.Status)
-                .HasConversion<string>();
+      .Property(r => r.Status)
+      .HasConversion<string>();
+
+            // Optional free-text message from the responding
+            // manager. Matches TradeOffer.Note's max length so both
+            // messages have the same UI budget.
+            modelBuilder.Entity<TradeOfferResponse>()
+                .Property(r => r.Note)
+                .HasMaxLength(1000);
 
             // Lookup: "every response on offer X" is the hot path for
             // the "Offres reçues" list. One index is enough.
@@ -789,10 +779,23 @@ namespace NhlFantasyLeague.api.Data
                 .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<TradeOfferResponseSlot>()
-                .HasOne(s => s.RespondingPlayer)
-                .WithMany()
-                .HasForeignKey(s => s.RespondingPlayerId)
-                .OnDelete(DeleteBehavior.Restrict);
+      .HasOne(s => s.RespondingPlayer)
+      .WithMany()
+      .HasForeignKey(s => s.RespondingPlayerId)
+      .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<TradeOfferResponseSlot>()
+      .HasOne(s => s.OfferingPlayerOverride)
+      .WithMany()
+      .HasForeignKey(s => s.OfferingPlayerOverrideId)
+      .OnDelete(DeleteBehavior.Restrict);
+
+            // Default false so existing rows (which predate this
+            // column) behave exactly as before: fall through to the
+            // offer slot's own offering player.
+            modelBuilder.Entity<TradeOfferResponseSlot>()
+                .Property(s => s.RemoveOfferingPlayer)
+                .HasDefaultValue(false);
 
             // One pick per slot per response.
             modelBuilder.Entity<TradeOfferResponseSlot>()
@@ -844,6 +847,34 @@ namespace NhlFantasyLeague.api.Data
 
             // One request per response, no duplicates.
             modelBuilder.Entity<TradeOfferResponseRequestedPick>()
+                .HasIndex(p => new
+                {
+                    p.TradeOfferResponseId,
+                    p.DraftPickId
+                })
+                .IsUnique();
+
+            // -----------------------------------------------------------------
+            // TradeOfferResponseRemovedPick (Marketplace — removed creator picks)
+            // -----------------------------------------------------------------
+
+            // Cascade from the response: deleting a response drops its
+            // removed-pick rows too. Restrict on DraftPick for the same
+            // reason as the other pick-join tables.
+            modelBuilder.Entity<TradeOfferResponseRemovedPick>()
+                .HasOne(p => p.TradeOfferResponse)
+                .WithMany(r => r.RemovedPicks)
+                .HasForeignKey(p => p.TradeOfferResponseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeOfferResponseRemovedPick>()
+                .HasOne(p => p.DraftPick)
+                .WithMany()
+                .HasForeignKey(p => p.DraftPickId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // One removal per response, no duplicates.
+            modelBuilder.Entity<TradeOfferResponseRemovedPick>()
                 .HasIndex(p => new
                 {
                     p.TradeOfferResponseId,

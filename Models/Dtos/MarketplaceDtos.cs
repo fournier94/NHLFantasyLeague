@@ -5,12 +5,6 @@
         public List<CreateTradeOfferSlotRequest> Slots { get; set; } = new();
         public string? Note { get; set; }
 
-        /// <summary>
-        /// Ids of the draft picks the creator's team is putting on
-        /// the table. Each id must reference a DraftPick whose
-        /// CurrentOwnerFantasyTeamId is the creator's team.
-        /// Referenced, not transferred.
-        /// </summary>
         public List<int> DraftPickIds { get; set; } = new();
     }
 
@@ -18,15 +12,6 @@
     {
         public string PositionGroup { get; set; } = string.Empty;
         public int? OfferingPlayerId { get; set; }
-        public int? DemandMinContractYears { get; set; }
-        public decimal? DemandMaxSalary { get; set; }
-        public int? DemandMaxAge { get; set; }
-        public int? DemandMinPointsLastYear { get; set; }
-
-        public bool EnforceDemandMinContractYears { get; set; } = true;
-        public bool EnforceDemandMaxSalary { get; set; } = true;
-        public bool EnforceDemandMaxAge { get; set; } = true;
-        public bool EnforceDemandMinPointsLastYear { get; set; } = true;
     }
 
     public class TradeOfferDto
@@ -46,9 +31,6 @@
 
         public List<TradeOfferSlotDto> Slots { get; set; } = new();
 
-        /// <summary>
-        /// Draft picks the offer's creator is putting on the table.
-        /// </summary>
         public List<DraftPickDto> Picks { get; set; } = new();
     }
 
@@ -69,16 +51,6 @@
         public PlayerContractLineDto? OfferingPlayerSecondContract { get; set; }
         public SeasonStatLineDto? OfferingPlayerCurrentSeasonStats { get; set; }
         public SeasonStatLineDto? OfferingPlayerLastSeasonStats { get; set; }
-
-        public int? DemandMinContractYears { get; set; }
-        public decimal? DemandMaxSalary { get; set; }
-        public int? DemandMaxAge { get; set; }
-        public int? DemandMinPointsLastYear { get; set; }
-
-        public bool EnforceDemandMinContractYears { get; set; } = true;
-        public bool EnforceDemandMaxSalary { get; set; } = true;
-        public bool EnforceDemandMaxAge { get; set; } = true;
-        public bool EnforceDemandMinPointsLastYear { get; set; } = true;
     }
 
     public class TradeOfferActionResultDto
@@ -99,12 +71,6 @@
         public List<int> ResponseIds { get; set; } = new();
     }
 
-    /// <summary>
-    /// Navbar badge payload: how many offers the current user has
-    /// not yet seen on the browse tab, and how many responses to his
-    /// own offers he has not yet seen on the received tab. Total is
-    /// the sum, and is what the badge renders.
-    /// </summary>
     public class MarketplaceNotificationCountDto
     {
         public int UnseenOffers { get; set; }
@@ -117,6 +83,13 @@
         public int Id { get; set; }
         public int TradeOfferId { get; set; }
         public string? TradeOfferNote { get; set; }
+
+        /// <summary>
+        /// Optional free-text message from the responding manager.
+        /// Distinct from TradeOfferNote, which is the message the
+        /// offer's creator wrote when he published the offer.
+        /// </summary>
+        public string? Note { get; set; }
 
         public int TradeOfferCreatedByFantasyTeamId { get; set; }
         public string TradeOfferCreatedByFantasyTeamName { get; set; } =
@@ -132,35 +105,21 @@
         public DateTime CreatedAt { get; set; }
         public string Status { get; set; } = string.Empty;
 
-        /// <summary>
-        /// True when this response is still Pending and the current
-        /// user has never loaded the Reçues panel with this response
-        /// in view. Drives the "Nouvelle offre" badge on the Reçues
-        /// card and the navbar notification count.
-        /// </summary>
         public bool IsNew { get; set; }
 
         public List<TradeOfferResponseSlotDto> Slots { get; set; } = new();
 
-        /// <summary>
-        /// Draft picks the original offer's creator is putting on
-        /// the table (from TradeOffer.Picks). Rendered on the LEFT
-        /// side of the response card.
-        /// </summary>
         public List<DraftPickDto> CreatorPicks { get; set; } = new();
 
-        /// <summary>
-        /// Additional draft picks the RESPONDING team is requesting
-        /// from the offer's creator, on top of the offer's own
-        /// picks. Also rendered on the LEFT side (creator's side).
-        /// </summary>
         public List<DraftPickDto> RequestedPicks { get; set; } = new();
 
-        /// <summary>
-        /// Draft picks the responding team is putting on the table.
-        /// Rendered on the RIGHT side.
-        /// </summary>
         public List<DraftPickDto> RespondingPicks { get; set; } = new();
+
+        /// <summary>
+        /// Draft picks the responding team removed from the offer
+        /// creator's own pick list. The final deal excludes these.
+        /// </summary>
+        public List<DraftPickDto> RemovedCreatorPicks { get; set; } = new();
     }
 
     public class TradeOfferResponseSlotDto
@@ -180,7 +139,16 @@
         public SeasonStatLineDto? OfferingPlayerCurrentSeasonStats { get; set; }
         public SeasonStatLineDto? OfferingPlayerLastSeasonStats { get; set; }
 
-        public int RespondingPlayerId { get; set; }
+        /// <summary>
+        /// True when the responder explicitly emptied the offering
+        /// side of this slot. When true, all OfferingPlayer* fields
+        /// are null by design; the flag distinguishes "the responder
+        /// cleared the creator's player" from "the creator never
+        /// offered anyone on this slot".
+        /// </summary>
+        public bool RemoveOfferingPlayer { get; set; }
+
+        public int? RespondingPlayerId { get; set; }
         public int? RespondingPlayerNhlPlayerId { get; set; }
         public string? RespondingPlayerFirstName { get; set; }
         public string? RespondingPlayerLastName { get; set; }
@@ -191,11 +159,6 @@
         public PlayerContractLineDto? RespondingPlayerSecondContract { get; set; }
         public SeasonStatLineDto? RespondingPlayerCurrentSeasonStats { get; set; }
         public SeasonStatLineDto? RespondingPlayerLastSeasonStats { get; set; }
-
-        public int? DemandMinContractYears { get; set; }
-        public decimal? DemandMaxSalary { get; set; }
-        public int? DemandMaxAge { get; set; }
-        public int? DemandMinPointsLastYear { get; set; }
     }
 
     public class RespondToTradeOfferRequest
@@ -203,31 +166,61 @@
         public List<RespondToTradeOfferPickDto> Picks { get; set; } = new();
 
         /// <summary>
-        /// Ids of the responding team's draft picks being offered.
-        /// Each id must reference a DraftPick owned by the
-        /// responding team.
+        /// Optional free-text message from the responding manager.
+        /// A response may be sent with this Note as its only content
+        /// (no players, no picks), so managers can send a message
+        /// like "what would you offer for this player?" without
+        /// committing to a full trade shape.
         /// </summary>
+        public string? Note { get; set; }
+
         public List<int> DraftPickIds { get; set; } = new();
 
-        /// <summary>
-        /// Ids of the offer CREATOR's draft picks the responding
-        /// team is requesting on top of whatever the offer already
-        /// carries. Each id must reference a DraftPick owned by the
-        /// offer's creator.
-        /// </summary>
         public List<int> RequestedDraftPickIds { get; set; } = new();
+
+        /// <summary>
+        /// Draft picks the responding team is REMOVING from the
+        /// offer's own pick list. Each id must reference a pick
+        /// already offered on the original TradeOffer.
+        /// </summary>
+        public List<int> RemovedCreatorDraftPickIds { get; set; } = new();
     }
 
     public class RespondToTradeOfferPickDto
     {
         public int SlotIndex { get; set; }
-        public int RespondingPlayerId { get; set; }
+
+        /// <summary>
+        /// The responding player for this slot. Null is allowed on
+        /// unbalanced direct offers where the responder did not give
+        /// a player for one of the target's slots.
+        /// </summary>
+        public int? RespondingPlayerId { get; set; }
+
+        /// <summary>
+        /// Optional player on the OFFERING side of this slot, chosen
+        /// by the responder to replace the offer creator's own
+        /// choice, or to add a player where the creator left the
+        /// offering side empty. Null leaves the offer creator's
+        /// player (if any) in place.
+        /// </summary>
+        public int? OfferingPlayerOverrideId { get; set; }
+
+        /// <summary>
+        /// When true, the responder explicitly empties the offering
+        /// side of this slot: the offer creator's own player is
+        /// ignored and the response says "leave this slot empty on
+        /// the offering side". Mutually exclusive with
+        /// OfferingPlayerOverrideId: when this is true, that must be
+        /// null.
+        /// </summary>
+        public bool RemoveOfferingPlayer { get; set; }
     }
 
     public class CreateDirectOfferSlotRequest
     {
-        public int ConnectedPlayerId { get; set; }
-        public int TargetPlayerId { get; set; }
+        public int? ConnectedPlayerId { get; set; }
+        public int? TargetPlayerId { get; set; }
     }
 
     public class CreateDirectOfferRequest
@@ -255,23 +248,17 @@
 
         public List<AdminAcceptedTradeSlotDto> Slots { get; set; } = new();
 
-        /// <summary>
-        /// Draft picks the offer creator is giving away (from
-        /// TradeOffer.Picks).
-        /// </summary>
         public List<DraftPickDto> OfferCreatorPicks { get; set; } = new();
-
-        /// <summary>
-        /// Additional draft picks the offer creator is giving away,
-        /// requested by the responding team (from
-        /// TradeOfferResponseRequestedPick).
-        /// </summary>
         public List<DraftPickDto> RequestedPicks { get; set; } = new();
+        public List<DraftPickDto> RespondingPicks { get; set; } = new();
 
         /// <summary>
-        /// Draft picks the responding team is giving away.
+        /// Draft picks the responding team removed from the offer
+        /// creator's own pick list. Already excluded from
+        /// OfferCreatorPicks on the response shape; kept here so the
+        /// admin can see what was removed.
         /// </summary>
-        public List<DraftPickDto> RespondingPicks { get; set; } = new();
+        public List<DraftPickDto> RemovedCreatorPicks { get; set; } = new();
     }
 
     public class AdminAcceptedTradeSlotDto
@@ -285,7 +272,7 @@
         public string? OfferingPlayerLastName { get; set; }
         public string? OfferingPlayerNhlTeam { get; set; }
 
-        public int RespondingPlayerId { get; set; }
+        public int? RespondingPlayerId { get; set; }
         public int? RespondingPlayerNhlPlayerId { get; set; }
         public string? RespondingPlayerFirstName { get; set; }
         public string? RespondingPlayerLastName { get; set; }

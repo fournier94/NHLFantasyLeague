@@ -42,6 +42,25 @@
 
         public TradeOfferStatus Status { get; set; } = TradeOfferStatus.Active;
 
+        /// <summary>
+        /// True when this TradeOffer was synthesized by the "Créer"
+        /// tab's direct-offer flow, and therefore represents a
+        /// PRIVATE proposal between two managers rather than a
+        /// public annonce.
+        ///
+        /// Direct offers still need a TradeOffer row (the target
+        /// manager reads it on his Reçues panel and the sender
+        /// reads it on his Envoyées panel), so the row exists. But
+        /// it must NEVER appear in any other manager's "Voir les
+        /// offres" browse list, and it must not bump the browse
+        /// notification badge for anyone.
+        ///
+        /// Public annonces (created by the "Publier une annonce"
+        /// form) leave this false; every code path that builds a
+        /// browse list or a browse-badge count filters on it.
+        /// </summary>
+        public bool IsDirectOffer { get; set; }
+
         public ICollection<TradeOfferSlot> Slots { get; set; }
             = new List<TradeOfferSlot>();
 

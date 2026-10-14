@@ -2861,11 +2861,18 @@ PlayerSeasonStat? seasonStat = null)
             // Pass 2: pending or accepted responses that used any
             // of these players on the responder's side, restricted
             // to offers we are NOT already deleting.
+            //
+            // RespondingPlayerId is nullable now (unbalanced direct
+            // offers can leave it null on a slot the responder did
+            // not fill), so the Contains has to run against the
+            // unwrapped int. EF translates the HasValue + .Value
+            // pair into a plain "IN (...) AND IS NOT NULL" in SQL.
             var responseIdsToDelete = await _dbContext
                 .TradeOfferResponseSlots
                 .AsNoTracking()
                 .Where(s =>
-                    playerIds.Contains(s.RespondingPlayerId) &&
+                    s.RespondingPlayerId.HasValue &&
+                    playerIds.Contains(s.RespondingPlayerId.Value) &&
                     (s.TradeOfferResponse.Status ==
                         TradeOfferResponseStatus.Pending ||
                      s.TradeOfferResponse.Status ==

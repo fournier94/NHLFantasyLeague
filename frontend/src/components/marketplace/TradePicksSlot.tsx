@@ -40,6 +40,12 @@ import type { DraftPick } from '@/api/client';
  *   - The label font is one step smaller than the standalone button
  *     font: text-[0.75rem] on phones, text-[0.85rem] from sm up.
  *
+ * Column spacing:
+ *   - The wrapper uses gap-3 (12px) so the chips and the "Ajouter
+ *     un choix" button breathe. gap-1 (4px) made them hug each
+ *     other, which read as a single control rather than two
+ *     distinct elements.
+ *
  * Edit-in-place behavior:
  *   - Clicking the body of a removable chip opens the picker with
  *     the chip's pick id recorded as `editingPickId`. When the user
@@ -185,7 +191,7 @@ export function TradePicksSlot({
         editingPickId != null ? 'Changer le choix' : 'Ajouter un choix';
 
     return (
-        <div className='flex w-full min-w-0 flex-col items-center gap-1 text-center'>
+        <div className='flex w-full min-w-0 flex-col items-center gap-3 text-center'>
             {selectedPicks.map((pick) => {
                 const locked = isLocked(pick.id);
                 const canEdit = editable && !locked;
@@ -214,8 +220,8 @@ export function TradePicksSlot({
                                 : undefined
                         }
                         className={`relative flex w-full max-w-[20rem] items-center rounded border border-[#00E5FF]/40 bg-[#080D1A] py-1.5 pl-3 ${canEdit
-                                ? 'cursor-pointer pr-10 transition-colors hover:bg-[#00E5FF]/10 focus:outline-none focus-visible:bg-[#00E5FF]/15'
-                                : 'pr-3'
+                            ? 'cursor-pointer pr-10 transition-colors hover:bg-[#00E5FF]/10 focus:outline-none focus-visible:bg-[#00E5FF]/15'
+                            : 'pr-3'
                             }`}
                     >
                         <span className='min-w-0 flex-1 truncate text-[0.75rem] font-semibold text-[#00E5FF] md:text-[0.85rem]'>

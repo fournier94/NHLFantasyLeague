@@ -1777,20 +1777,6 @@ export interface TradeOfferSlot {
     /** "F", "D" or "G". */
     positionGroup: string;
 
-    /**
-     * Per-criterion strict flags. A criterion is enforced as a hard
-     * filter on the responder's dropdown only when its flag is true
-     * AND the corresponding demand value is set (non-null). A
-     * criterion set but not strict is displayed to the responder as
-     * a preference but does not filter his dropdown.
-     *
-     * Position is always enforced regardless of these flags.
-     */
-    enforceDemandMinContractYears: boolean;
-    enforceDemandMaxSalary: boolean;
-    enforceDemandMaxAge: boolean;
-    enforceDemandMinPointsLastYear: boolean;
-
     /** Optional player the creator is offering. */
     offeringPlayerId: number | null;
 
@@ -1834,16 +1820,14 @@ export interface TradeOfferSlot {
     offeringPlayerCurrentSeasonStats: SeasonStatLine | null;
 
     /**
-     * NHL regular-season stats for the offered player in the previous
-     * season, or null.
-     */
+  * NHL regular-season stats for the offered player in the previous
+  * season, or null.
+  */
     offeringPlayerLastSeasonStats: SeasonStatLine | null;
 
     /**
      * Responding player, only present on slots synthesized from a
-     * TradeOfferResponse (Reçues / Envoyées panels). When set, the
-     * right column of the card renders this player instead of the
-     * demand block. Absent on real TradeOffers.
+     * TradeOfferResponse (Reçues / Envoyées panels).
      */
     respondingPlayerId?: number | null;
     respondingPlayerNhlPlayerId?: number | null;
@@ -1856,12 +1840,6 @@ export interface TradeOfferSlot {
     respondingPlayerSecondContract?: PlayerContractLine | null;
     respondingPlayerCurrentSeasonStats?: SeasonStatLine | null;
     respondingPlayerLastSeasonStats?: SeasonStatLine | null;
-
-    /** Demand filters (all optional). */
-    demandMinContractYears: number | null;
-    demandMaxSalary: number | null;
-    demandMaxAge: number | null;
-    demandMinPointsLastYear: number | null;
 }
 
 /** A published marketplace trade offer. */
@@ -1950,21 +1928,6 @@ export interface CreateTradeOfferSlotRequest {
     /** "F", "D" or "G". */
     positionGroup: string;
     offeringPlayerId?: number | null;
-    demandMinContractYears?: number | null;
-    demandMaxSalary?: number | null;
-    demandMaxAge?: number | null;
-    demandMinPointsLastYear?: number | null;
-    /**
-     * Per-criterion strict flags. A criterion is enforced as a hard
-     * filter only when its flag is true AND the corresponding value
-     * is set. Position is always enforced regardless.
-     *
-     * Each flag defaults to true on the backend when omitted.
-     */
-    enforceDemandMinContractYears?: boolean;
-    enforceDemandMaxSalary?: boolean;
-    enforceDemandMaxAge?: boolean;
-    enforceDemandMinPointsLastYear?: boolean;
 }
 
 /** Body of POST /api/Marketplace/offers. */
@@ -2092,15 +2055,41 @@ export function cancelTradeOffer(
 // Marketplace responses ("Offres reçues")
 // ---------------------------------------------------------------------
 
-/** One pick in a response: for the offer slot at slotIndex, the
- *  responding team offers respondingPlayerId. */
+/**
+ * One pick in a response: for the offer slot at slotIndex, the
+ * responding team offers respondingPlayerId.
+ *
+ * `respondingPlayerId` is nullable to support unbalanced direct
+ * offers (a slot where the responder gives no player).
+ *
+ * `offeringPlayerOverrideId`, when set, replaces the offering
+ * player the offer creator originally put on this slot, or adds
+ * one if the creator left the offering side empty.
+ */
 export interface RespondToTradeOfferPick {
     slotIndex: number;
-    respondingPlayerId: number;
+    respondingPlayerId: number | null;
+    offeringPlayerOverrideId?: number | null;
+    /**
+     * When true, the responder is explicitly removing the offering
+     * player from this slot: even if the offer's creator had put
+     * someone there, the response says "leave this slot empty on
+     * the offering side". Mutually exclusive with
+     * offeringPlayerOverrideId.
+     */
+    removeOfferingPlayer?: boolean;
 }
 
 export interface RespondToTradeOfferRequest {
     picks: RespondToTradeOfferPick[];
+    /**
+     * Optional free-text message from the responding manager.
+     * A response may be sent with this Note as its only content
+     * (no players, no picks), so a manager can send a message like
+     * "what would you offer for this player?" without committing
+     * to a full trade shape.
+     */
+    note?: string | null;
     /**
      * Ids of the responding team's draft picks being offered. Each
      * id must reference a DraftPick owned by the responding team.
@@ -2114,6 +2103,13 @@ export interface RespondToTradeOfferRequest {
      * creator. Referenced, not transferred.
      */
     requestedDraftPickIds?: number[];
+    /**
+     * Ids of the offer CREATOR's draft picks the responding team
+     * is REMOVING from the offer's own pick list. Each id must
+     * reference a DraftPick already offered on the original
+     * TradeOffer. Referenced, not transferred.
+     */
+    removedCreatorDraftPickIds?: number[];
 }
 
 /** One slot of a received response. Mirrors TradeOfferResponseSlotDto. */
@@ -2122,6 +2118,13 @@ export interface TradeOfferResponseSlot {
     positionGroup: string;
 
     // --- LEFT: the offering player from the original offer ---
+
+    /**
+     * True when the responder explicitly emptied the offering side
+     * of this slot. When true, all offeringPlayer* fields are null
+     * by design.
+     */
+    removeOfferingPlayer: boolean;
 
     offeringPlayerId: number | null;
     offeringPlayerNhlPlayerId: number | null;
@@ -2137,7 +2140,13 @@ export interface TradeOfferResponseSlot {
 
     // --- RIGHT: the responding player ---
 
-    respondingPlayerId: number;
+    /**
+     * The responding player for this slot, or null when the
+     * responding team is not giving a player for it. Null only
+     * happens on unbalanced direct offers where the target side
+     * gave a player but the connected side did not.
+     */
+    respondingPlayerId: number | null;
 
     /**
      * NHL API id of the responding player. Used to link the
@@ -2164,11 +2173,6 @@ export interface TradeOfferResponseSlot {
      * previous season, or null.
      */
     respondingPlayerLastSeasonStats: SeasonStatLine | null;
-
-    demandMinContractYears: number | null;
-    demandMaxSalary: number | null;
-    demandMaxAge: number | null;
-    demandMinPointsLastYear: number | null;
 }
 
 /**
@@ -2183,6 +2187,14 @@ export interface TradeOfferResponse {
     id: number;
     tradeOfferId: number;
     tradeOfferNote: string | null;
+
+    /**
+     * Optional free-text message from the responding manager.
+     * Distinct from `tradeOfferNote`, which is the message the
+     * offer's creator wrote when he published the offer. This is
+     * the message that shows on the Reçues and Envoyées cards.
+     */
+    note: string | null;
 
     /**
      * True when this response is still Pending and the current
@@ -2222,10 +2234,10 @@ export interface TradeOfferResponse {
     slots: TradeOfferResponseSlot[];
 
     /**
-    * Draft picks the original offer's creator is putting on the
-    * table. Rendered on the LEFT side of the response card.
-    * Referenced, not transferred.
-    */
+ * Draft picks the original offer's creator is putting on the
+ * table. Rendered on the LEFT side of the response card.
+ * Referenced, not transferred.
+ */
     creatorPicks: DraftPick[];
 
     /**
@@ -2242,6 +2254,14 @@ export interface TradeOfferResponse {
      * not transferred.
      */
     respondingPicks: DraftPick[];
+
+    /**
+     * Draft picks the responding team removed from the offer's own
+     * pick list. Already excluded from `creatorPicks` on the
+     * response DTO; kept here so the frontend can display what was
+     * removed. Referenced, not transferred.
+     */
+    removedCreatorPicks: DraftPick[];
 }
 
 /** Result of POST /Marketplace/offers/{id}/respond. */
@@ -2277,13 +2297,25 @@ export function respondToTradeOffer(
 // the connected user's "Envoyées" (cancellable).
 // ---------------------------------------------------------------------
 
-/** One pair inside a direct offer: what each side gives up. */
+/**
+ * One slot inside a direct offer. Each slot can carry a player
+ * on both sides, only on the connected side, or only on the
+ * target side. Unbalanced slots let the two managers agree on a
+ * trade where one side gives more players than the other.
+ *
+ * At least one of connectedPlayerId / targetPlayerId must be
+ * set. A slot that is null on both sides is rejected by the
+ * backend.
+ *
+ * A direct offer can also carry zero slots if it only exchanges
+ * draft picks.
+ */
 export interface CreateDirectOfferSlotRequest {
     /** Player on the calling user's roster (what he offers). */
-    connectedPlayerId: number;
+    connectedPlayerId?: number | null;
 
     /** Player on the target team's roster (what he wants). */
-    targetPlayerId: number;
+    targetPlayerId?: number | null;
 }
 
 /** Body of POST /api/Marketplace/direct-offers. */
@@ -2404,7 +2436,11 @@ export interface AcceptedTradeSlot {
     offeringPlayerNhlTeam: string | null;
 
     // --- Side offered by the responding team ---
-    respondingPlayerId: number;
+    /**
+     * Null on unbalanced direct offers where the responding team
+     * did not give a player for this slot.
+     */
+    respondingPlayerId: number | null;
     respondingPlayerNhlPlayerId: number | null;
     respondingPlayerFirstName: string | null;
     respondingPlayerLastName: string | null;
@@ -2433,9 +2469,17 @@ export interface AcceptedTradeRow {
      */
     requestedPicks: DraftPick[];
     /**
-     * Draft picks the responding team is giving away.
-     */
+   * Draft picks the responding team is giving away.
+   */
     respondingPicks: DraftPick[];
+
+    /**
+     * Draft picks the responding team removed from the offer's own
+     * pick list. Already excluded from `offerCreatorPicks` on the
+     * admin card; kept here so the admin can display what was
+     * removed.
+     */
+    removedCreatorPicks: DraftPick[];
 }
 
 /**

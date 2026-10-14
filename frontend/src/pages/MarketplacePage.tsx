@@ -8,7 +8,7 @@
     useSyncExternalStore,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import {
     acceptTradeOfferResponse,
@@ -59,6 +59,14 @@ import {
 } from '@/lib/marketplaceNotificationsStore';
 import { TradePicksSlot } from '@/components/marketplace/TradePicksSlot';
 import {
+    CLEARED_OFFERING_SENTINEL,
+    clearOfferingForSlot,
+    clearOfferingOverridesForOffer,
+    getOfferingOverridesForOffer,
+    setOfferingOverrideForSlot,
+    subscribeToOfferingOverrides,
+} from '@/lib/marketplaceOfferingOverrides';
+import {
     getDirectOfferDraft,
     resetDirectOfferSlotsAndNote,
     subscribeToDirectOfferDraft,
@@ -69,8 +77,14 @@ import {
     getPicksForOffer,
     pickForSlot,
     subscribeToPicks,
-    type PicksBySlot,
 } from '@/lib/marketplaceTradeState';
+import {
+    addExtraResponderSlot,
+    clearExtraResponderSlots,
+    getExtraResponderSlots,
+    removeExtraResponderSlot,
+    subscribeToExtraResponderSlots,
+} from '@/lib/marketplaceExtraResponderSlots';
 import {
     clearPublishSlot,
     getPublishDraft,
@@ -80,6 +94,19 @@ import {
     updatePublishDraft,
     type PublishSlotState,
 } from '@/lib/publishOfferState';
+import {
+    clearResponseNote,
+    getResponseNote,
+    setResponseNote,
+    subscribeToResponseNotes,
+} from '@/lib/marketplaceResponseNotesState';
+import {
+    addRemovedCreatorPick,
+    clearRemovedCreatorPicks,
+    getRemovedCreatorPicks,
+    removeRemovedCreatorPick,
+    subscribeToRemovedCreatorPicks,
+} from '@/lib/marketplaceRemovedCreatorPicksState';
 
 // ---------------------------------------------------------------------
 // Types
@@ -89,36 +116,10 @@ type View = 'add' | 'browse' | 'received' | 'sent';
 
 type PositionGroup = 'F' | 'D' | 'G';
 
-/**
- * Slot state for the publish-offer form.
- *
- * Aliased to the store's own type so the two can never drift
- * apart. The store (`publishOfferState.ts`) is the source of
- * truth: it owns the shape that gets written back via
- * `updatePublishDraft`. A local interface duplicating that shape
- * is a footgun — structural typing is easy to get subtly wrong
- * and the mismatch only surfaces at the assignability check on
- * the store write, where it shows up as an unhelpful
- * `firstHandled: string` widening error.
- */
 type SlotState = PublishSlotState;
 
 const EMPTY_SLOT: SlotState = {
-    positionGroup: '',
     offeringPlayerId: null,
-    firstHandled: null,
-    minContractYears: '',
-    maxSalary: '',
-    maxAge: '',
-    minPointsLastYear: '',
-    // Every criterion unticked by default: the responder's
-    // dropdown is not filtered by any criterion unless the offer
-    // creator explicitly opts in. A criterion with its box
-    // unticked is shown to the responder as a preference.
-    enforceMinContractYears: false,
-    enforceMaxSalary: false,
-    enforceMaxAge: false,
-    enforceMinPointsLastYear: false,
 };
 
 const MAX_SLOTS = 10;
@@ -167,17 +168,6 @@ function toPositionGroup(raw: string | null | undefined): PositionGroup {
     return 'F';
 }
 
-function groupLabel(g: PositionGroup): string {
-    switch (g) {
-        case 'F':
-            return 'Attaquant';
-        case 'D':
-            return 'Défenseur';
-        case 'G':
-            return 'Gardien';
-    }
-}
-
 /**
  * Formats a player's name as "F. Lastname". Falls back to just the
  * last name when the first name is missing or empty.
@@ -194,26 +184,6 @@ function shortName(
     }
 
     return `${first.charAt(0).toUpperCase()}. ${last}`;
-}
-
-// `groupLabelPlural` used to render the <optgroup> labels of the
-// offering-player dropdown that SlotEditor used before the roster
-// popup replaced it. Kept removed to avoid a dead-code warning.
-
-function parseOptionalInt(raw: string): number | null {
-    const trimmed = raw.trim();
-    if (trimmed === '') return null;
-    const n = Number(trimmed);
-    if (!Number.isFinite(n) || n < 0) return null;
-    return Math.floor(n);
-}
-
-function parseOptionalMoney(raw: string): number | null {
-    const trimmed = raw.trim();
-    if (trimmed === '') return null;
-    const n = Number(trimmed);
-    if (!Number.isFinite(n) || n < 0) return null;
-    return n < 1000 ? Math.round(n * 1_000_000) : Math.round(n);
 }
 
 function compactSalary(raw: number | null): string {
@@ -252,7 +222,7 @@ function contractLabel(
  * player stays null and the slot is a pure demand.
  */
 function slotIsComplete(slot: SlotState): boolean {
-    return slot.positionGroup !== '' || slot.offeringPlayerId !== null;
+    return slot.offeringPlayerId !== null;
 }
 
 /**
@@ -273,12 +243,14 @@ function slotToRequest(
     slot: SlotState,
     entries: RosterEntry[],
 ): CreateTradeOfferSlotRequest {
-    let positionGroup = slot.positionGroup;
+    // The backend still expects a valid F/D/G on every slot, but
+    // there is no UI to pick one anymore. Derive it from the
+    // offered player's own position. If the player cannot be
+    // found (shouldn't happen for a freshly-built slot), default
+    // to 'F' so the request stays valid.
+    let positionGroup: PositionGroup = 'F';
 
-    if (
-        positionGroup === '' &&
-        slot.offeringPlayerId != null
-    ) {
+    if (slot.offeringPlayerId != null) {
         const entry = entries.find(
             (e) => e.playerId === slot.offeringPlayerId,
         );
@@ -291,280 +263,19 @@ function slotToRequest(
     return {
         positionGroup,
         offeringPlayerId: slot.offeringPlayerId,
-        demandMinContractYears: parseOptionalInt(slot.minContractYears),
-        demandMaxSalary: parseOptionalMoney(slot.maxSalary),
-        demandMaxAge: parseOptionalInt(slot.maxAge),
-        demandMinPointsLastYear: parseOptionalInt(slot.minPointsLastYear),
-        enforceDemandMinContractYears: slot.enforceMinContractYears,
-        enforceDemandMaxSalary: slot.enforceMaxSalary,
-        enforceDemandMaxAge: slot.enforceMaxAge,
-        enforceDemandMinPointsLastYear: slot.enforceMinPointsLastYear,
     };
 }
 
 /**
- * Compact one-line summary of a slot, used by the collapsed state of
- * a slot in the "Ajouter une offre" panel. Shows the offered player
- * (if any) and the demanded position (if any):
- *
- *   - Both          : "Nick Suzuki · F · MTL → Défenseur"
- *   - Player only   : "Nick Suzuki · F · MTL"
- *   - Position only : "Cherche : Défenseur"
- *   - Neither       : "Aucune information"
- */
-function slotSummary(
-    slot: SlotState,
-    entries: RosterEntry[],
-): string {
-    const pieces: string[] = [];
-
-    if (slot.offeringPlayerId != null) {
-        const entry = entries.find(
-            (e) => e.playerId === slot.offeringPlayerId,
-        );
-
-        if (entry) {
-            pieces.push(
-                `${entry.firstName} ${entry.lastName} · ` +
-                `${toPositionGroup(entry.position)} · ` +
-                `${entry.nhlTeamAbbreviation}`,
-            );
-        }
-    }
-
-    if (slot.positionGroup !== '') {
-        pieces.push(
-            slot.offeringPlayerId != null
-                ? `→ ${groupLabel(slot.positionGroup)}`
-                : `Cherche : ${groupLabel(slot.positionGroup)}`,
-        );
-    }
-
-    return pieces.length > 0 ? pieces.join(' ') : 'Aucune information';
-}
-
-/**
- * Compact one-line summary of the criteria currently set on a slot's
- * "Critères recherchés" form. Returns null when no criterion is set,
- * so the caller can fall back to the plain "Ajouter des critères"
- * label.
- *
- * Ex: "Contrat ≥ 3 ans · Salaire ≤ 8.5M · Âge ≤ 25 · Pts ≥ 40"
- */
-function filterSummary(slot: SlotState): string | null {
-    const pieces: string[] = [];
-
-    const years = parseOptionalInt(slot.minContractYears);
-    if (years != null) {
-        pieces.push(`Contrat ≥ ${years} an${years > 1 ? 's' : ''}`);
-    }
-
-    const salary = parseOptionalMoney(slot.maxSalary);
-    if (salary != null) {
-        pieces.push(`Salaire ≤ ${compactSalary(salary)}`);
-    }
-
-    const age = parseOptionalInt(slot.maxAge);
-    if (age != null) {
-        pieces.push(`Âge ≤ ${age}`);
-    }
-
-    const pts = parseOptionalInt(slot.minPointsLastYear);
-    if (pts != null) {
-        pieces.push(`Pts ≥ ${pts}`);
-    }
-
-    return pieces.length > 0 ? pieces.join(' · ') : null;
-}
-
-/**
- * Reason a raw integer-looking input is invalid, or null when it's
- * fine. Empty string is always valid (means "no constraint").
- */
-function invalidIntReason(raw: string): string | null {
-    const t = raw.trim();
-    if (t === '') return null;
-
-    const n = Number(t);
-    if (!Number.isFinite(n)) return 'Valeur non numérique';
-    if (!Number.isInteger(n)) return 'Doit être un nombre entier';
-    if (n < 0) return 'Doit être positif ou nul';
-    return null;
-}
-
-/**
- * Same as invalidIntReason, but for money fields (decimals allowed).
- */
-function invalidMoneyReason(raw: string): string | null {
-    const t = raw.trim();
-    if (t === '') return null;
-
-    const n = Number(t);
-    if (!Number.isFinite(n)) return 'Valeur non numérique';
-    if (n < 0) return 'Doit être positif ou nul';
-    return null;
-}
-
-/**
- * One invalid-criterion report, ready to be displayed in the
- * validation popup. `slotIndex` is the original index in the form's
- * `slots` array.
- */
-interface CriteriaError {
-    slotIndex: number;
-    fieldLabel: string;
-    rawValue: string;
-    reason: string;
-}
-
-/**
- * Returns every invalid criteria field on the given slot. Empty
- * fields (no constraint) are ignored.
- */
-function validateSlotCriteria(
-    slot: SlotState,
-    slotIndex: number,
-): CriteriaError[] {
-    const errors: CriteriaError[] = [];
-
-    const salaryErr = invalidMoneyReason(slot.maxSalary);
-    if (salaryErr) {
-        errors.push({
-            slotIndex,
-            fieldLabel: 'Salaire max',
-            rawValue: slot.maxSalary,
-            reason: salaryErr,
-        });
-    }
-
-    const ageErr = invalidIntReason(slot.maxAge);
-    if (ageErr) {
-        errors.push({
-            slotIndex,
-            fieldLabel: 'Âge max',
-            rawValue: slot.maxAge,
-            reason: ageErr,
-        });
-    }
-
-    const ptsErr = invalidIntReason(slot.minPointsLastYear);
-    if (ptsErr) {
-        errors.push({
-            slotIndex,
-            fieldLabel: 'Points min. (an dernier)',
-            rawValue: slot.minPointsLastYear,
-            reason: ptsErr,
-        });
-    }
-
-    return errors;
-}
-
-/**
- * Returns true when the given roster entry satisfies every criterion
- * on the given offer slot.
- *
- * Rules, in order:
- *   - Position group must match the slot's demanded position (F/D/G).
- *   - If a min contract years is required, the SUM of the player's
- *     current + second contract `yearsRemaining` must be >= that
- *     value. A player with a single contract uses just that one.
- *   - If a max salary is required, EVERY contract on the player
- *     (current AND second, if any) must have `salary` <= that value.
- *   - If a max age is required, the player's age must be <= that
- *     value. Players with no birth date on file are treated as
- *     ineligible for age-filtered demands.
- *   - If a min points-last-year is required, the player's last-season
- *     points must be >= that value.
- *
- * All filters are optional: a slot with only a position matches every
- * player of that position group.
+ * Stub retained for call sites that used to apply demand criteria.
+ * The criterias were removed from the marketplace, so every slot
+ * now matches every player.
  */
 function playerMatchesSlotDemand(
-    entry: RosterEntry,
-    slot: TradeOfferSlot,
+    _entry: RosterEntry,
+    _slot: TradeOfferSlot,
 ): boolean {
-    // Position is deliberately NOT enforced. Managers in this league
-    // can offer a player of any position, regardless of the slot's
-    // announced PositionGroup. Position-for-position is a rule we
-    // still follow out-of-band, but the website lets managers
-    // negotiate without it as a hard constraint.
-    //
-    // Each demand criterion filters the dropdown only when BOTH of
-    // the following hold:
-    //
-    //   - its strict flag is true (the offer creator opted in), AND
-    //   - it actually has a value set (non-null).
-    //
-    // A criterion set but with strict=false is a preference the
-    // responder may choose to honor; it does not remove him from
-    // the dropdown. A criterion with strict=true but no value set
-    // has nothing to filter on, so it is a no-op.
-    //
-    // `!== false` rather than a plain truthiness check: an older
-    // cached response or a bad payload that omits the field is
-    // treated as the safe default of strict.
-
-    if (
-        slot.enforceDemandMinContractYears !== false &&
-        slot.demandMinContractYears != null
-    ) {
-        const totalYears =
-            (entry.currentContract?.yearsRemaining ?? 0) +
-            (entry.secondContract?.yearsRemaining ?? 0);
-
-        if (totalYears < slot.demandMinContractYears) {
-            return false;
-        }
-    }
-
-    if (
-        slot.enforceDemandMaxSalary !== false &&
-        slot.demandMaxSalary != null
-    ) {
-        for (const c of [entry.currentContract, entry.secondContract]) {
-            if (c && c.salary > slot.demandMaxSalary) {
-                return false;
-            }
-        }
-    }
-
-    if (
-        slot.enforceDemandMaxAge !== false &&
-        slot.demandMaxAge != null
-    ) {
-        if (entry.age == null || entry.age > slot.demandMaxAge) {
-            return false;
-        }
-    }
-
-    if (
-        slot.enforceDemandMinPointsLastYear !== false &&
-        slot.demandMinPointsLastYear != null
-    ) {
-        const points = entry.lastSeason?.points ?? 0;
-        if (points < slot.demandMinPointsLastYear) {
-            return false;
-        }
-    }
-
     return true;
-}
-
-/**
- * Smooth-scrolls the element with the given DOM id so it lands just
- * below the sticky top bar. Deferred to the next tick so React can
- * commit any state change that expanded or created the target before
- * we measure its position. Every target carries a matching
- * `scroll-mt-[calc(var(--header-height,...))]` class, so the target
- * ends up under the nav bar instead of behind it.
- */
-function scrollElementIntoView(elementId: string): void {
-    window.setTimeout(() => {
-        document
-            .getElementById(elementId)
-            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
 }
 
 /**
@@ -724,9 +435,6 @@ const PUBLISH_BLOOM_FAR = 'rgba(0, 200, 255, 0.2)';
 const inputClass =
     'w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60';
 
-const labelClass =
-    'text-xs font-semibold uppercase tracking-wider text-[#7DD3FC]';
-
 /**
  * Middle column width so the arrow sits on the divider cleanly.
  * On mobile it is deliberately narrow (20px) so the stat tables on
@@ -774,6 +482,7 @@ const TEAM_NAME_BUTTON_STYLE: React.CSSProperties = {
 
 export default function MarketplacePage() {
     const { user } = useAuth();
+    const navigate = useNavigate();
 
     // Restore the last section the user was on. Only read on the very
     // first mount: useState's initializer runs once, and the
@@ -878,6 +587,26 @@ export default function MarketplacePage() {
              * season cap is 0).
              */
             capContext?: TradeCapContext;
+            /**
+             * Which side of the slot this pick is for.
+             *
+             *   'responding' (default): the responder is picking
+             *   his own player for the slot. The "Retirer" button
+             *   clears the responding pick.
+             *
+             *   'offering': the responder is overriding the offer
+             *   creator's offering player. The "Retirer" button
+             *   clears the override, which reverts the offering
+             *   side to the creator's original player.
+             */
+            side?: 'responding' | 'offering';
+            /**
+             * Player ids the roster popup must hide from the list.
+             * Carried from the OfferCard click site so players
+             * already committed to other slots of the same trade
+             * cannot be picked twice.
+             */
+            excludedPlayerIds?: number[];
         };
         /**
     * Pick context for the "Créer" tab. Mutually exclusive
@@ -1029,11 +758,11 @@ export default function MarketplacePage() {
         rosterPopupTeam?.pickContext?.slotIndex ?? null;
 
     /**
-     * Live picks for the Voir les offres pick mode's offer.
-     * Subscribed via useSyncExternalStore so the popup re-renders
-     * the moment the user clicks "Retirer" or "Ajouter", without
-     * needing to close and reopen.
-     */
+  * Live picks for the Voir les offres pick mode's offer.
+  * Subscribed via useSyncExternalStore so the popup re-renders
+  * the moment the user clicks "Retirer" or "Ajouter", without
+  * needing to close and reopen.
+  */
     const viewOffersPicks = useSyncExternalStore(
         subscribeToPicks,
         () =>
@@ -1041,25 +770,69 @@ export default function MarketplacePage() {
     );
 
     /**
+     * Live offering-side overrides for the Voir les offres pick
+     * mode's offer. Mirrors viewOffersPicks: when the popup is
+     * opened for the offering side, the "Retirer" button must
+     * clear the override on that slot, and the pinned card must
+     * show the override player. Subscribed at the page level
+     * because OfferCard's own `offeringOverrides` subscription is
+     * scoped to that component and is not visible here.
+     */
+    const viewOffersOfferingOverrides = useSyncExternalStore(
+        subscribeToOfferingOverrides,
+        () =>
+            getOfferingOverridesForOffer(viewOffersOfferId ?? -1),
+    );
+
+    /**
      * Player id of the current pick in the Voir les offres slot
      * being picked, or null when that slot has no pick. Undefined
      * when the popup is not in Voir les offres pick mode.
+     *
+     * Reads from whichever store the current side writes to:
+     *   - 'offering': the offering-override store (creator-side).
+     *   - 'responding' (or no side): the responder-picks store.
      */
-    const viewOffersPickedPlayerId =
-        viewOffersSlotIndex == null
-            ? undefined
-            : viewOffersPicks[viewOffersSlotIndex] ?? null;
+    const viewOffersPickedPlayerId = (() => {
+        if (viewOffersSlotIndex == null) return undefined;
+
+        if (rosterPopupTeam?.pickContext?.side !== 'offering') {
+            return viewOffersPicks[viewOffersSlotIndex] ?? null;
+        }
+
+        const raw =
+            viewOffersOfferingOverrides[viewOffersSlotIndex];
+
+        // Cleared: nothing pinned.
+        if (raw === CLEARED_OFFERING_SENTINEL) return null;
+
+        // Override set: pin the override player.
+        if (raw != null) return raw;
+
+        // No override: pin the offer creator's own offering
+        // player for this slot, so the "Retirer" button is
+        // available to clear him.
+        return (
+            rosterPopupTeam.pickContext.slot.offeringPlayerId ??
+            null
+        );
+    })();
 
     /**
      * Synthesized onClearPick for Voir les offres. Writes null to
-     * the same slot in the same pick store that onPick writes to.
-     * The popup wraps this to also close itself, so from the user's
+     * the same slot in the same store that onPick writes to. The
+     * popup wraps this to also close itself, so from the user's
      * point of view clicking "Retirer" clears the pick and closes
      * the popup.
      */
     const viewOffersOnClearPick = (() => {
         const ctx = rosterPopupTeam?.pickContext;
         if (ctx == null) return undefined;
+
+        if (ctx.side === 'offering') {
+            return () =>
+                clearOfferingForSlot(ctx.offerId, ctx.slotIndex);
+        }
 
         return () => pickForSlot(ctx.offerId, ctx.slotIndex, null);
     })();
@@ -1291,94 +1064,7 @@ export default function MarketplacePage() {
     // The old "Publier une annonce" sub-view now lives in the Marché
     // tab.
 
-    /**
-     * "Utiliser comme base" handler. Copies the offer's players
-     * and the user's current picks into the Créer draft, sets the
-     * offer creator as the target team, and switches the page to
-     * the "Créer" tab.
-     *
-     * Mapping (per slot):
-     *   - draft.selectedTargetTeamId = the offer creator's team
-     *   - draft slot i:
-     *       offeringPlayerId = the user's pick in offer slot i
-     *                          (null when the user had not
-     *                          picked yet)
-     *       targetPlayerId   = the offer's offered player in
-     *                          slot i (null when the offer only
-     *                          announced a demand with no
-     *                          specific player attached)
-     *
-     * The demand criteria (position + filters) are NOT carried
-     * over: Créer has no place to store them, and the whole point
-     * of "use as base" is to start from the offer's players
-     * without being bound by the criteria.
-     *
-     * The draft's note is also reset, because the offer's note is
-     * a message from the OTHER manager to the world, not a
-     * message from the current user to him.
-     */
-    function handleUseOfferAsBase(
-        offer: TradeOffer,
-        picks: PicksBySlot,
-    ): void {
-        const sortedSlots = [...offer.slots].sort(
-            (a, b) => a.slotIndex - b.slotIndex,
-        );
-
-        const draftSlots = sortedSlots.map((slot) => ({
-            offeringPlayerId: picks[slot.slotIndex] ?? null,
-            targetPlayerId: slot.offeringPlayerId ?? null,
-        }));
-
-        updateDirectOfferDraft((d) => ({
-            ...d,
-            selectedTargetTeamId: String(
-                offer.createdByFantasyTeamId,
-            ),
-            slots:
-                draftSlots.length > 0
-                    ? draftSlots
-                    : [
-                        {
-                            offeringPlayerId: null,
-                            targetPlayerId: null,
-                        },
-                    ],
-            note: '',
-        }));
-
-        // Seed the draft picks as well as the slots.
-        //
-        // On the browse tab the offer's CREATOR is the other
-        // manager, so when the draft opens on the Créer tab that
-        // other manager becomes our TARGET team. Every pick on
-        // the creator's side therefore goes to DIRECT_TARGET_KEY:
-        //   - offer.picks is what the creator explicitly put on
-        //     the table.
-        //   - The local "requested" store holds any extra picks
-        //     the user asked the creator for on the browse card
-        //     before the browse tab became display-only. Read it
-        //     too so nothing that was already chosen is lost.
-        const requestedPickIds = DraftPicks.getPicks(
-            DraftPicks.offerPicksKey(offer.id, 'requested'),
-        );
-
-        DraftPicks.setPicks(DraftPicks.DIRECT_TARGET_KEY, [
-            ...offer.picks.map((p) => p.id),
-            ...requestedPickIds,
-        ]);
-
-        // The user's own side starts empty. The browse tab has
-        // had no way to add or remove picks since it became
-        // display-only, but we clear the offering key explicitly
-        // so a stale entry from a previous session cannot leak
-        // into the freshly-seeded draft.
-        DraftPicks.clearPicks(DraftPicks.DIRECT_OFFERING_KEY);
-
-        setView('add');
-    }
-
-    /**
+       /**
      * "Contre-offre" handler for the Reçues panel. Copies the
      * received response into the Créer draft and switches the page
      * to the Créer tab, so the user can tweak and send a direct
@@ -1691,8 +1377,8 @@ export default function MarketplacePage() {
                             )?.name ?? null
                             : null
                     }
-                    onOpenTeamRoster={(id, name) =>
-                        setRosterPopupTeam({ id, name })
+                    onOpenTeamRoster={(id) =>
+                        navigate(`/mon-equipe?teamId=${id}`)
                     }
                     onRequestPlayerPick={(req) =>
                         setRosterPopupTeam({
@@ -1723,8 +1409,8 @@ export default function MarketplacePage() {
                     refreshTick={browseRefreshTick}
                     teamId={user?.fantasyTeamId ?? null}
                     mode={browseSubView}
-                    onOpenTeamRoster={(id, name) =>
-                        setRosterPopupTeam({ id, name })
+                    onOpenTeamRoster={(id) =>
+                        navigate(`/mon-equipe?teamId=${id}`)
                     }
                     onRequestPlayerPick={(teamId, teamName, pick) =>
                         setRosterPopupTeam({
@@ -1735,6 +1421,8 @@ export default function MarketplacePage() {
                                 offerId: pick.offerId,
                                 slotIndex: pick.slotIndex,
                                 capContext: pick.capContext,
+                                excludedPlayerIds:
+                                    pick.excludedPlayerIds,
                                 onPick: (playerId) =>
                                     pickForSlot(
                                         pick.offerId,
@@ -1743,7 +1431,33 @@ export default function MarketplacePage() {
                                     ),
                             },
                             referencePlayer:
-                                buildReferenceFromSlot(pick.slot),
+                                pick.referencePlayer ?? null,
+                        })
+                    }
+                    onRequestOfferingPlayerPick={(
+                        teamId,
+                        teamName,
+                        pick,
+                    ) =>
+                        setRosterPopupTeam({
+                            id: teamId,
+                            name: teamName,
+                            pickContext: {
+                                slot: pick.slot,
+                                offerId: pick.offerId,
+                                slotIndex: pick.slotIndex,
+                                capContext: pick.capContext,
+                                side: 'offering',
+                                excludedPlayerIds:
+                                    pick.excludedPlayerIds,
+                                onPick: (playerId) =>
+                                    setOfferingOverrideForSlot(
+                                        pick.offerId,
+                                        pick.slotIndex,
+                                        playerId,
+                                    ),
+                            },
+                            referencePlayer: null,
                         })
                     }
                     onEditOffer={
@@ -1759,7 +1473,6 @@ export default function MarketplacePage() {
                             }
                             : undefined
                     }
-                    onUseAsBase={handleUseOfferAsBase}
                 />
             )}
 
@@ -1810,8 +1523,8 @@ export default function MarketplacePage() {
             {view === 'received' && (
                 <ReceivedOffersPanel
                     refreshTick={browseRefreshTick}
-                    onOpenTeamRoster={(id, name) =>
-                        setRosterPopupTeam({ id, name })
+                    onOpenTeamRoster={(id) =>
+                        navigate(`/mon-equipe?teamId=${id}`)
                     }
                     onCounterOffer={handleCounterOffer}
                 />
@@ -1820,8 +1533,8 @@ export default function MarketplacePage() {
             {view === 'sent' && (
                 <SentOffersPanel
                     refreshTick={browseRefreshTick}
-                    onOpenTeamRoster={(id, name) =>
-                        setRosterPopupTeam({ id, name })
+                    onOpenTeamRoster={(id) =>
+                        navigate(`/mon-equipe?teamId=${id}`)
                     }
                 />
             )}
@@ -1891,6 +1604,8 @@ export default function MarketplacePage() {
                     currentPickedPlayerId={popupPickedPlayerId}
                     pinnedPlayerId={popupPickedPlayerId}
                     excludedPlayerIds={
+                        rosterPopupTeam.pickContext
+                            ?.excludedPlayerIds ??
                         rosterPopupTeam.publishPickContext
                             ?.excludedPlayerIds ??
                         directPopupExcludedPlayerIds
@@ -2035,23 +1750,6 @@ function AddOfferPanel({
     };
 
     /**
-     * Index of the slot currently expanded in the "Ajouter une offre"
-     * panel. When there's only one slot it's always expanded; when
-     * there are several, only this index is expanded and every other
-     * slot renders as a compact summary button.
-     */
-    const [expandedSlotIndex, setExpandedSlotIndex] = useState(0);
-
-    /**
-    * Whether the optional message textarea is expanded. Collapsed by
-    * default; clicking the "Ajouter un message" button reveals it.
-    * Auto-expanded when editing an offer that already had a note.
-    */
-    const [showNote, setShowNote] = useState(
-        () => getPublishDraft().note.trim() !== '',
-    );
-
-    /**
      * Seed the store from initialOffer on mount, synchronously
      * (useLayoutEffect) so there is no visible flash of the
      * previous draft. Only fires when the panel switches to a
@@ -2072,53 +1770,8 @@ function AddOfferPanel({
                     editingOfferId: initialOffer.id,
                     slots: initialOffer.slots.map(
                         (slot): SlotState => ({
-                            positionGroup:
-                                slot.positionGroup as PositionGroup,
                             offeringPlayerId:
                                 slot.offeringPlayerId,
-                            firstHandled:
-                                slot.positionGroup !== ''
-                                    ? slot.offeringPlayerId != null
-                                        ? 'player'
-                                        : 'position'
-                                    : null,
-                            minContractYears:
-                                slot.demandMinContractYears != null
-                                    ? String(
-                                        slot.demandMinContractYears,
-                                    )
-                                    : '',
-                            maxSalary:
-                                slot.demandMaxSalary != null
-                                    ? String(
-                                        (slot.demandMaxSalary /
-                                            1_000_000)
-                                            .toFixed(2)
-                                            .replace(/\.?0+$/, ''),
-                                    )
-                                    : '',
-                            maxAge:
-                                slot.demandMaxAge != null
-                                    ? String(slot.demandMaxAge)
-                                    : '',
-                            minPointsLastYear:
-                                slot.demandMinPointsLastYear !=
-                                    null
-                                    ? String(
-                                        slot.demandMinPointsLastYear,
-                                    )
-                                    : '',
-                            enforceMinContractYears:
-                                slot.enforceDemandMinContractYears !==
-                                false,
-                            enforceMaxSalary:
-                                slot.enforceDemandMaxSalary !==
-                                false,
-                            enforceMaxAge:
-                                slot.enforceDemandMaxAge !== false,
-                            enforceMinPointsLastYear:
-                                slot.enforceDemandMinPointsLastYear !==
-                                false,
                         }),
                     ),
                     note: initialOffer.note ?? '',
@@ -2130,6 +1783,55 @@ function AddOfferPanel({
             }
         }
     }, [initialOffer]);
+
+    /**
+     * Auto-append a trailing empty slot whenever the last slot
+     * has a player in it, mirroring the "Créer" and "Voir les
+     * offres" behaviour.
+     *
+     * The panel is created with one empty slot. As soon as the
+     * user picks a player for the last slot, a fresh empty slot
+     * is appended so its own "Choisir un joueur" button is
+     * always available without the user having to press
+     * "Ajouter un 2e joueur à l'échange".
+     *
+     * Reads the current draft from the store (rather than the
+     * captured `slots` value) so a StrictMode double-invocation
+     * cannot append the same slot twice: when the store already
+     * ends on an empty slot, the updater is a no-op. Converges
+     * because the newly appended slot is empty.
+     *
+     * Respects MAX_SLOTS: once the draft has reached the cap,
+     * no further slot is added even if the last one is filled.
+     */
+    useLayoutEffect(() => {
+        updatePublishDraft((d) => {
+            if (d.slots.length === 0) {
+                return {
+                    ...d,
+                    slots: [{ ...EMPTY_SLOT }],
+                };
+            }
+
+            if (d.slots.length >= MAX_SLOTS) {
+                return d;
+            }
+
+            const last = d.slots[d.slots.length - 1];
+
+            if (last.offeringPlayerId != null) {
+                return {
+                    ...d,
+                    slots: [
+                        ...d.slots,
+                        { ...EMPTY_SLOT },
+                    ],
+                };
+            }
+
+            return d;
+        });
+    }, [slots]);
 
     /**
    * The user's roster, used to resolve each picked player's
@@ -2155,26 +1857,6 @@ function AddOfferPanel({
      * an OfferCard rendering of the offer about to be published.
      */
     const [showPreview, setShowPreview] = useState(false);
-
-    /**
-     * Invalid criteria reported by the last submit attempt. When
-     * non-empty, the validation popup is open. Cleared once the user
-     * acknowledges it.
-     */
-    const [criteriaErrors, setCriteriaErrors] = useState<
-        CriteriaError[]
-    >([]);
-
-    /**
-     * One-shot "focus this slot" request, fired when the user
-     * acknowledges the validation popup. The `token` changes every
-     * time so the effect below re-runs even when the same slot has
-     * the same error twice in a row.
-     */
-    const [focusRequest, setFocusRequest] = useState<{
-        slotIndex: number;
-        token: number;
-    } | null>(null);
 
     // -----------------------------------------------------------------
     // Draft picks ("Ajouter des choix de repêchage")
@@ -2286,21 +1968,12 @@ function AddOfferPanel({
                             ) ?? null
                             : null;
 
-                    // Mirror slotToRequest's position
-                    // derivation so the preview shows the
-                    // same position group the API will
-                    // receive.
-                    let positionGroup = s.positionGroup;
-
-                    if (
-                        positionGroup === '' &&
-                        s.offeringPlayerId != null &&
-                        entry != null
-                    ) {
-                        positionGroup = toPositionGroup(
-                            entry.position,
-                        );
-                    }
+                    // Always derive the position group from
+                    // the offered player, matching what
+                    // slotToRequest will send to the API.
+                    const positionGroup = entry
+                        ? toPositionGroup(entry.position)
+                        : 'F';
 
                     return {
                         slotIndex: i,
@@ -2325,27 +1998,6 @@ function AddOfferPanel({
                             entry?.currentSeason ?? null,
                         offeringPlayerLastSeasonStats:
                             entry?.lastSeason ?? null,
-                        demandMinContractYears: parseOptionalInt(
-                            s.minContractYears,
-                        ),
-                        demandMaxSalary: parseOptionalMoney(
-                            s.maxSalary,
-                        ),
-                        demandMaxAge: parseOptionalInt(s.maxAge),
-                        demandMinPointsLastYear: parseOptionalInt(
-                            s.minPointsLastYear,
-                        ),
-                        // Mirrors the per-criterion strict flags the
-                        // backend will store. Not read by the preview
-                        // card's dropdown (no dropdown renders in
-                        // preview), but the arrows on the criteria
-                        // list do read them.
-                        enforceDemandMinContractYears:
-                            s.enforceMinContractYears,
-                        enforceDemandMaxSalary: s.enforceMaxSalary,
-                        enforceDemandMaxAge: s.enforceMaxAge,
-                        enforceDemandMinPointsLastYear:
-                            s.enforceMinPointsLastYear,
                     };
                 }),
         }),
@@ -2381,18 +2033,6 @@ function AddOfferPanel({
         };
     }, [teamId]);
 
-    function updateSlot(index: number, patch: Partial<SlotState>) {
-        setSlots((current) =>
-            current.map((s, i) => (i === index ? { ...s, ...patch } : s)),
-        );
-    }
-
-    function resetSlot(index: number) {
-        setSlots((current) =>
-            current.map((s, i) => (i === index ? { ...EMPTY_SLOT } : s)),
-        );
-    }
-
     /**
   * Picks and clears now go through the publish-offer store
   * directly (see publishOfferState.ts). The slot's positionGroup
@@ -2418,100 +2058,19 @@ function AddOfferPanel({
         return excluded;
     }
 
-    function handlePositionChange(index: number, positionRaw: string) {
-        const position =
-            positionRaw === '' ? '' : (positionRaw as PositionGroup);
-
-        const slot = slots[index];
-
-        // Position and offering player are now decoupled: changing
-        // the demanded position never clears a player whose position
-        // happens to differ. Managers are allowed to announce a
-        // demand that does not match their offered player.
-        updateSlot(index, {
-            positionGroup: position,
-            firstHandled: slot.firstHandled ?? 'position',
-        });
-    }
-
-    function addSlot() {
-        if (slots.length >= MAX_SLOTS) return;
-
-        const newIndex = slots.length;
-
-        setSlots((current) => [...current, { ...EMPTY_SLOT }]);
-
-        // Expand the freshly added slot; every older slot collapses.
-        setExpandedSlotIndex(newIndex);
-
-        // Bring it into view under the header.
-        scrollToSlot(newIndex);
-    }
-
     function removeSlot(index: number) {
         if (slots.length <= 1) return;
 
         setSlots((current) => current.filter((_, i) => i !== index));
-
-        // Shift the expanded index so we don't end up pointing at a
-        // slot that no longer exists.
-        setExpandedSlotIndex((current) => {
-            if (index < current) return current - 1;
-            if (index === current) return Math.max(0, current - 1);
-            return current;
-        });
     }
 
     function handleResetAll() {
         setSlots([{ ...EMPTY_SLOT }]);
         setNote('');
-        setShowNote(false);
         DraftPicks.clearPublishPicks();
         setSubmitError(null);
         setSubmitSuccess(null);
     }
-
-    /**
-     * Original indices of the slots that are actually filled in. Any
-     * empty slot the user added but left untouched is dropped on
-     * submit, so it never reaches the API and doesn't appear in the
-     * preview. Kept as original indices so the preview popup can map
-     * a display index back to the real slot in `slots`.
-     */
-    const completeSlotIndices = useMemo(
-        () =>
-            slots
-                .map((s, i) => ({ s, i }))
-                .filter(({ s }) => slotIsComplete(s))
-                .map(({ i }) => i),
-        [slots],
-    );
-
-    // Show the "add another player" button as soon as the last
-    // slot has any content at all: either a demanded position has
-    // been selected, or an offering player has been picked. This
-    // is a looser gate than slotIsComplete, which requires BOTH.
-    //
-    // The intent is to let the user chain a second (and third, ...)
-    // player into the trade as soon as he starts expressing what
-    // he wants, without waiting for the first slot to be fully
-    // built out.
-    //
-    // Submit logic is unchanged: any slot that ends up incomplete
-    // when the user publishes is still dropped before the request
-    // goes to the API (see the `slots.filter(slotIsComplete)`
-    // call in handleConfirmPublish).
-    const lastSlotHasContent = (() => {
-        const last = slots[slots.length - 1];
-        if (!last) return false;
-        return (
-            last.positionGroup !== '' ||
-            last.offeringPlayerId !== null
-        );
-    })();
-
-    const canAddSlot =
-        lastSlotHasContent && slots.length < MAX_SLOTS;
 
     /**
      * Only the first slot must be complete (the trade needs at least
@@ -2525,62 +2084,20 @@ function AddOfferPanel({
         !submitting;
 
     /**
-  * Runs through every filled slot and returns every invalid
-  * criteria field. Empty slots (the user added a slot but never
-  * touched it) are skipped: they're dropped on submit anyway.
-  */
-    function collectCriteriaErrors(): CriteriaError[] {
-        const all: CriteriaError[] = [];
-
-        for (let i = 0; i < slots.length; i++) {
-            if (!slotIsComplete(slots[i])) continue;
-            all.push(...validateSlotCriteria(slots[i], i));
-        }
-
-        return all;
-    }
-
-    /**
-     * Fires whenever a new focus request is set. Expands the target
-     * slot (collapsing the others) and smoothly scrolls to it.
-     */
-    useEffect(() => {
-        if (!focusRequest) return;
-        setExpandedSlotIndex(focusRequest.slotIndex);
-        scrollToSlot(focusRequest.slotIndex);
-    }, [focusRequest]);
-
-    /**
-     * Clicked from the main form: validates the criteria fields and,
-     * if anything is invalid, opens the validation popup instead of
-     * the preview. Only when everything is valid does the preview
-     * popup open.
-     */
+   * Clicked from the main form: opens the preview popup.
+   */
     function handleSubmit() {
         if (!canSubmit) return;
-
-        const errors = collectCriteriaErrors();
-        if (errors.length > 0) {
-            setCriteriaErrors(errors);
-            return;
-        }
 
         setSubmitError(null);
         setShowPreview(true);
     }
 
     /**
-     * Clicked from the sticky bar: validates then sends the offer.
-     * If anything is invalid, opens the validation popup and stops.
+     * Clicked from the sticky bar: sends the offer.
      */
     async function handleConfirmPublish() {
         if (!canSubmit) return;
-
-        const errors = collectCriteriaErrors();
-        if (errors.length > 0) {
-            setCriteriaErrors(errors);
-            return;
-        }
 
         setSubmitting(true);
         setSubmitError(null);
@@ -2635,18 +2152,6 @@ function AddOfferPanel({
         } finally {
             setSubmitting(false);
         }
-    }
-
-    /**
-     * Scrolls the given slot editor into view under the sticky header.
-     * Deferred to the next tick so React can commit the state change
-     * (expanding a collapsed slot, adding a new one, or resetting the
-     * form) before we measure the target's position. The
-     * `scroll-mt-[calc(var(--header-height)...)]` class on each slot
-     * keeps it landing below the nav bar instead of behind it.
-     */
-    function scrollToSlot(slotIndex: number) {
-        scrollElementIntoView(`slot-editor-${slotIndex}`);
     }
 
     if (loading) {
@@ -2709,23 +2214,11 @@ function AddOfferPanel({
                     slot={slot}
                     entries={entries}
                     canRemove={slots.length > 1}
-                    isExpanded={
-                        slots.length === 1 ||
-                        expandedSlotIndex === index
-                    }
-                    onToggle={() => {
-                        setExpandedSlotIndex(index);
-                        scrollToSlot(index);
-                    }}
                     onRequestPlayerPick={() =>
                         onRequestPlayerPick({
                             slotIndex: index,
                             currentPickedPlayerId:
                                 slot.offeringPlayerId,
-                            // No locked position: the popup's
-                            // segmented control is free, and the
-                            // roster list is not filtered by the
-                            // slot's PositionGroup.
                             excludedPlayerIds:
                                 excludedPlayerIdsForSlot(index),
                             onPick: (playerId) =>
@@ -2734,15 +2227,7 @@ function AddOfferPanel({
                                 clearPublishSlot(index),
                         })
                     }
-                    onPositionChange={(p) => handlePositionChange(index, p)}
-                    onFieldChange={(patch) => updateSlot(index, patch)}
-                    onResetSlot={() => resetSlot(index)}
                     onRemove={() => removeSlot(index)}
-                    forceOpenFilterToken={
-                        focusRequest?.slotIndex === index
-                            ? focusRequest.token
-                            : 0
-                    }
                 />
             ))}
 
@@ -2783,71 +2268,23 @@ function AddOfferPanel({
             </div>
 
             <div className='mt-3 flex w-full flex-col gap-2'>
-                {/* Add-slot button, sticky with the action bar so the
-                    user can always add a new player to the trade
-                    without scrolling back up.
-
-                    Design matches the "Ajouter un joueur" button on
-                    the Créer tab (solid emerald, dark text, uppercase,
-                    w-fit centered) so both "add" actions across the
-                    marketplace read as the same control. */}
-                {canAddSlot && (
-                    <button
-                        type='button'
-                        onClick={addSlot}
-                        className='mx-auto block w-fit cursor-pointer rounded-md bg-emerald-500 px-6 py-1 text-xs font-bold uppercase tracking-wide text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
-                    >
-                        Ajouter un {slots.length + 1}e joueur à l'échange
-                    </button>
-                )}
-
-                {/* Message toggle / textarea, sticky with the action
-                    bar so the user always sees where to add an
-                    optional note without having to scroll. */}
-                {showNote ? (
-                    <div className='block'>
-                        <div className='flex items-center justify-between gap-2'>
-                            <span className='text-xs italic font-semibold uppercase tracking-wider text-white'>
-                                Message (
-                                <span className='font-bold not-italic text-emerald-400'>
-                                    optionnel
-                                </span>
-                                )
-                            </span>
-
-                            <button
-                                type='button'
-                                onClick={() => setShowNote(false)}
-                                aria-label='Réduire le message'
-                                className='cursor-pointer rounded px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-[#7DD3FC] transition-colors hover:bg-[#00A8FF]/10 hover:text-[#00E5FF]'
-                            >
-                                ▲ Réduire
-                            </button>
-                        </div>
-                        <textarea
-                            value={note}
-                            onChange={(e) => setNote(e.target.value)}
-                            rows={2}
-                            maxLength={1000}
-                            placeholder='Ex : je cherche un jeune défenseur, je peux ajouter un choix de repêchage.'
-                            className={`mt-1 ${inputClass}`}
-                        />
-                    </div>
-                ) : (
-                    <button
-                        type='button'
-                        onClick={() => setShowNote(true)}
-                        className='w-full cursor-pointer rounded-lg border border-dotted border-white/70 bg-transparent px-3 py-2 text-xs font-semibold transition-colors hover:bg-white/5'
-                    >
-                        <span className='italic text-zinc-400'>
-                            Ajouter un message (
-                            <span className='font-bold not-italic text-emerald-400'>
-                                optionnel
-                            </span>
-                            )
-                        </span>
-                    </button>
-                )}
+                {/* Message field, always visible, same look as the
+                    Créer tab and the "Voir les offres" response
+                    form. No toggle — the label + textarea pattern
+                    is the shared design. */}
+                <div>
+                    <label className='text-xs font-semibold uppercase tracking-wider text-[#7DD3FC]'>
+                        Message (optionnel)
+                    </label>
+                    <textarea
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        rows={2}
+                        maxLength={1000}
+                        placeholder='Ex : je cherche un jeune défenseur, je peux ajouter un choix de repêchage.'
+                        className={`mt-1 ${inputClass}`}
+                    />
+                </div>
 
                 <div className='flex w-full items-stretch gap-2'>
                     <button
@@ -2880,103 +2317,6 @@ function AddOfferPanel({
             </div>
 
             {/*
-             * Validation popup. Shown when the user tries to publish
-             * an offer that has at least one invalid criteria field.
-             * Lists every invalid field with the offending value and
-             * reason. Clicking OK closes the popup and focuses the
-             * first invalid slot.
-             */}
-            {criteriaErrors.length > 0 &&
-                createPortal(
-                    <div
-                        className='fixed inset-0 z-[100] flex items-center justify-center px-4'
-                        style={{ backgroundColor: '#080D1A' }}
-                        role='dialog'
-                        aria-modal='true'
-                        aria-label='Valeurs invalides'
-                    >
-                        <div
-                            className='w-full max-w-md overflow-hidden rounded-lg border'
-                            style={{
-                                borderColor: 'rgba(0, 168, 255, 0.6)',
-                                backgroundColor: '#080D1A',
-                                boxShadow:
-                                    '0 0 22px rgba(0, 168, 255, 0.35), inset 0 0 18px rgba(0, 168, 255, 0.08)',
-                            }}
-                        >
-                            <div
-                                className='border-b px-3 py-2'
-                                style={{
-                                    borderColor:
-                                        'rgba(0, 168, 255, 0.35)',
-                                    background:
-                                        'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))',
-                                }}
-                            >
-                                <p className='text-sm font-bold text-white'>
-                                    Valeurs invalides
-                                </p>
-                            </div>
-
-                            <div className='space-y-3 px-4 py-4'>
-                                <p className='text-sm text-foreground'>
-                                    Corrigez les champs suivants avant
-                                    de publier votre offre :
-                                </p>
-
-                                <ul className='space-y-2'>
-                                    {criteriaErrors.map((err, i) => (
-                                        <li
-                                            key={`${err.slotIndex}-${err.fieldLabel}-${i}`}
-                                            className='rounded-md border px-3 py-2 text-xs'
-                                            style={{
-                                                borderColor:
-                                                    'rgba(239, 68, 68, 0.35)',
-                                                backgroundColor:
-                                                    'rgba(239, 68, 68, 0.06)',
-                                            }}
-                                        >
-                                            <p className='font-semibold text-white'>
-                                                Joueur #{err.slotIndex + 1}
-                                                {' · '}
-                                                {err.fieldLabel}
-                                            </p>
-                                            <p className='mt-0.5 text-muted-foreground'>
-                                                Valeur : « {err.rawValue} »
-                                                {' — '}
-                                                {err.reason}
-                                            </p>
-                                        </li>
-                                    ))}
-                                </ul>
-
-                                <div className='flex justify-end'>
-                                    <button
-                                        type='button'
-                                        onClick={() => {
-                                            const first =
-                                                criteriaErrors[0];
-                                            setCriteriaErrors([]);
-                                            if (first) {
-                                                setFocusRequest({
-                                                    slotIndex:
-                                                        first.slotIndex,
-                                                    token: Date.now(),
-                                                });
-                                            }
-                                        }}
-                                        className='cursor-pointer rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400'
-                                    >
-                                        OK
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>,
-                    document.body,
-                )}
-
-            {/*
              * Publish preview popup. Renders the exact OfferCard the
              * browse tab uses, with three action buttons under it.
              * Portaled to document.body so it always sits above the
@@ -3002,20 +2342,14 @@ function AddOfferPanel({
                                 onCancel={() => { }}
                                 userRoster={null}
                                 hideInternalCancel
-                                onSlotClick={(displayIndex) => {
-                                    // The preview renumbers slots
-                                    // after dropping empty ones; map
-                                    // back to the real index in the
-                                    // form's `slots` array.
-                                    const realIndex =
-                                        completeSlotIndices[
-                                        displayIndex
-                                        ];
-                                    if (realIndex == null) return;
-
+                                onSlotClick={() => {
+                                    // With the flat slot design there is no
+                                    // "expand this slot" concept anymore.
+                                    // Clicking a slot simply closes the
+                                    // preview so the user is back on the
+                                    // form, where every slot is always
+                                    // visible and editable.
                                     setShowPreview(false);
-                                    setExpandedSlotIndex(realIndex);
-                                    scrollToSlot(realIndex);
                                 }}
                             />
                         </div>
@@ -3048,476 +2382,97 @@ function SlotEditor({
     slot,
     entries,
     canRemove,
-    isExpanded,
-    onToggle,
     onRequestPlayerPick,
-    onPositionChange,
-    onFieldChange,
-    onResetSlot,
     onRemove,
-    forceOpenFilterToken,
 }: {
     index: number;
     slot: SlotState;
     entries: RosterEntry[];
     canRemove: boolean;
-    isExpanded: boolean;
-    onToggle: () => void;
-    /**
-     * Opens the roster popup in pick mode for this slot. The
-     * parent builds the full pick request (current picked player,
-     * excluded player ids from other slots, locked position) and
-     * manages the popup's lifecycle.
-     */
     onRequestPlayerPick: () => void;
-    onPositionChange: (positionRaw: string) => void;
-    onFieldChange: (patch: Partial<SlotState>) => void;
-    onResetSlot: () => void;
     onRemove: () => void;
-    /**
-     * When this token changes to a non-zero value, the criteria
-     * form auto-expands. Used by the validation popup so the user
-     * lands directly on the offending field.
-     */
-    forceOpenFilterToken: number;
 }) {
-    /**
-   * Whether the "Critères recherchés" form is expanded. Collapsed by
-   * default so the slot doesn't take half the screen before the
-   * user decides to filter.
-   */
-    const [filterExpanded, setFilterExpanded] = useState(false);
-
-    // Open the criteria form whenever the parent bumps the token,
-    // so that the validation flow lands the user on a visible
-    // (not-collapsed) form.
-    useEffect(() => {
-        if (forceOpenFilterToken > 0) {
-            setFilterExpanded(true);
-        }
-    }, [forceOpenFilterToken]);
-
-    const showFilterForm = slot.positionGroup !== '';
-
-    const slotIsEmpty =
-        slot.positionGroup === '' &&
-        slot.offeringPlayerId === null &&
-        slot.minContractYears === '' &&
-        slot.maxSalary === '' &&
-        slot.maxAge === '' &&
-        slot.minPointsLastYear === '';
-
-    // When collapsed (only possible when there is more than one slot),
-    // render a compact summary button instead of the full form.
-    // Clicking it re-expands the full form for this slot and collapses
-    // the others.
-    if (!isExpanded) {
-        return (
-            <button
-                id={`slot-editor-${index}`}
-                type='button'
-                onClick={onToggle}
-                className='flex w-full scroll-mt-[calc(var(--header-height,4rem)+0.75rem)] items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition-colors hover:brightness-110'
-                style={{
-                    borderColor: FRAME_BORDER,
-                    backgroundColor: FRAME_BG,
-                    boxShadow: FRAME_GLOW,
-                }}
-            >
-                <span className='shrink-0 text-[0.65rem] font-bold uppercase tracking-wider text-[#00E5FF]'>
-                    Joueur #{index + 1}
-                </span>
-
-                <span className='min-w-0 flex-1 truncate text-xs text-foreground'>
-                    {slotSummary(slot, entries)}
-                </span>
-
-                <span
-                    aria-hidden='true'
-                    className='shrink-0 text-[#7DD3FC]'
-                >
-                    ▼
-                </span>
-            </button>
-        );
-    }
+    const pickedEntry =
+        slot.offeringPlayerId != null
+            ? entries.find(
+                (e) => e.playerId === slot.offeringPlayerId,
+            ) ?? null
+            : null;
 
     return (
         <div
             id={`slot-editor-${index}`}
-            className='overflow-hidden scroll-mt-[calc(var(--header-height,4rem)+0.75rem)] rounded-lg border'
+            className='relative overflow-hidden scroll-mt-[calc(var(--header-height,4rem)+0.75rem)] rounded-lg border'
             style={{
                 borderColor: FRAME_BORDER,
                 backgroundColor: FRAME_BG,
                 boxShadow: FRAME_GLOW,
             }}
         >
-            <div
-                className='flex items-center justify-between gap-2 border-b px-3 py-2'
-                style={{
-                    borderColor: 'rgba(0, 168, 255, 0.35)',
-                    background: HEADER_GRADIENT,
-                }}
-            >
-                <span className='text-[0.65rem] font-bold uppercase tracking-wider text-[#00E5FF]'>
-                    Joueur #{index + 1}
-                </span>
-
-                <div className='flex items-center gap-1'>
-                    {!slotIsEmpty && (
-                        <button
-                            type='button'
-                            onClick={onResetSlot}
-                            className='cursor-pointer rounded px-2 py-0.5 text-xs font-semibold text-[#7DD3FC] transition-colors hover:bg-[#00A8FF]/10 hover:text-[#00E5FF]'
-                        >
-                            ↺ Réinitialiser
-                        </button>
-                    )}
-
-                    {canRemove && (
-                        <button
-                            type='button'
-                            onClick={onRemove}
-                            className='cursor-pointer rounded px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10'
-                        >
-                            Retirer
-                        </button>
-                    )}
-                </div>
-            </div>
-
-            <div className='space-y-4 p-3'>
-                <div className='space-y-2'>
-                    <p className={labelClass}>
-                        Offre (
-                        <span className='font-bold text-emerald-400'>
-                            Optionnel
-                        </span>
-                        )
-                    </p>
-
-                    {slot.offeringPlayerId != null ? (
-                        (() => {
-                            const pickedEntry = entries.find(
-                                (e) =>
-                                    e.playerId ===
-                                    slot.offeringPlayerId,
-                            );
-
-                            const name = pickedEntry
-                                ? `${pickedEntry.firstName} ${pickedEntry.lastName}`
-                                : 'Joueur inconnu';
-
-                            const position = pickedEntry
-                                ? toPositionGroup(
-                                    pickedEntry.position,
-                                )
-                                : '';
-
-                            const team =
-                                pickedEntry?.nhlTeamAbbreviation ??
-                                '';
-
-                            return (
-                                <div className='flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2'>
-                                    <span className='min-w-0 truncate text-sm text-foreground'>
-                                        <span className='font-semibold'>
-                                            {name}
-                                        </span>
-                                        {position && ` · ${position}`}
-                                        {team && ` · ${team}`}
-                                    </span>
-
-                                    <button
-                                        type='button'
-                                        onClick={
-                                            onRequestPlayerPick
-                                        }
-                                        className='shrink-0 cursor-pointer rounded border border-[#00C8FF] px-2 py-0.5 text-xs font-semibold text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10'
-                                    >
-                                        Changer
-                                    </button>
-                                </div>
-                            );
-                        })()
-                    ) : (
-                        <button
-                            type='button'
-                            onClick={onRequestPlayerPick}
-                            className='w-full cursor-pointer rounded-lg bg-[#00E5FF] px-3 py-1.5 text-xs font-semibold text-black transition-colors hover:brightness-110'
-                            style={{
-                                boxShadow: [
-                                    '0 0 4px rgba(0, 229, 255, 0.9)',
-                                    '0 0 10px rgba(0, 229, 255, 0.5)',
-                                    '0 0 18px rgba(0, 229, 255, 0.2)',
-                                    'inset 0 0 2px rgba(0, 229, 255, 0.4)',
-                                ].join(', '),
-                            }}
-                        >
-                            Choisir un joueur
-                        </button>
-                    )}
-                </div>
-
-                <div className='space-y-2'>
-                    <p className={labelClass}>Demande</p>
-
-                    <select
-                        value={slot.positionGroup}
-                        onChange={(e) =>
-                            onPositionChange(e.target.value)
-                        }
-                        className={inputClass}
-                    >
-                        <option value=''>— Choisir une position —</option>
-                        <option value='F'>Attaquant (F)</option>
-                        <option value='D'>Défenseur (D)</option>
-                        <option value='G'>Gardien (G)</option>
-                    </select>
-
-                    {showFilterForm &&
-                        (filterExpanded ? (
-                            <FilterForm
-                                slot={slot}
-                                slotIndex={index}
-                                onFieldChange={onFieldChange}
-                                onCollapse={() =>
-                                    setFilterExpanded(false)
-                                }
-                            />
-                        ) : (
-                            <button
-                                type='button'
-                                onClick={() => {
-                                    setFilterExpanded(true);
-                                    scrollElementIntoView(
-                                        `filter-form-${index}`,
-                                    );
-                                }}
-                                className='mt-2 w-full cursor-pointer rounded-lg border border-dashed border-[#00A8FF]/60 bg-transparent px-3 py-2 text-xs font-semibold transition-colors hover:bg-[#00A8FF]/10'
-                            >
-                                {(() => {
-                                    const summary =
-                                        filterSummary(slot);
-
-                                    if (summary) {
-                                        return (
-                                            <span className='italic text-zinc-400'>
-                                                Critères :{' '}
-                                                <span className='font-bold not-italic text-[#7DD3FC]'>
-                                                    {summary}
-                                                </span>
-                                            </span>
-                                        );
-                                    }
-
-                                    return (
-                                        <span className='italic text-zinc-400'>
-                                            Ajouter des critères
-                                            recherchés (
-                                            <span className='font-bold not-italic text-emerald-400'>
-                                                optionnel
-                                            </span>
-                                            )
-                                        </span>
-                                    );
-                                })()}
-                            </button>
-                        ))}
-                </div>
-            </div>
-
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------
-// Filter form
-// ---------------------------------------------------------------------
-
-function FilterForm({
-    slot,
-    slotIndex,
-    onFieldChange,
-    onCollapse,
-}: {
-    slot: SlotState;
-    slotIndex: number;
-    onFieldChange: (patch: Partial<SlotState>) => void;
-    onCollapse: () => void;
-}) {
-    /**
-     * Compact field styling, deliberately smaller than the global
-     * inputClass so the criteria form doesn't dominate the slot.
-     */
-    const compactLabelClass =
-        'text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC]';
-
-    const compactInputClass =
-        'w-full rounded border border-border bg-card px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring/50';
-
-    return (
-        <div
-            id={`filter-form-${slotIndex}`}
-            // React's onFocus bubbles (it emulates focusin), so this
-            // single handler catches the user clicking into any of the
-            // selects or inputs inside the form. The scroll-mt matches
-            // the slot-scroll helper so both land under the nav bar.
-            onFocus={() =>
-                scrollElementIntoView(`filter-form-${slotIndex}`)
-            }
-            className='mt-1 scroll-mt-[calc(var(--header-height,4rem)+0.75rem)] space-y-1.5 rounded-md border p-2'
-            style={{
-                borderColor: 'rgba(0, 168, 255, 0.25)',
-                backgroundColor: 'rgba(0, 168, 255, 0.04)',
-            }}
-        >
-            <div className='flex items-center justify-between gap-2'>
-                <p className='text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC]'>
-                    <span className='text-xs font-bold text-emerald-400'>
-                        Optionnel
-                    </span>
-                    {' : Critères recherchés'}
-                </p>
-
+            {canRemove && (
                 <button
                     type='button'
-                    onClick={onCollapse}
-                    aria-label='Réduire les critères recherchés'
-                    className='cursor-pointer rounded px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wider text-[#7DD3FC] transition-colors hover:bg-[#00A8FF]/10 hover:text-[#00E5FF]'
+                    aria-label={`Retirer le joueur ${index + 1}`}
+                    onClick={onRemove}
+                    className='absolute right-2 top-2 z-10 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
                 >
-                    ▲ Réduire
-                </button>
-            </div>
-
-            <p className='text-[0.65rem] leading-snug text-[#7DD3FC]/70 md:text-[0.7rem]'>
-                Si un critère est coché, l'autre utilisateur ne pourra pas ajouter de joueur qui ne répondent pas à ce critère.
-            </p>
-
-            <div className='grid grid-cols-2 gap-x-2 gap-y-2'>
-                <div className='block'>
-                    <label className='flex cursor-pointer items-center gap-1.5'>
-                        <input
-                            type='checkbox'
-                            checked={slot.enforceMinContractYears}
-                            onChange={(e) =>
-                                onFieldChange({
-                                    enforceMinContractYears:
-                                        e.target.checked,
-                                })
-                            }
-                            className='h-3 w-3 shrink-0 cursor-pointer'
-                            style={{ accentColor: '#00C8FF' }}
-                        />
-                        <span className={compactLabelClass}>
-                            Contrat min.
-                        </span>
-                    </label>
-                    <select
-                        value={slot.minContractYears}
-                        onChange={(e) =>
-                            onFieldChange({
-                                minContractYears: e.target.value,
-                            })
-                        }
-                        className={`mt-0.5 ${compactInputClass}`}
+                    <svg
+                        viewBox='0 0 24 24'
+                        className='h-[10px] w-[10px]'
+                        fill='none'
+                        stroke='white'
+                        strokeWidth={4}
+                        strokeLinecap='round'
+                        aria-hidden='true'
                     >
-                        <option value=''>— Peu importe —</option>
-                        <option value='1'>1 an</option>
-                        <option value='2'>2 ans</option>
-                        <option value='3'>3 ans</option>
-                        <option value='4'>4 ans</option>
-                        <option value='5'>5 ans et +</option>
-                    </select>
-                </div>
-
-                <div className='block'>
-                    <label className='flex cursor-pointer items-center gap-1.5'>
-                        <input
-                            type='checkbox'
-                            checked={slot.enforceMaxSalary}
-                            onChange={(e) =>
-                                onFieldChange({
-                                    enforceMaxSalary: e.target.checked,
-                                })
-                            }
-                            className='h-3 w-3 shrink-0 cursor-pointer'
-                            style={{ accentColor: '#00C8FF' }}
+                        <line
+                            x1='5'
+                            y1='12'
+                            x2='19'
+                            y2='12'
                         />
-                        <span className={compactLabelClass}>
-                            Salaire max
-                        </span>
-                    </label>
-                    <input
-                        type='text'
-                        inputMode='decimal'
-                        value={slot.maxSalary}
-                        onChange={(e) =>
-                            onFieldChange({ maxSalary: e.target.value })
-                        }
-                        className={`mt-0.5 ${compactInputClass}`}
-                    />
-                </div>
+                    </svg>
+                </button>
+            )}
 
-                <div className='block'>
-                    <label className='flex cursor-pointer items-center gap-1.5'>
-                        <input
-                            type='checkbox'
-                            checked={slot.enforceMaxAge}
-                            onChange={(e) =>
-                                onFieldChange({
-                                    enforceMaxAge: e.target.checked,
-                                })
-                            }
-                            className='h-3 w-3 shrink-0 cursor-pointer'
-                            style={{ accentColor: '#00C8FF' }}
-                        />
-                        <span className={compactLabelClass}>
-                            Âge max
-                        </span>
-                    </label>
-                    <input
-                        type='number'
-                        min={16}
-                        max={50}
-                        value={slot.maxAge}
-                        onChange={(e) =>
-                            onFieldChange({ maxAge: e.target.value })
-                        }
-                        className={`mt-0.5 ${compactInputClass}`}
-                    />
-                </div>
+            <div className='px-3 py-3'>
+                <p className='mb-3 text-center text-sm font-bold uppercase tracking-wider text-[#00E5FF]'>
+                    Joueur {index + 1}
+                </p>
 
-                <div className='block'>
-                    <label className='flex cursor-pointer items-center gap-1.5'>
-                        <input
-                            type='checkbox'
-                            checked={slot.enforceMinPointsLastYear}
-                            onChange={(e) =>
-                                onFieldChange({
-                                    enforceMinPointsLastYear:
-                                        e.target.checked,
-                                })
-                            }
-                            className='h-3 w-3 shrink-0 cursor-pointer'
-                            style={{ accentColor: '#00C8FF' }}
-                        />
-                        <span className={compactLabelClass}>
-                            Points min. (an dernier)
+                {slot.offeringPlayerId != null ? (
+                    <button
+                        type='button'
+                        onClick={onRequestPlayerPick}
+                        className='block w-full cursor-pointer rounded-lg border border-border bg-card px-3 py-2 text-left transition-colors hover:border-[#00C8FF]/60 hover:bg-[#00A8FF]/5'
+                    >
+                        <span className='min-w-0 truncate text-sm text-foreground'>
+                            <span className='font-semibold'>
+                                {pickedEntry
+                                    ? `${pickedEntry.firstName} ${pickedEntry.lastName}`
+                                    : 'Joueur inconnu'}
+                            </span>
+                            {pickedEntry && (
+                                <>
+                                    {' · '}
+                                    {toPositionGroup(
+                                        pickedEntry.position,
+                                    )}
+                                    {' · '}
+                                    {pickedEntry.nhlTeamAbbreviation}
+                                </>
+                            )}
                         </span>
-                    </label>
-                    <input
-                        type='number'
-                        min={0}
-                        value={slot.minPointsLastYear}
-                        onChange={(e) =>
-                            onFieldChange({
-                                minPointsLastYear: e.target.value,
-                            })
-                        }
-                        className={`mt-0.5 ${compactInputClass}`}
-                    />
-                </div>
+                    </button>
+                ) : (
+                    <button
+                        type='button'
+                        onClick={onRequestPlayerPick}
+                        className='block w-full cursor-pointer rounded bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
+                    >
+                        Choisir un joueur
+                    </button>
+                )}
             </div>
         </div>
     );
@@ -3534,7 +2489,7 @@ function BrowseOffersPanel({
     onOpenTeamRoster,
     onEditOffer,
     onRequestPlayerPick,
-    onUseAsBase,
+    onRequestOfferingPlayerPick,
 }: {
     refreshTick: number;
     teamId: number | null;
@@ -3576,15 +2531,15 @@ function BrowseOffersPanel({
         pick: PendingPickContext,
     ) => void;
     /**
-     * Called when the responder clicks "Utiliser comme base" on
-     * another manager's offer. The parent copies the offer's
-     * players and the responder's picks into the Créer draft and
-     * switches to the Créer tab. Only set on the "Voir les
-     * offres" side.
-     */
-    onUseAsBase?: (
-        offer: TradeOffer,
-        picks: PicksBySlot,
+  * Called when the responder clicks the "Choisir un joueur"
+  * (or "Changer") button on the OFFERING side of a browse offer
+  * slot. The parent opens the OFFER CREATOR's roster in pick
+  * mode and stores the result as an offering override.
+  */
+    onRequestOfferingPlayerPick?: (
+        teamId: number,
+        teamName: string,
+        pick: PendingPickContext,
     ) => void;
 }) {
     const [offers, setOffers] = useState<TradeOffer[]>([]);
@@ -3725,7 +2680,9 @@ function BrowseOffersPanel({
                     userRoster={userRoster}
                     onOpenTeamRoster={onOpenTeamRoster}
                     onRequestPlayerPick={onRequestPlayerPick}
-                    onUseAsBase={onUseAsBase}
+                    onRequestOfferingPlayerPick={
+                        onRequestOfferingPlayerPick
+                    }
                     swapSides
                 />
             ))}
@@ -3772,7 +2729,13 @@ function responseToOfferShape(
             response.respondingFantasyTeamCapSalary,
         seasonSalaryCap: response.seasonSalaryCap,
         createdAt: response.createdAt,
-        note: response.tradeOfferNote,
+        // Show the RESPONDER's own message, not the offer
+        // creator's original annonce message. The creator already
+        // knows what he wrote on his own annonce; on the Reçues
+        // panel he needs to see what the responder said. Same on
+        // the Envoyées panel — the responder wants to see the
+        // message he himself attached.
+        note: response.note,
         status: response.status,
         isMine: false,
         isNew: response.isNew,
@@ -3815,21 +2778,6 @@ function responseToOfferShape(
             respondingPlayerLastSeasonStats:
                 s.respondingPlayerLastSeasonStats,
 
-            demandMinContractYears: s.demandMinContractYears,
-            demandMaxSalary: s.demandMaxSalary,
-            demandMaxAge: s.demandMaxAge,
-            demandMinPointsLastYear: s.demandMinPointsLastYear,
-
-            // Not carried on the response DTO — a response is a
-            // historical record and nothing on the response card
-            // renders a dropdown, so these flags never affect the
-            // display. Defaulting to true matches what every offer
-            // was when the response was recorded, and satisfies the
-            // TradeOfferSlot type requirement.
-            enforceDemandMinContractYears: true,
-            enforceDemandMaxSalary: true,
-            enforceDemandMaxAge: true,
-            enforceDemandMinPointsLastYear: true,
         })),
     };
 }
@@ -4537,6 +3485,10 @@ function SlotPlayerBlock({
     currentSeasonStats,
     lastSeasonStats,
     emptyLabel,
+    bordered = false,
+    onClick,
+    topLeftSlot,
+    topRightSlot,
 }: {
     playerId: number | null | undefined;
     nhlPlayerId: number | null | undefined;
@@ -4554,6 +3506,36 @@ function SlotPlayerBlock({
     currentSeasonStats: SeasonStatLine | null | undefined;
     lastSeasonStats: SeasonStatLine | null | undefined;
     emptyLabel: string;
+    /**
+     * When true, the name row is wrapped in a 2px cyan-bordered
+     * box, matching the visual weight of the offering side on the
+     * browse offer card. Used on the responding side when the
+     * player is coming from the server DTO rather than the client
+     * store (rare: saved-response shape), so the two sides always
+     * look the same.
+     */
+    bordered?: boolean;
+    /**
+     * When set, the name row becomes a clickable control that
+     * calls this handler. Used to open the roster popup so the
+     * responder can change or remove the current pick.
+     */
+    onClick?: () => void;
+    /**
+     * Optional absolutely-positioned overlay rendered at the
+     * top-left corner of the name row. Used by OfferCard to place
+     * the red "remove" circle on the responding side of a slot.
+     * The overlay is anchored to the NAME ROW itself (not to the
+     * wider column), so its offset lands on the player's bordered
+     * card regardless of how wide the stat table below it is.
+     */
+    topLeftSlot?: React.ReactNode;
+    /**
+     * Same as topLeftSlot, but anchored to the top-right corner.
+     * Used by OfferCard to place the red "remove" circle on the
+     * offering side of a slot.
+     */
+    topRightSlot?: React.ReactNode;
 }) {
     if (playerId == null) {
         return (
@@ -4566,37 +3548,99 @@ function SlotPlayerBlock({
     const currentContractLabel = contractLabel(currentContract ?? null);
     const secondContractLabel = contractLabel(secondContract ?? null);
 
+    /**
+   * When the block is clickable (onClick is set), the player name
+   * is NOT a Link: the whole bordered box must be the single
+   * click target that opens the roster popup, matching the
+   * behaviour of the responding side (whose name is a plain span
+   * inside its own button). Without this, the Link's own
+   * navigation intercepts the click and the popup never opens.
+   *
+   * In read-only contexts (no onClick), the name stays a Link to
+   * the player page as before.
+   */
+    const nameRowContent = (
+        <>
+            {nhlTeam && (
+                <NhlTeamLogo abbreviation={nhlTeam} size={20} />
+            )}
+
+            {nhlPlayerId != null && onClick == null ? (
+                <Link
+                    to={`/joueurs/${nhlPlayerId}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className='min-w-0 truncate font-semibold text-foreground transition-colors hover:text-[#00E5FF]'
+                >
+                    {shortName(firstName, lastName)}
+                </Link>
+            ) : (
+                <span className='min-w-0 truncate font-semibold'>
+                    {shortName(firstName, lastName)}
+                </span>
+            )}
+
+            {age != null && (
+                <span className='shrink-0 text-[0.6rem] font-normal text-white md:text-xs'>
+                    {age} ans
+                </span>
+            )}
+
+            <span className='shrink-0 text-[0.6rem] uppercase text-white md:text-xs'>
+                {position}
+            </span>
+        </>
+    );
+
+    const nameRow = bordered ? (
+        <button
+            type='button'
+            onClick={onClick}
+            disabled={onClick == null}
+            className='flex w-fit min-w-0 max-w-[14rem] items-center justify-start gap-x-1.5 rounded border-2 border-[#00E5FF] bg-[#080D1A] px-2 py-0.5 text-[0.8rem] text-foreground transition-colors enabled:cursor-pointer enabled:hover:bg-[#00E5FF]/10 disabled:cursor-default md:max-w-[18rem] md:text-[0.85rem]'
+            style={
+                onClick != null
+                    ? {
+                        boxShadow: [
+                            '0 0 4px rgba(0, 229, 255, 0.9)',
+                            '0 0 10px rgba(0, 229, 255, 0.55)',
+                            '0 0 16px rgba(0, 229, 255, 0.25)',
+                        ].join(', '),
+                    }
+                    : undefined
+            }
+        >
+            {nameRowContent}
+        </button>
+    ) : (
+        <div className='flex h-7 w-full items-center justify-start gap-x-1.5 text-[0.8rem] text-foreground md:text-[0.85rem]'>
+            {nameRowContent}
+        </div>
+    );
+
+    const hasOverlays =
+        topLeftSlot != null || topRightSlot != null;
+
     return (
         <>
-            <div className='flex h-7 w-full items-center justify-start gap-x-1.5 text-[0.8rem] text-foreground md:text-[0.85rem]'>
-                {nhlTeam && (
-                    <NhlTeamLogo abbreviation={nhlTeam} size={20} />
-                )}
+            {hasOverlays ? (
+                <div className='relative w-fit'>
+                    {nameRow}
 
-                {nhlPlayerId != null ? (
-                    <Link
-                        to={`/joueurs/${nhlPlayerId}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className='min-w-0 truncate font-semibold text-foreground transition-colors hover:text-[#00E5FF]'
-                    >
-                        {shortName(firstName, lastName)}
-                    </Link>
-                ) : (
-                    <span className='min-w-0 truncate font-semibold'>
-                        {shortName(firstName, lastName)}
-                    </span>
-                )}
+                    {topLeftSlot != null && (
+                        <div className='absolute left-1 top-1 z-20'>
+                            {topLeftSlot}
+                        </div>
+                    )}
 
-                {age != null && (
-                    <span className='shrink-0 text-[0.6rem] font-normal text-white md:text-xs'>
-                        {age} ans
-                    </span>
-                )}
-
-                <span className='shrink-0 text-[0.6rem] uppercase text-white md:text-xs'>
-                    {position}
-                </span>
-            </div>
+                    {topRightSlot != null && (
+                        <div className='absolute right-1 top-1 z-20'>
+                            {topRightSlot}
+                        </div>
+                    )}
+                </div>
+            ) : (
+                nameRow
+            )}
 
             <StatLinesTable
                 current={currentSeasonStats ?? null}
@@ -4648,31 +3692,18 @@ function RespondingPlayerBlock({
     slotIndex,
     wouldBustCap,
     onChangeRequest,
+    topLeftSlot,
+    topRightSlot,
 }: {
     entry: RosterEntry | null;
     matches: RosterEntry[];
     currentPick: number | null;
     onPick: (playerId: number | null) => void;
-    /**
-     * Slot this block renders on. Forwarded to the dropdown panel
-     * so its cap simulation targets the right slot.
-     */
     slotIndex: number;
-    /**
-     * Cap simulation helper from OfferCard.
-     */
-    wouldBustCap: (
-        candidateSalary: number,
-        forSlotIndex: number,
-    ) => boolean;
-    /**
-     * When provided, the trigger button calls this callback
-     * instead of opening the internal dropdown panel. Used by the
-     * "Voir les offres" card so the responder changes his pick
-     * through the roster popup (same flow as picking the first
-     * time) rather than through an inline dropdown.
-     */
+    wouldBustCap: (candidateSalary: number, forSlotIndex: number) => boolean;
     onChangeRequest?: () => void;
+    topLeftSlot?: React.ReactNode;
+    topRightSlot?: React.ReactNode;
 }) {
     const isGoalie = entry
         ? toPositionGroup(entry.position) === 'G'
@@ -4748,6 +3779,18 @@ function RespondingPlayerBlock({
                  * appearance as before.
                  */}
                 <div className='relative inline-flex w-fit min-w-0'>
+                    {topLeftSlot != null && (
+                        <div className='absolute left-1 top-1 z-20'>
+                            {topLeftSlot}
+                        </div>
+                    )}
+
+                    {topRightSlot != null && (
+                        <div className='absolute right-1 top-1 z-20'>
+                            {topRightSlot}
+                        </div>
+                    )}
+
                     <button
                         ref={triggerRef}
                         type='button'
@@ -4766,7 +3809,8 @@ function RespondingPlayerBlock({
                             onChangeRequest ? undefined : open
                         }
                         aria-label='Choisir un joueur'
-                        className='inline-flex w-fit min-w-0 max-w-[12rem] cursor-pointer items-center justify-center rounded border bg-[#080D1A] px-2 py-0.5 disabled:cursor-not-allowed md:max-w-[16rem]'
+                        className={`inline-flex w-fit min-w-0 max-w-[12rem] cursor-pointer items-center justify-center rounded bg-[#080D1A] px-2 py-0.5 disabled:cursor-not-allowed md:max-w-[16rem] ${currentPick != null ? 'border-2' : 'border'
+                            }`}
                         style={{
                             borderColor:
                                 currentPick != null
@@ -4775,9 +3819,9 @@ function RespondingPlayerBlock({
                             boxShadow:
                                 currentPick != null
                                     ? [
-                                        '0 0 3px rgba(0, 229, 255, 0.9)',
-                                        '0 0 8px rgba(0, 229, 255, 0.5)',
-                                        '0 0 14px rgba(0, 229, 255, 0.2)',
+                                        '0 0 4px rgba(0, 229, 255, 0.9)',
+                                        '0 0 10px rgba(0, 229, 255, 0.55)',
+                                        '0 0 16px rgba(0, 229, 255, 0.25)',
                                     ].join(', ')
                                     : undefined,
                         }}
@@ -4953,6 +3997,38 @@ function TeamCapLine({
 // Offer card
 // ---------------------------------------------------------------------
 
+/**
+ * Builds a synthetic TradeOfferSlot for a responding-side extra slot
+ * on the "Voir les offres" tab.
+ *
+ * An extra slot has no counterpart on the original offer, so every
+ * offering-side field is null and every demand criterion is empty.
+ * The struct only exists to satisfy the shape the pick popup expects
+ * when the responder opens the roster popup to choose a player for
+ * the extra.
+ *
+ * The positionGroup is set to "F" arbitrarily: the popup does not
+ * enforce position on browse offers, and passing a position here
+ * would incorrectly narrow the responder's choice.
+ */
+function buildSyntheticExtraSlot(slotIndex: number): TradeOfferSlot {
+    return {
+        slotIndex,
+        positionGroup: 'F',
+        offeringPlayerId: null,
+        offeringPlayerNhlPlayerId: null,
+        offeringPlayerFirstName: null,
+        offeringPlayerLastName: null,
+        offeringPlayerNhlTeam: null,
+        offeringPlayerPosition: null,
+        offeringPlayerAge: null,
+        offeringPlayerCurrentContract: null,
+        offeringPlayerSecondContract: null,
+        offeringPlayerCurrentSeasonStats: null,
+        offeringPlayerLastSeasonStats: null,
+    };
+}
+
 function OfferCard({
     offer,
     busy,
@@ -4969,7 +4045,7 @@ function OfferCard({
     onCancelAcceptedTrade,
     onOpenTeamRoster,
     onRequestPlayerPick,
-    onUseAsBase,
+    onRequestOfferingPlayerPick,
     swapSides = false,
 }: {
     offer: TradeOffer;
@@ -5007,21 +4083,21 @@ function OfferCard({
   */
     onAccept?: () => void;
 
-        /**
-       * When provided AND the offer is still Pending, renders the
-       * "Refuser" button to the left of "Accepter". Only the "Offres
-       * reçues" panel passes this.
-       */
-        onReject?: () => void;
+    /**
+   * When provided AND the offer is still Pending, renders the
+   * "Refuser" button to the left of "Accepter". Only the "Offres
+   * reçues" panel passes this.
+   */
+    onReject?: () => void;
 
-        /**
-         * When provided AND the offer is still Pending, renders a
-         * "Contre-offre" button to the left of "Refuser". Only the
-         * "Offres reçues" panel passes this. The callback is
-         * responsible for populating the Créer draft, switching the
-         * tab, and rejecting the underlying response.
-         */
-        onCounterOffer?: () => void;
+    /**
+     * When provided AND the offer is still Pending, renders a
+     * "Contre-offre" button to the left of "Refuser". Only the
+     * "Offres reçues" panel passes this. The callback is
+     * responsible for populating the Créer draft, switching the
+     * tab, and rejecting the underlying response.
+     */
+    onCounterOffer?: () => void;
 
     /**
      * When set, this card represents a response the current user's
@@ -5033,32 +4109,32 @@ function OfferCard({
      * ("Pending", "Accepted", "Rejected" or "Cancelled").
      */
     responseStatus?: string;
-        /**
-         * When provided AND `responseStatus === 'Pending'`, the card
-         * renders a small "Annuler" button in its header. Only the
-         * "Offres envoyées" panel passes this.
-         */
-        onCancelResponse?: () => void;
-        /**
-         * When provided AND the underlying response has been Accepted,
-         * renders an "Annuler" button below the "OFFRE ACCEPTÉE" label.
-         *
-         * Both the Reçues and Envoyées panels pass this: the offer
-         * creator to withdraw his acceptance, the responder to withdraw
-         * his answer. Semantically this is the "changed my mind"
-         * escape hatch for a private league where managers trust each
-         * other.
-         */
-        onCancelAcceptedTrade?: () => void;
-        /**
-      * When provided, the two manager names in the card header
-      * become clickable buttons that call this callback with the
-      * team id and name. MarketplacePage uses it to open a roster
-      * popup instead of navigating to /mon-equipe. When undefined
-      * (e.g. the publish preview popup), the names render as plain
-      * non-interactive text.
-      */
-        onOpenTeamRoster?: (teamId: number, teamName: string) => void;
+    /**
+     * When provided AND `responseStatus === 'Pending'`, the card
+     * renders a small "Annuler" button in its header. Only the
+     * "Offres envoyées" panel passes this.
+     */
+    onCancelResponse?: () => void;
+    /**
+     * When provided AND the underlying response has been Accepted,
+     * renders an "Annuler" button below the "OFFRE ACCEPTÉE" label.
+     *
+     * Both the Reçues and Envoyées panels pass this: the offer
+     * creator to withdraw his acceptance, the responder to withdraw
+     * his answer. Semantically this is the "changed my mind"
+     * escape hatch for a private league where managers trust each
+     * other.
+     */
+    onCancelAcceptedTrade?: () => void;
+    /**
+  * When provided, the two manager names in the card header
+  * become clickable buttons that call this callback with the
+  * team id and name. MarketplacePage uses it to open a roster
+  * popup instead of navigating to /mon-equipe. When undefined
+  * (e.g. the publish preview popup), the names render as plain
+  * non-interactive text.
+  */
+    onOpenTeamRoster?: (teamId: number, teamName: string) => void;
     /**
   * When provided, the responder's picker is a "Choisir un
   * joueur" button that opens the roster popup in pick mode,
@@ -5066,27 +4142,23 @@ function OfferCard({
   * receives an `onPick` closure the popup calls when the
   * responder clicks "Ajouter" on a player row.
   */
-    onRequestPlayerPick?: (
-        teamId: number,
-        teamName: string,
-        pick: PendingPickContext,
-    ) => void;
-    /**
-     * When provided, the "Utiliser comme base" button copies the
-     * offer's players and the user's current picks into the Créer
-     * draft, and switches the page to the Créer tab. The `picks`
-     * argument is the current offer-picks snapshot for this
-     * offer — the same object the responder-side dropdowns are
-     * bound to.
-     *
-     * Only the "Voir les offres" panel passes this: on the user's
-     * own offers the button is not rendered anyway, because
-     * canRespond is false.
-     */
-    onUseAsBase?: (
-        offer: TradeOffer,
-        picks: PicksBySlot,
-    ) => void;
+        onRequestPlayerPick?: (
+            teamId: number,
+            teamName: string,
+            pick: PendingPickContext,
+        ) => void;
+        /**
+   * When provided, the offering side of every slot renders a
+   * "Choisir un joueur" (or "Changer") button that opens the
+   * offer creator's roster in pick mode. The pick is stored as
+   * an offering override for this slot and is submitted with the
+   * response.
+   */
+        onRequestOfferingPlayerPick?: (
+            teamId: number,
+            teamName: string,
+            pick: PendingPickContext,
+        ) => void;
     /**
      * When true, the two sides of the card are rendered in the
      * opposite order:
@@ -5139,10 +4211,29 @@ function OfferCard({
         offer.respondingFantasyTeamName != null || !offer.isMine;
 
     /**
-    * True when the user can respond to this offer: not his own, and
-    * we have his roster loaded so we can populate the dropdowns.
-    */
+  * True when the user can respond to this offer: not his own, and
+  * we have his roster loaded so we can populate the dropdowns.
+  */
     const canRespond = !offer.isMine && userRoster != null;
+
+    /**
+     * True when this card represents a saved response (Reçues or
+     * Envoyées tab) rather than a live browse offer.
+     *
+     * Used by the slot rendering to always show the SlotPlayerBlock
+     * on the responding side, even when the responding player is
+     * null. Unbalanced direct offers create response slots with no
+     * responding player; without this flag those slots would fall
+     * through to the demand-criteria block, which is wrong for a
+     * saved response.
+     *
+     * `respondingFantasyTeamName` is only ever set on shapes built
+     * from a TradeOfferResponse (see responseToOfferShape), so its
+     * presence is a reliable discriminator between the two card
+     * sources.
+     */
+    const isResponseCard =
+        offer.respondingFantasyTeamName != null;
 
     /**
      * True when the underlying response has been accepted. Only
@@ -5181,6 +4272,377 @@ function OfferCard({
         subscribeToPicks,
         () => getPicksForOffer(offer.id),
     );
+
+    /**
+     * The responder's optional text message for this offer. Only
+     * meaningful when the card is in respond mode (Voir les
+     * offres); on other card shapes the value is ignored.
+     */
+    const responseNote = useSyncExternalStore(
+        subscribeToResponseNotes,
+        () => getResponseNote(offer.id),
+    );
+
+    /**
+     * Extra responding slots the user has added on the "Voir les
+     * offres" tab. Each entry is a slot index >= offer.slots.length.
+     * The pick for that slot, if any, lives in the same `picks`
+     * store above under that index; this list only tells us which
+     * indices should be rendered as extras.
+     */
+    const extraResponderSlots = useSyncExternalStore(
+        subscribeToExtraResponderSlots,
+        () => getExtraResponderSlots(offer.id),
+    );
+
+    const offeringOverrides = useSyncExternalStore(
+        subscribeToOfferingOverrides,
+        () => getOfferingOverridesForOffer(offer.id),
+    );
+
+    /**
+     * True when the responder explicitly emptied the offering side
+     * of the given slot (as opposed to "no override, use the
+     * creator's player").
+     */
+    const isOfferingCleared = (slotIndex: number): boolean =>
+        offeringOverrides[slotIndex] === CLEARED_OFFERING_SENTINEL;
+
+    /**
+     * Effective offering player id for a BASE slot: the responder's
+     * override if there is one, the creator's own offering player
+     * otherwise. Returns null when the slot is explicitly cleared or
+     * when there is no player on the offering side at all.
+     */
+    const effectiveOfferingPlayerIdForSlot = (
+        slot: TradeOfferSlot,
+    ): number | null => {
+        const raw = offeringOverrides[slot.slotIndex];
+
+        if (raw === CLEARED_OFFERING_SENTINEL) return null;
+        if (raw != null) return raw;
+
+        return slot.offeringPlayerId ?? null;
+    };
+
+    /**
+     * Response-card slot filtering and ordering.
+     *
+     * On Reçues and Envoyées, the responder's answer is often
+     * unbalanced: some slots of the original offer are answered
+     * with a responding player, some are not, and some the
+     * responder explicitly emptied on the offering side. The
+     * rules:
+     *
+     *   - A slot that is empty on BOTH sides carries no
+     *     information and is removed from the rendering
+     *     entirely.
+     *
+     *   - A slot that is empty on ONE side is kept (it carries
+     *     real information about which side the responder
+     *     answered), but sorted BELOW the slots that are filled
+     *     on both sides, so the meat of the trade always sits
+     *     at the top of the card.
+     *
+     * Ordering within each group preserves the original slot
+     * order, so a card whose slots are all one-sided does not
+     * re-order unexpectedly.
+     *
+     * On every other card shape (browse, publish preview, own
+     * offers) the original slot array is returned unchanged:
+     * those cards always carry real content on both sides
+     * because they represent the annonce itself.
+     */
+      /**
+     * Response-card slot compaction.
+     *
+     * On Reçues and Envoyées the responder's answer is often
+     * unbalanced: some slots carry a responding player, some
+     * don't, and some carry no offering player at all. Raw, that
+     * leaves holes on one side of a row while the other side is
+     * populated, and both-empty rows sitting in the middle of the
+     * card.
+     *
+     * The fix is a per-side compaction:
+     *
+     *   1. Walk the original slots in order and collect every
+     *      player that lives on the LEFT side (offering) into one
+     *      list, and every player on the RIGHT side (responding)
+     *      into another list.
+     *
+     *   2. Re-pair the two lists by index. Merged row i takes the
+     *      i-th left player and the i-th right player.
+     *
+     *   3. Rows where neither list has an entry at that index are
+     *      simply never produced, so both-empty rows vanish.
+     *
+     * Concrete example: [Hagel|∅, ∅|Podkolzin, Marner|∅] becomes
+     * [Hagel|Podkolzin, Marner|∅]. Podkolzin floated up into the
+     * empty right cell of row 0, Marner floated up into the empty
+     * left cell of row 1.
+     *
+     * On every other card shape (browse, publish preview, own
+     * offers) the original slot array is returned unchanged —
+     * those cards are the annonce itself and must not be
+     * reordered.
+     *
+     * The merged row's slotIndex is taken from whichever original
+     * slot provided its content. It is unique across the merged
+     * array (each original slot contributes at most one row per
+     * side, and the two lists are zipped with distinct indices),
+     * so it remains safe as a React key.
+     *
+     * offeringOverrides is intentionally NOT consulted here.
+     * Response cards are read-only — the store is always empty
+     * on them, and effectiveOfferingPlayerIdForSlot already falls
+     * back to slot.offeringPlayerId when no override exists.
+     */
+    const visibleResponseSlots = useMemo(() => {
+        if (!isResponseCard) {
+            return offer.slots;
+        }
+
+        const leftSlots: TradeOfferSlot[] = [];
+        const rightSlots: TradeOfferSlot[] = [];
+
+        for (const slot of offer.slots) {
+            if (slot.offeringPlayerId != null) {
+                leftSlots.push(slot);
+            }
+
+            if (slot.respondingPlayerId != null) {
+                rightSlots.push(slot);
+            }
+        }
+
+        const total = Math.max(
+            leftSlots.length,
+            rightSlots.length,
+        );
+
+        const merged: TradeOfferSlot[] = [];
+
+        for (let i = 0; i < total; i++) {
+            const left = leftSlots[i];
+            const right = rightSlots[i];
+
+            merged.push({
+                slotIndex:
+                    left?.slotIndex ?? right?.slotIndex ?? i,
+                positionGroup:
+                    left?.positionGroup ??
+                    right?.positionGroup ??
+                    'F',
+
+                // ---- LEFT side: from the left list ----
+                offeringPlayerId:
+                    left?.offeringPlayerId ?? null,
+                offeringPlayerNhlPlayerId:
+                    left?.offeringPlayerNhlPlayerId ?? null,
+                offeringPlayerFirstName:
+                    left?.offeringPlayerFirstName ?? null,
+                offeringPlayerLastName:
+                    left?.offeringPlayerLastName ?? null,
+                offeringPlayerNhlTeam:
+                    left?.offeringPlayerNhlTeam ?? null,
+                offeringPlayerPosition:
+                    left?.offeringPlayerPosition ?? null,
+                offeringPlayerAge:
+                    left?.offeringPlayerAge ?? null,
+                offeringPlayerCurrentContract:
+                    left?.offeringPlayerCurrentContract ?? null,
+                offeringPlayerSecondContract:
+                    left?.offeringPlayerSecondContract ?? null,
+                offeringPlayerCurrentSeasonStats:
+                    left?.offeringPlayerCurrentSeasonStats ??
+                    null,
+                offeringPlayerLastSeasonStats:
+                    left?.offeringPlayerLastSeasonStats ??
+                    null,
+
+                // ---- RIGHT side: from the right list ----
+                respondingPlayerId:
+                    right?.respondingPlayerId ?? null,
+                respondingPlayerNhlPlayerId:
+                    right?.respondingPlayerNhlPlayerId ?? null,
+                respondingPlayerFirstName:
+                    right?.respondingPlayerFirstName ?? null,
+                respondingPlayerLastName:
+                    right?.respondingPlayerLastName ?? null,
+                respondingPlayerNhlTeam:
+                    right?.respondingPlayerNhlTeam ?? null,
+                respondingPlayerPosition:
+                    right?.respondingPlayerPosition ?? null,
+                respondingPlayerAge:
+                    right?.respondingPlayerAge ?? null,
+                respondingPlayerCurrentContract:
+                    right?.respondingPlayerCurrentContract ??
+                    null,
+                respondingPlayerSecondContract:
+                    right?.respondingPlayerSecondContract ??
+                    null,
+                respondingPlayerCurrentSeasonStats:
+                    right?.respondingPlayerCurrentSeasonStats ??
+                    null,
+                respondingPlayerLastSeasonStats:
+                    right?.respondingPlayerLastSeasonStats ??
+                    null,
+            });
+        }
+
+        return merged;
+    }, [isResponseCard, offer.slots]);
+
+    /**
+  * Ensures a trailing empty extra slot exists as soon as every
+  * base slot of the offer and every existing extra are filled.
+  *
+  * This is what replaced the "Ajouter un joueur" button on the
+  * "Voir les offres" tab. As soon as the responder fills the
+  * last empty responding slot, a new empty extra is appended,
+  * so there is always exactly one "Choisir un joueur" chooser
+  * on the responding side.
+  *
+  * The effect only fires on cards the connected user can
+  * respond to (canRespond is false on own offers, saved
+  * responses and the publish preview), so it never mutates
+  * state in a context that cannot add slots anyway.
+  *
+  * Reads the CURRENT extras from the store rather than the
+  * captured value, so a double-invocation in React strict mode
+  * cannot append the same extra twice. Converges because the
+  * newly appended extra is empty, which makes the effect a
+  * no-op on the next render.
+  */
+    useLayoutEffect(() => {
+        if (!canRespond) return;
+
+        const baseCount = offer.slots.length;
+        const currentExtras = getExtraResponderSlots(offer.id);
+
+        // Full list of slot indices currently rendered: the offer's
+        // base slots plus every extra the responder has added.
+        const allSlotIndices = [
+            ...offer.slots.map((s) => s.slotIndex),
+            ...currentExtras,
+        ];
+
+        // Find the highest-index slot currently on screen. That is
+        // the slot whose emptiness (or non-emptiness) drives the
+        // append decision, exactly the way DirectOfferCard does it.
+        const lastSlotIndex = Math.max(...allSlotIndices);
+
+        const lastBaseSlot = offer.slots.find(
+            (s) => s.slotIndex === lastSlotIndex,
+        );
+
+        const lastOfferingRaw = offeringOverrides[lastSlotIndex];
+
+        // "Filled" for the offering side: an explicit override
+        // counts, the offer creator's own offering player (base
+        // slot, no override) counts, an explicit clear does NOT.
+        const lastOfferingFilled =
+            lastOfferingRaw === CLEARED_OFFERING_SENTINEL
+                ? false
+                : lastOfferingRaw != null
+                    ? true
+                    : lastBaseSlot?.offeringPlayerId != null;
+
+        const lastRespondingFilled =
+            picks[lastSlotIndex] != null;
+
+        // If the last slot is empty on both sides, do nothing.
+        // Otherwise append a fresh empty extra so both sides keep
+        // a "Choisir un joueur" chooser available. This mirrors the
+        // DirectOfferCard behaviour: one chooser per side, always.
+        if (!lastOfferingFilled && !lastRespondingFilled) {
+            return;
+        }
+
+        addExtraResponderSlot(offer.id, baseCount);
+    }, [
+        canRespond,
+        offer.id,
+        offer.slots,
+        picks,
+        extraResponderSlots,
+        offeringOverrides,
+    ]);
+
+    /**
+  * Slot index of the first empty OFFERING slot across the
+  * offer's base slots and every existing extra. The
+  * "Choisir un joueur" chooser on the offering side renders
+  * ONLY on that slot; every other empty offering slot renders
+  * as an empty cell. Mirrors firstEmptyRespondingIdx.
+  *
+  * Base slot offering is "filled" when the offer creator put a
+  * player there (OfferingPlayerId) OR the responder set an
+  * override. Extra slot offering is "filled" only when an
+  * override exists. Null when every offering slot already has
+  * a player; transient, because the auto-append effect adds a
+  * new extra on the same render.
+  */
+    const firstEmptyOfferingIdx = (() => {
+        for (const slot of offer.slots) {
+            const raw = offeringOverrides[slot.slotIndex];
+
+            // Cleared counts as empty, an override counts as
+            // filled, no override falls back to the creator's
+            // offering player.
+            const hasOffering =
+                raw === CLEARED_OFFERING_SENTINEL
+                    ? false
+                    : raw != null
+                        ? true
+                        : slot.offeringPlayerId != null;
+
+            if (!hasOffering) {
+                return slot.slotIndex;
+            }
+        }
+
+        for (const idx of extraResponderSlots) {
+            const raw = offeringOverrides[idx];
+
+            const hasOffering =
+                raw != null && raw !== CLEARED_OFFERING_SENTINEL;
+
+            if (!hasOffering) {
+                return idx;
+            }
+        }
+
+        return null;
+    })();
+
+    /**
+     * Slot index of the first empty responding slot across the
+     * offer's base slots and every existing extra. The
+     * "Choisir un joueur" chooser on the responding side renders
+     * ONLY on that slot; every other empty responding slot renders
+     * as an empty cell.
+     *
+     * Null when every responding slot already has a pick. That
+     * state is transient: the effect above appends a new extra on
+     * the same render, so on the very next render a chooser is
+     * available again.
+     */
+    const firstEmptyRespondingIdx = (() => {
+        for (const slot of offer.slots) {
+            if (picks[slot.slotIndex] == null) {
+                return slot.slotIndex;
+            }
+        }
+
+        for (const idx of extraResponderSlots) {
+            if (picks[idx] == null) {
+                return idx;
+            }
+        }
+
+        return null;
+    })();
 
     // -----------------------------------------------------------------
     // Draft picks ("Ajouter des choix de repêchage")
@@ -5281,7 +4743,68 @@ function OfferCard({
         };
     }, [swapSides, offer.createdByFantasyTeamId]);
 
+    /**
+     * The offer creator's full roster. Fetched only on the "Voir
+     * les offres" tab, where the responder can override the
+     * offering player of any slot; the override UI needs each
+     * player's full display data (name, logo, age, contracts,
+     * current and previous season stats) to render the same
+     * SlotPlayerBlock the left column already uses.
+     *
+     * Not used anywhere else: on Reçues / Envoyées the offering
+     * side comes from the server DTO, and on the publish preview
+     * there is no responder.
+     */
+    const [creatorRoster, setCreatorRoster] =
+        useState<TeamRoster | null>(null);
+
+    useEffect(() => {
+        if (!swapSides) {
+            setCreatorRoster(null);
+            return;
+        }
+
+        let cancelled = false;
+
+        getTeamRoster(offer.createdByFantasyTeamId)
+            .then((data) => {
+                if (!cancelled) setCreatorRoster(data);
+            })
+            .catch(() => {
+                if (!cancelled) setCreatorRoster(null);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [swapSides, offer.createdByFantasyTeamId]);
+
     const creatorPicks = offer.picks;
+
+    /**
+     * Draft picks the responder has explicitly removed from the
+     * offer's own pick list, subscribed via useSyncExternalStore
+     * so the card re-renders the moment the store changes. The
+     * effective creator-pick list subtracts these out.
+     */
+    const removedCreatorPickIds = useSyncExternalStore(
+        subscribeToRemovedCreatorPicks,
+        () => getRemovedCreatorPicks(offer.id),
+    );
+
+    /**
+     * The creator's picks as seen by the responder: the offer's own
+     * picks minus everything the responder removed. This is what
+     * the right-column TradePicksSlot renders, and what the
+     * `hasAnyPick` gate checks.
+     */
+    const effectiveCreatorPicks = useMemo(
+        () =>
+            creatorPicks.filter(
+                (p) => !removedCreatorPickIds.includes(p.id),
+            ),
+        [creatorPicks, removedCreatorPickIds],
+    );
 
     const responderPicks = useMemo(() => {
         if (offer.respondingPicks != null) {
@@ -5355,11 +4878,9 @@ function OfferCard({
         return result;
     }, [canRespond, userRoster, offer.slots, picks]);
 
-    /** True when every slot has a pick. */
-    const allSlotsFilled = useMemo(() => {
-        if (!canRespond) return false;
-        return offer.slots.every((s) => picks[s.slotIndex] != null);
-    }, [canRespond, offer.slots, picks]);
+    // allSlotsFilled was removed: unbalanced responses are now
+    // allowed, so the responder is not required to fill every base
+    // slot. The "Offrir" button is gated on hasAnyPick instead.
 
     function setPick(slotIndex: number, playerId: number | null) {
         // Single write path. The store handles the notify, so
@@ -5410,15 +4931,68 @@ function OfferCard({
     const creatorOfferedSalary = useMemo(() => {
         let sum = 0;
 
+        // Base slots: the salary of the EFFECTIVE offering player
+        // on each. Three states per slot:
+        //   - cleared  -> skip (0)
+        //   - override -> look up the override player's salary in
+        //                 the offer creator's roster
+        //   - else     -> use the offer DTO's own salary
         for (const slot of offer.slots) {
-            const salary = slot.offeringPlayerCurrentContract?.salary;
+            const raw = offeringOverrides[slot.slotIndex];
+
+            if (raw === CLEARED_OFFERING_SENTINEL) {
+                continue;
+            }
+
+            if (raw != null) {
+                const entry = creatorRoster?.entries.find(
+                    (e) => e.playerId === raw,
+                );
+
+                const salary = entry?.currentContract?.salary;
+                if (salary != null) {
+                    sum += salary;
+                }
+
+                continue;
+            }
+
+            const salary =
+                slot.offeringPlayerCurrentContract?.salary;
+            if (salary != null) {
+                sum += salary;
+            }
+        }
+
+        // Extra slots: only the offering override contributes,
+        // because extras have no counterpart on the original offer.
+        for (const idx of extraResponderSlots) {
+            const raw = offeringOverrides[idx];
+
+            if (
+                raw == null ||
+                raw === CLEARED_OFFERING_SENTINEL
+            ) {
+                continue;
+            }
+
+            const entry = creatorRoster?.entries.find(
+                (e) => e.playerId === raw,
+            );
+
+            const salary = entry?.currentContract?.salary;
             if (salary != null) {
                 sum += salary;
             }
         }
 
         return sum;
-    }, [offer.slots]);
+    }, [
+        offer.slots,
+        offeringOverrides,
+        creatorRoster,
+        extraResponderSlots,
+    ]);
 
     /**
      * Sum of the current-season contract salaries the RIGHT side is
@@ -5434,6 +5008,9 @@ function OfferCard({
     const responderOfferedSalary = useMemo(() => {
         let sum = 0;
 
+        // Base slots: saved-response cards carry the salary on the
+        // DTO itself; interactive browse cards look it up in the
+        // user's own roster from the `picks` store.
         for (const slot of offer.slots) {
             const savedSalary =
                 slot.respondingPlayerCurrentContract?.salary;
@@ -5456,8 +5033,29 @@ function OfferCard({
             }
         }
 
+        // Extra responder slots: only live on browse cards, always
+        // looked up in the user's roster by the pick store.
+        for (const idx of extraResponderSlots) {
+            const pick = picks[idx];
+            if (pick == null) continue;
+
+            const entry = userRoster?.entries.find(
+                (e) => e.playerId === pick,
+            );
+
+            const salary = entry?.currentContract?.salary;
+            if (salary != null) {
+                sum += salary;
+            }
+        }
+
         return sum;
-    }, [offer.slots, picks, userRoster]);
+    }, [
+        offer.slots,
+        picks,
+        userRoster,
+        extraResponderSlots,
+    ]);
 
     // Creator's base and adjusted cap space. Null when either the
     // season cap or the creator's cap hit is unknown.
@@ -5513,8 +5111,21 @@ function OfferCard({
   * a side goes negative, but nothing is blocked.
   */
     const hasAnyPick = useMemo(
-        () => Object.values(picks).some((v) => v != null),
-        [picks],
+        () =>
+            Object.values(picks).some((v) => v != null) ||
+            Object.values(offeringOverrides).some(
+                (v) => v != null,
+            ) ||
+            responderDraftPickIds.length > 0 ||
+            requestedDraftPickIds.length > 0 ||
+            removedCreatorPickIds.length > 0,
+        [
+            picks,
+            offeringOverrides,
+            responderDraftPickIds,
+            requestedDraftPickIds,
+            removedCreatorPickIds,
+        ],
     );
 
     /**
@@ -5596,46 +5207,89 @@ function OfferCard({
      */
     function handleResetPicks() {
         clearPicksForOffer(offer.id);
+        clearExtraResponderSlots(offer.id);
+        clearOfferingOverridesForOffer(offer.id);
         DraftPicks.clearOfferPicks(offer.id);
+        clearRemovedCreatorPicks(offer.id);
+        clearResponseNote(offer.id);
         setRespondSuccess(null);
         setRespondError(null);
     }
 
     async function handleOffer() {
-        // `allSlotsFilled` is the only structural gate on this
-        // side of the guard. Cap violations are intentionally
-        // allowed: a manager who would bust the cap can still
-        // submit his offer, and the other manager can decide
-        // whether to accept. The red cap line on the header is a
-        // warning, not a block.
+        // `hasAnyPick` is the only structural gate on this side of
+        // the guard: a response must contain at least one player or
+        // at least one draft pick, otherwise there is nothing to
+        // send. Beyond that, the trade is allowed to be as
+        // unbalanced as the managers want: the responder can fill
+        // zero base slots, some of them, or all of them, and can
+        // add extras or attach picks without any matching
+        // requirement on the other side. Cap violations are also
+        // intentionally allowed; the red cap line is a warning, not
+        // a block.
         if (
             !canRespond ||
-            !allSlotsFilled ||
+            !hasAnyPick ||
             respondBusy
         ) {
             return;
         }
 
         // Convert the picks-by-slot map into the flat list the API
-        // expects. Every slot in the offer must be present, otherwise
-        // the backend rejects the whole response.
+        // expects.
+        //
+        // Every BASE slot is submitted, even the ones that are
+        // unfilled on both sides. Sending them with a null
+        // responding player keeps the 1:1 slot mapping intact on
+        // the offer creator's screen: he sees the full picture of
+        // which slots the responder filled and which he left
+        // empty, rather than a mysteriously short response.
+        //
+        // Extras are only submitted when they carry something (a
+        // responding pick or an offering override). Empty extras
+        // are skipped so a trailing auto-added placeholder never
+        // produces a phantom slot.
         const picksArray: RespondToTradeOfferPick[] = [];
 
         for (const slot of offer.slots) {
-            const pick = picks[slot.slotIndex];
+            const pick = picks[slot.slotIndex] ?? null;
 
-            if (pick == null) {
-                // Should not happen: the button is disabled unless
-                // every slot has a pick.
-                setRespondError(
-                    'Tous les emplacements doivent avoir un joueur.',
-                );
-                return;
-            }
+            const raw = offeringOverrides[slot.slotIndex];
+
+            const cleared =
+                raw === CLEARED_OFFERING_SENTINEL;
+
+            const override =
+                cleared ? null : raw ?? null;
 
             picksArray.push({
                 slotIndex: slot.slotIndex,
                 respondingPlayerId: pick,
+                offeringPlayerOverrideId: override,
+                removeOfferingPlayer: cleared,
+            });
+        }
+
+        for (const slotIndex of extraResponderSlots) {
+            const pick = picks[slotIndex] ?? null;
+
+            const raw = offeringOverrides[slotIndex];
+
+            const cleared =
+                raw === CLEARED_OFFERING_SENTINEL;
+
+            const override =
+                cleared ? null : raw ?? null;
+
+            if (pick == null && override == null && !cleared) {
+                continue;
+            }
+
+            picksArray.push({
+                slotIndex,
+                respondingPlayerId: pick,
+                offeringPlayerOverrideId: override,
+                removeOfferingPlayer: cleared,
             });
         }
 
@@ -5644,11 +5298,16 @@ function OfferCard({
         setRespondSuccess(null);
 
         try {
+            const trimmedNote = responseNote.trim();
+
             const result = await respondToTradeOffer(offer.id, {
                 picks: picksArray,
+                note: trimmedNote === '' ? null : trimmedNote,
                 draftPickIds: responderDraftPickIds.slice(),
                 requestedDraftPickIds:
                     requestedDraftPickIds.slice(),
+                removedCreatorDraftPickIds:
+                    Array.from(removedCreatorPickIds),
             });
 
             if (result.success) {
@@ -5660,18 +5319,28 @@ function OfferCard({
                 // he still gets confirmation that the offer went
                 // through.
                 //
-                // Two stores to clear:
+                // Stores to clear:
                 //   - marketplaceTradeState (per-slot player
                 //     picks): clearPicksForOffer.
+                //   - marketplaceExtraResponderSlots (trailing
+                //     auto-added extras): clearExtraResponderSlots.
+                //   - marketplaceOfferingOverrides (creator-side
+                //     player overrides): clearOfferingOverridesForOffer.
                 //   - marketplacePicksState (draft picks, all
-                //     three sides: responder / requested /
-                //     creator): clearOfferPicks.
+                //     sides: responder / requested / creator):
+                //     clearOfferPicks.
+                //   - marketplaceRemovedCreatorPicks (creator picks
+                //     the responder removed): clearRemovedCreatorPicks.
                 //
                 // Without these, a subsequent mount of the same
                 // offer (should it ever come back into view)
-                // would restore the picks we just submitted.
+                // would restore the state we just submitted.
                 clearPicksForOffer(offer.id);
+                clearExtraResponderSlots(offer.id);
+                clearOfferingOverridesForOffer(offer.id);
                 DraftPicks.clearOfferPicks(offer.id);
+                clearRemovedCreatorPicks(offer.id);
+                clearResponseNote(offer.id);
             } else {
                 setRespondError(result.message);
             }
@@ -5704,6 +5373,80 @@ function OfferCard({
     const bloomFar = isAccepted
         ? ACCEPTED_BLOOM_FAR
         : OFFER_BLOOM_FAR;
+
+    /**
+  * Builds the list of player ids the popup must hide when the
+  * responder picks the RESPONDING player for the given slot:
+  * every player he has already committed to another responding
+  * slot of the same trade (base or extra).
+  *
+  * The current slot's own pick is deliberately excluded so the
+  * popup can still show it in the pinned card.
+  */
+    const buildExcludedRespondingIds = (
+        currentSlotIndex: number,
+    ): number[] => {
+        const excluded: number[] = [];
+
+        for (const s of offer.slots) {
+            if (s.slotIndex === currentSlotIndex) continue;
+
+            const pick = picks[s.slotIndex];
+            if (pick != null) excluded.push(pick);
+        }
+
+        for (const idx of extraResponderSlots) {
+            if (idx === currentSlotIndex) continue;
+
+            const pick = picks[idx];
+            if (pick != null) excluded.push(pick);
+        }
+
+        return excluded;
+    };
+
+    /**
+     * Builds the list of player ids the popup must hide when the
+     * responder picks the OFFERING player for the given slot:
+     * every player already committed to the offering side of
+     * another slot of the same trade. That covers both the offer
+     * creator's original offerings and any overrides the responder
+     * has already set.
+     *
+     * The current slot's own offered player is deliberately
+     * excluded so the popup can still show him in the pinned card.
+     */
+    const buildExcludedOfferingIds = (
+        currentSlotIndex: number,
+    ): number[] => {
+        const excluded: number[] = [];
+
+        for (const s of offer.slots) {
+            if (s.slotIndex === currentSlotIndex) continue;
+
+            const raw = offeringOverrides[s.slotIndex];
+
+            if (raw === CLEARED_OFFERING_SENTINEL) continue;
+            if (raw != null) {
+                excluded.push(raw);
+            } else if (s.offeringPlayerId != null) {
+                excluded.push(s.offeringPlayerId);
+            }
+        }
+
+        for (const idx of extraResponderSlots) {
+            if (idx === currentSlotIndex) continue;
+
+            const raw = offeringOverrides[idx];
+
+            if (raw == null) continue;
+            if (raw === CLEARED_OFFERING_SENTINEL) continue;
+
+            excluded.push(raw);
+        }
+
+        return excluded;
+    };
 
     /**
      * Single entry point for "open the pick popup for this slot".
@@ -5759,12 +5502,162 @@ function OfferCard({
                 }
                 : undefined;
 
+        const excluded = buildExcludedRespondingIds(
+            slot.slotIndex,
+        );
+
+        // Build the reference card the popup shows at the top:
+        // the EFFECTIVE offering player for this slot (post any
+        // override or clear), not the offer slot's original DTO
+        // field. If the responder has cleared the offering side,
+        // this is null and the popup correctly shows no reference.
+        //
+        // Prefer the real roster entry (richer data: headshot,
+        // contracts, injuries); fall back to the synthesized
+        // snapshot built from the offer DTO when the creator
+        // roster hasn't loaded yet AND the effective player is
+        // the slot's own offering player.
+        const effectiveOfferingId =
+            effectiveOfferingPlayerIdForSlot(slot);
+
+        let referencePlayer: RosterEntry | null = null;
+
+        if (effectiveOfferingId != null) {
+            const fromRoster = creatorRoster?.entries.find(
+                (e) => e.playerId === effectiveOfferingId,
+            );
+
+            if (fromRoster) {
+                referencePlayer = fromRoster;
+            } else if (
+                effectiveOfferingId === slot.offeringPlayerId
+            ) {
+                referencePlayer =
+                    buildReferenceFromSlot(slot);
+            }
+        }
+
         onRequestPlayerPick(rightTeamId, rightTeamName, {
             offerId: offer.id,
             slotIndex: slot.slotIndex,
             slot,
             capContext,
+            excludedPlayerIds:
+                excluded.length > 0 ? excluded : undefined,
+            referencePlayer,
         });
+    };
+
+    /**
+     * Same as requestPickForSlot, but for the offering side of the
+     * slot: opens the roster popup on the OFFER CREATOR's team so
+     * the responder can override the offering player.
+     *
+     * Builds the same excluded list as above but on the offering
+     * side, so a manager cannot pick a player who is already
+     * committed to another offering slot of the same trade.
+     */
+    const requestOfferingPickForSlot = (
+        slot: TradeOfferSlot,
+    ) => {
+        if (!onRequestOfferingPlayerPick) return;
+
+        const excluded = buildExcludedOfferingIds(
+            slot.slotIndex,
+        );
+
+        // -----------------------------------------------------------------
+        // Cap projection context for the OFFERING side.
+        //
+        // Same shape as the responding side's context (built by
+        // requestPickForSlot), with two differences:
+        //
+        //   - candidateSide: 'left' — the candidate joins the
+        //     LEFT side of the cap context, which is always the
+        //     offer creator. (Responding picks default to 'right'
+        //     because they join the responder.)
+        //
+        //   - creatorOfferedSalary EXCLUDES the current offering
+        //     player of this slot, because the candidate is
+        //     REPLACING him, not adding to him. Whatever the
+        //     creator had offered on this slot (via his own pick
+        //     or via a previous override) is taken out first.
+        //
+        //   - responderOfferedSalaryExcludingCurrentSlot is the
+        //     FULL responder salary. The candidate is not touching
+        //     the responder's side, so nothing is excluded there.
+        //
+        // swapSides is passed through unchanged: the CARD renders
+        // the responder on the LEFT and the creator on the RIGHT
+        // in "Voir les offres", and the projection row mirrors
+        // that layout.
+        // -----------------------------------------------------------------
+        const leftCapHit =
+            offer.createdByFantasyTeamCapSalary;
+        const rightCapHit = responderCapHit;
+
+        const currentOfferingPlayerId =
+            effectiveOfferingPlayerIdForSlot(slot);
+
+        let existingOfferingSalary = 0;
+
+        if (currentOfferingPlayerId != null) {
+            // Prefer the creator's full roster entry (richer,
+            // has EffectiveSalary applied). Fall back to the
+            // offer DTO's own contract only when the roster
+            // hasn't loaded AND the effective player is the
+            // slot's own offering player.
+            const entry = creatorRoster?.entries.find(
+                (e) => e.playerId === currentOfferingPlayerId,
+            );
+
+            if (entry?.currentContract?.salary != null) {
+                existingOfferingSalary =
+                    entry.currentContract.salary;
+            } else if (
+                currentOfferingPlayerId ===
+                slot.offeringPlayerId
+            ) {
+                existingOfferingSalary =
+                    slot.offeringPlayerCurrentContract
+                        ?.salary ?? 0;
+            }
+        }
+
+        const capContext: TradeCapContext | undefined =
+            leftCapHit != null &&
+                rightCapHit != null &&
+                seasonCap > 0
+                ? {
+                    leftTeamName:
+                        offer.createdByFantasyTeamName,
+                    leftTeamCapHit: leftCapHit,
+                    rightTeamName,
+                    rightTeamCapHit: rightCapHit,
+                    seasonSalaryCap: seasonCap,
+                    creatorOfferedSalary:
+                        creatorOfferedSalary -
+                        existingOfferingSalary,
+                    responderOfferedSalaryExcludingCurrentSlot:
+                        responderOfferedSalary,
+                    candidateSide: 'left',
+                    swapSides,
+                }
+                : undefined;
+
+        onRequestOfferingPlayerPick(
+            offer.createdByFantasyTeamId,
+            offer.createdByFantasyTeamName,
+            {
+                offerId: offer.id,
+                slotIndex: slot.slotIndex,
+                slot,
+                capContext,
+                excludedPlayerIds:
+                    excluded.length > 0 ? excluded : undefined,
+                side: 'offering',
+            },
+        );
     };
 
     // ------------------------------------------------------------------
@@ -5922,7 +5815,7 @@ function OfferCard({
             <div className='space-y-3 p-2 md:p-3'>
                 <div>
                     <div
-                        className='flex items-center border-b py-1'
+                        className='relative flex items-center border-b py-1'
                         style={{
                             borderColor: 'rgba(0, 168, 255, 0.2)',
                         }}
@@ -5944,16 +5837,34 @@ function OfferCard({
                             ⇄
                         </span>
 
-                        {/* Nouvelle offre badge, centered between the
-                            two team names inside the card header.
-                            Rendered only for offers the user has not
-                            created and has never seen before. The two
-                            team-name sides are flex-1, so this
-                            shrink-0 middle element ends up exactly at
-                            the horizontal center of the header row. */}
+                        {swapSides
+                            ? creatorHeaderBlock
+                            : responderHeaderBlock}
+
+                        {/* "Nouvelle offre" badge.
+                            Absolutely positioned at the horizontal
+                            center of the header row and at the same
+                            vertical level as the two team-name
+                            buttons (top-1 matches the parent's
+                            py-1 so the badge's top edge lands on
+                            the content-area top, exactly where the
+                            team-name buttons sit).
+
+                            Out of the flex flow on purpose: the two
+                            team-name blocks stay flex-1 balanced,
+                            the arrow stays dead center, and the
+                            badge no longer pushes the layout to the
+                            right.
+
+                            pointer-events-none so the badge never
+                            swallows a click meant for a team-name
+                            button underneath it.
+
+                            Rendered only for offers the user has
+                            not created and has never seen before. */}
                         {offer.isNew && !offer.isMine && (
                             <span
-                                className='shrink-0 rounded px-1 py-0.5 text-[0.5rem] font-bold uppercase tracking-wider'
+                                className='pointer-events-none absolute left-1/2 top-1 -translate-x-1/2 rounded px-1 py-0.5 text-[0.5rem] font-bold uppercase tracking-wider'
                                 style={{
                                     backgroundColor: '#22C55E',
                                     color: '#04160A',
@@ -5963,11 +5874,6 @@ function OfferCard({
                                 Nouvelle offre
                             </span>
                         )}
-
-                        {/* Right side: the opposite of the left side. */}
-                        {swapSides
-                            ? creatorHeaderBlock
-                            : responderHeaderBlock}
                     </div>
 
                     <div className='relative'>
@@ -5979,7 +5885,7 @@ function OfferCard({
                             }}
                         />
 
-                        {offer.slots.map((slot, index) => {
+                        {visibleResponseSlots.map((slot, index) => {
                             const matches =
                                 matchingPlayersBySlot[slot.slotIndex] ??
                                 [];
@@ -6004,238 +5910,404 @@ function OfferCard({
                              * on the left side, offering column on
                              * the right.
                              */
+                        
+
+                            /**
+ * Red "remove" button for the RESPONDING
+ * side (the left card when swapSides is
+ * true). Rendered inside the responding
+ * player's own card, at the top-left of
+ * the name row. Clicking it clears that
+ * pick alone; the offering side is left
+ * untouched.
+ */
+                            const respondingRemoveButton =
+                                canRespond &&
+                                    swapSides &&
+                                    picks[slot.slotIndex] != null ? (
+                                    <button
+                                        type='button'
+                                        aria-label='Retirer ce joueur'
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setPick(
+                                                slot.slotIndex,
+                                                null,
+                                            );
+                                        }}
+                                        className='flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
+                                    >
+                                        <svg
+                                            viewBox='0 0 24 24'
+                                            className='h-[10px] w-[10px]'
+                                            fill='none'
+                                            stroke='white'
+                                            strokeWidth={4}
+                                            strokeLinecap='round'
+                                            aria-hidden='true'
+                                        >
+                                            <line
+                                                x1='5'
+                                                y1='12'
+                                                x2='19'
+                                                y2='12'
+                                            />
+                                        </svg>
+                                    </button>
+                                ) : undefined;
+
+                            /**
+                             * Red "remove" button for the OFFERING
+                             * side (the right card when swapSides is
+                             * true). Rendered inside the offering
+                             * player's own card, at the top-right of
+                             * the name row. Clicking it clears the
+                             * offering side of the slot alone; the
+                             * responding side is left untouched.
+                             */
+                            const offeringRemoveButton =
+                                canRespond &&
+                                    swapSides &&
+                                    effectiveOfferingPlayerIdForSlot(
+                                        slot,
+                                    ) != null ? (
+                                    <button
+                                        type='button'
+                                        aria-label='Retirer ce joueur'
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            clearOfferingForSlot(
+                                                offer.id,
+                                                slot.slotIndex,
+                                            );
+                                        }}
+                                        className='flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
+                                    >
+                                        <svg
+                                            viewBox='0 0 24 24'
+                                            className='h-[10px] w-[10px]'
+                                            fill='none'
+                                            stroke='white'
+                                            strokeWidth={4}
+                                            strokeLinecap='round'
+                                            aria-hidden='true'
+                                        >
+                                            <line
+                                                x1='5'
+                                                y1='12'
+                                                x2='19'
+                                                y2='12'
+                                            />
+                                        </svg>
+                                    </button>
+                                ) : undefined;
+
                             const offeringColumn = (
                                 <div className='flex min-w-0 flex-col items-center justify-start text-center'>
-                                    <SlotPlayerBlock
-                                        playerId={slot.offeringPlayerId}
-                                        nhlPlayerId={
-                                            slot.offeringPlayerNhlPlayerId
-                                        }
-                                        firstName={
-                                            slot.offeringPlayerFirstName
-                                        }
-                                        lastName={
-                                            slot.offeringPlayerLastName
-                                        }
-                                        nhlTeam={
-                                            slot.offeringPlayerNhlTeam
-                                        }
-                                        position={
-                                            slot.offeringPlayerPosition
-                                        }
-                                        age={slot.offeringPlayerAge}
-                                        currentContract={
-                                            slot.offeringPlayerCurrentContract
-                                        }
-                                        secondContract={
-                                            slot.offeringPlayerSecondContract
-                                        }
-                                        currentSeasonStats={
-                                            slot.offeringPlayerCurrentSeasonStats
-                                        }
-                                        lastSeasonStats={
-                                            slot.offeringPlayerLastSeasonStats
-                                        }
-                                        emptyLabel='Avis de recherche'
-                                    />
+                                    {/*
+                                     * No wrapper for the button
+                                     * anymore: it is passed straight
+                                     * into SlotPlayerBlock as
+                                     * `topRightSlot`, which anchors it
+                                     * to the name row's own bounding
+                                     * box, not the wider stat table.
+                                     */}
+                                    <div className='flex flex-col items-center'>
+
+                                        {(() => {
+                                            const cleared =
+                                                isOfferingCleared(
+                                                    slot.slotIndex,
+                                                );
+
+                                            const effectiveId =
+                                                effectiveOfferingPlayerIdForSlot(
+                                                    slot,
+                                                );
+
+                                            const showingOverride =
+                                                effectiveId != null &&
+                                                !cleared &&
+                                                effectiveId !==
+                                                slot.offeringPlayerId;
+
+                                            // CASE 1: an override player.
+                                            if (showingOverride) {
+                                                const overrideEntry =
+                                                    creatorRoster?.entries.find(
+                                                        (e) =>
+                                                            e.playerId ===
+                                                            effectiveId,
+                                                    ) ?? null;
+
+                                                if (!overrideEntry) {
+                                                    return (
+                                                        <div className='flex flex-col items-center gap-1'>
+                                                            <span className='text-[0.65rem] font-bold uppercase tracking-wider text-[#00E5FF] md:text-xs'>
+                                                                Joueur remplacé
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <SlotPlayerBlock
+                                                        playerId={
+                                                            overrideEntry.playerId
+                                                        }
+                                                        nhlPlayerId={
+                                                            overrideEntry.nhlPlayerId
+                                                        }
+                                                        firstName={
+                                                            overrideEntry.firstName
+                                                        }
+                                                        lastName={
+                                                            overrideEntry.lastName
+                                                        }
+                                                        nhlTeam={
+                                                            overrideEntry.nhlTeamAbbreviation
+                                                        }
+                                                        position={
+                                                            overrideEntry.position
+                                                        }
+                                                        age={overrideEntry.age}
+                                                        currentContract={
+                                                            overrideEntry.currentContract
+                                                        }
+                                                        secondContract={
+                                                            overrideEntry.secondContract
+                                                        }
+                                                        currentSeasonStats={
+                                                            overrideEntry.currentSeason
+                                                        }
+                                                        lastSeasonStats={
+                                                            overrideEntry.lastSeason
+                                                        }
+                                                        emptyLabel='Joueur remplacé'
+                                                        bordered={canRespond}
+                                                        onClick={
+                                                            canRespond
+                                                                ? () =>
+                                                                    requestOfferingPickForSlot(
+                                                                        slot,
+                                                                    )
+                                                                : undefined
+                                                        }
+                                                        topRightSlot={
+                                                            offeringRemoveButton
+                                                        }
+                                                    />
+                                                );
+                                            }
+
+                                            // CASE 2: the creator's own
+                                            // offering player (no override,
+                                            // not cleared).
+                                            if (
+                                                effectiveId != null &&
+                                                !cleared
+                                            ) {
+                                                return (
+                                                    <SlotPlayerBlock
+                                                        playerId={
+                                                            slot.offeringPlayerId
+                                                        }
+                                                        nhlPlayerId={
+                                                            slot.offeringPlayerNhlPlayerId
+                                                        }
+                                                        firstName={
+                                                            slot.offeringPlayerFirstName
+                                                        }
+                                                        lastName={
+                                                            slot.offeringPlayerLastName
+                                                        }
+                                                        nhlTeam={
+                                                            slot.offeringPlayerNhlTeam
+                                                        }
+                                                        position={
+                                                            slot.offeringPlayerPosition
+                                                        }
+                                                        age={
+                                                            slot.offeringPlayerAge
+                                                        }
+                                                        currentContract={
+                                                            slot.offeringPlayerCurrentContract
+                                                        }
+                                                        secondContract={
+                                                            slot.offeringPlayerSecondContract
+                                                        }
+                                                        currentSeasonStats={
+                                                            slot.offeringPlayerCurrentSeasonStats
+                                                        }
+                                                        lastSeasonStats={
+                                                            slot.offeringPlayerLastSeasonStats
+                                                        }
+                                                        emptyLabel='Avis de recherche'
+                                                        bordered={canRespond}
+                                                        onClick={
+                                                            canRespond
+                                                                ? () =>
+                                                                    requestOfferingPickForSlot(
+                                                                        slot,
+                                                                    )
+                                                                : undefined
+                                                        }
+                                                        topRightSlot={
+                                                            offeringRemoveButton
+                                                        }
+                                                    />
+                                                );
+                                            }
+
+                                            // CASE 3: empty offering side
+                                            // (cleared, or never set).
+                                            if (canRespond) {
+                                                return slot.slotIndex ===
+                                                    firstEmptyOfferingIdx ? (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() =>
+                                                            requestOfferingPickForSlot(
+                                                                slot,
+                                                            )
+                                                        }
+                                                        className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-left text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
+                                                    >
+                                                        Choisir un joueur
+                                                    </button>
+                                                ) : (
+                                                    <div />
+                                                );
+                                            }
+
+                                            // On response cards, an
+                                            // empty offering side is
+                                            // deliberately rendered as
+                                            // nothing. The slot list has
+                                            // already been filtered so a
+                                            // slot only reaches here when
+                                            // the responding side has
+                                            // content, and pushing an
+                                            // "Avis de recherche"
+                                            // placeholder next to a real
+                                            // responding player would be
+                                            // misleading — the annonce's
+                                            // demand is not what the
+                                            // response is answering.
+                                            if (isResponseCard) {
+                                                return <div />;
+                                            }
+
+                                            return (
+                                                <p className='text-[0.65rem] font-bold uppercase tracking-wider text-[#7DD3FC] md:text-xs'>
+                                                    Avis de recherche
+                                                </p>
+                                            );
+                                        })()}
+                                    </div>
                                 </div>
                             );
 
                             const respondingColumn = (
                                 <div className='flex min-w-0 flex-col items-center justify-start text-center'>
-                                    {slot.respondingPlayerId != null ? (
-                                        <SlotPlayerBlock
-                                            playerId={
-                                                slot.respondingPlayerId
-                                            }
-                                            nhlPlayerId={
-                                                slot.respondingPlayerNhlPlayerId
-                                            }
-                                            firstName={
-                                                slot.respondingPlayerFirstName
-                                            }
-                                            lastName={
-                                                slot.respondingPlayerLastName
-                                            }
-                                            nhlTeam={
-                                                slot.respondingPlayerNhlTeam
-                                            }
-                                            position={
-                                                slot.respondingPlayerPosition
-                                            }
-                                            age={
-                                                slot.respondingPlayerAge
-                                            }
-                                            currentContract={
-                                                slot.respondingPlayerCurrentContract
-                                            }
-                                            secondContract={
-                                                slot.respondingPlayerSecondContract
-                                            }
-                                            currentSeasonStats={
-                                                slot.respondingPlayerCurrentSeasonStats
-                                            }
-                                            lastSeasonStats={
-                                                slot.respondingPlayerLastSeasonStats
-                                            }
-                                            emptyLabel='Aucune réponse'
-                                        />
-                                    ) : canRespond && currentPick != null ? (
-                                        <RespondingPlayerBlock
-                                            entry={
-                                                userRoster?.entries.find(
-                                                    (e) =>
-                                                        e.playerId ===
-                                                        currentPick,
-                                                ) ?? null
-                                            }
-                                            matches={matches}
-                                            currentPick={currentPick}
-                                            onPick={(id) =>
-                                                setPick(
-                                                    slot.slotIndex,
-                                                    id,
-                                                )
-                                            }
-                                            slotIndex={slot.slotIndex}
-                                            wouldBustCap={wouldBustCap}
-                                            onChangeRequest={
-                                                onRequestPlayerPick &&
-                                                    rightTeamId != null
-                                                    ? () =>
-                                                        requestPickForSlot(
-                                                            slot,
-                                                        )
-                                                    : undefined
-                                            }
-                                        />
+                                    <div className='flex flex-col items-center'>
+                                        {slot.respondingPlayerId != null ? (
+                                            <SlotPlayerBlock
+                                                playerId={
+                                                    slot.respondingPlayerId
+                                                }
+                                                nhlPlayerId={
+                                                    slot.respondingPlayerNhlPlayerId
+                                                }
+                                                firstName={
+                                                    slot.respondingPlayerFirstName
+                                                }
+                                                lastName={
+                                                    slot.respondingPlayerLastName
+                                                }
+                                                nhlTeam={
+                                                    slot.respondingPlayerNhlTeam
+                                                }
+                                                position={
+                                                    slot.respondingPlayerPosition
+                                                }
+                                                age={
+                                                    slot.respondingPlayerAge
+                                                }
+                                                currentContract={
+                                                    slot.respondingPlayerCurrentContract
+                                                }
+                                                secondContract={
+                                                    slot.respondingPlayerSecondContract
+                                                }
+                                                currentSeasonStats={
+                                                    slot.respondingPlayerCurrentSeasonStats
+                                                }
+                                                lastSeasonStats={
+                                                    slot.respondingPlayerLastSeasonStats
+                                                }
+                                                emptyLabel='Aucune réponse'
+                                                bordered={canRespond}
+                                                onClick={
+                                                    canRespond &&
+                                                        onRequestPlayerPick
+                                                        ? () =>
+                                                            requestPickForSlot(
+                                                                slot,
+                                                            )
+                                                        : undefined
+                                                }
+                                                topLeftSlot={
+                                                    respondingRemoveButton
+                                                }
+                                            />
+                                        ) : isResponseCard ? (
+                                            <div />
+                                        ) : canRespond && currentPick != null ? (
+                                            <RespondingPlayerBlock
+                                                entry={
+                                                    userRoster?.entries.find(
+                                                        (e) =>
+                                                            e.playerId ===
+                                                            currentPick,
+                                                    ) ?? null
+                                                }
+                                                matches={matches}
+                                                currentPick={currentPick}
+                                                onPick={(id) =>
+                                                    setPick(
+                                                        slot.slotIndex,
+                                                        id,
+                                                    )
+                                                }
+                                                slotIndex={slot.slotIndex}
+                                                wouldBustCap={wouldBustCap}
+                                                onChangeRequest={
+                                                    onRequestPlayerPick &&
+                                                        rightTeamId != null
+                                                        ? () =>
+                                                            requestPickForSlot(
+                                                                slot,
+                                                            )
+                                                        : undefined
+                                                }
+                                                topLeftSlot={
+                                                    respondingRemoveButton
+                                                }
+                                            />
                                         ) : (
                                             <>
-                                                <ul className='mt-1 inline-block text-left text-[0.6rem] text-[#7DD3FC] md:text-[0.7rem]'>
-                                                {slot.demandMinContractYears !=
-                                                    null && (
-                                                        <li className='flex items-center gap-1'>
-                                                            <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                                {slot.enforceDemandMinContractYears && (
-                                                                    <svg
-                                                                        viewBox='0 0 20 16'
-                                                                        className='h-2.5 w-3'
-                                                                        aria-hidden='true'
-                                                                    >
-                                                                        <path
-                                                                            d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                            fill='#EF4444'
-                                                                        />
-                                                                    </svg>
-                                                                )}
-                                                            </span>
-                                                            <span>
-                                                                Contrat min :{' '}
-                                                                {
-                                                                    slot.demandMinContractYears
-                                                                }{' '}
-                                                                an
-                                                                {slot.demandMinContractYears >
-                                                                    1
-                                                                    ? 's'
-                                                                    : ''}
-                                                            </span>
-                                                        </li>
-                                                    )}
-                                                {slot.demandMaxSalary != null && (
-                                                    <li className='flex items-center gap-1'>
-                                                        <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                            {slot.enforceDemandMaxSalary && (
-                                                                <svg
-                                                                    viewBox='0 0 20 16'
-                                                                    className='h-2.5 w-3'
-                                                                    aria-hidden='true'
-                                                                >
-                                                                    <path
-                                                                        d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                        fill='#EF4444'
-                                                                    />
-                                                                </svg>
-                                                            )}
-                                                        </span>
-                                                        <span>
-                                                            Salaire max :{' '}
-                                                            {compactSalary(
-                                                                slot.demandMaxSalary,
-                                                            )}
-                                                        </span>
-                                                    </li>
-                                                )}
-                                                {slot.demandMaxAge != null && (
-                                                    <li className='flex items-center gap-1'>
-                                                        <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                            {slot.enforceDemandMaxAge && (
-                                                                <svg
-                                                                    viewBox='0 0 20 16'
-                                                                    className='h-2.5 w-3'
-                                                                    aria-hidden='true'
-                                                                >
-                                                                    <path
-                                                                        d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                        fill='#EF4444'
-                                                                    />
-                                                                </svg>
-                                                            )}
-                                                        </span>
-                                                        <span>
-                                                            Âge max :{' '}
-                                                            {slot.demandMaxAge}
-                                                        </span>
-                                                    </li>
-                                                )}
-                                                {slot.demandMinPointsLastYear !=
-                                                    null && (
-                                                        <li className='flex items-center gap-1'>
-                                                            <span className='inline-flex h-2.5 w-3 shrink-0 items-center'>
-                                                                {slot.enforceDemandMinPointsLastYear && (
-                                                                    <svg
-                                                                        viewBox='0 0 20 16'
-                                                                        className='h-2.5 w-3'
-                                                                        aria-hidden='true'
-                                                                    >
-                                                                        <path
-                                                                            d='M1 5 H10 V1 L19 8 L10 15 V11 H1 Z'
-                                                                            fill='#EF4444'
-                                                                        />
-                                                                    </svg>
-                                                                )}
-                                                            </span>
-                                                            <span>
-                                                                Points min (an dernier) :{' '}
-                                                                {
-                                                                    slot.demandMinPointsLastYear
-                                                                }
-                                                            </span>
-                                                        </li>
-                                                    )}
-                                                {slot.demandMinContractYears ==
-                                                    null &&
-                                                    slot.demandMaxSalary ==
-                                                    null &&
-                                                    slot.demandMaxAge == null &&
-                                                    slot.demandMinPointsLastYear ==
-                                                    null && (
-                                                        <li className='italic opacity-70'>
-                                                            Aucun critère
-                                                            particulier
-                                                        </li>
-                                                    )}
-                                            </ul>
-
-                                            {/* Response picker: a
-                                                single button that
-                                                opens the roster
-                                                popup in pick mode.
-                                                Only shown when the
-                                                offer is not the
-                                                user's own and his
-                                                roster is loaded. */}
-                                                    {canRespond && (
+                                                {/* Response picker: a
+                                                        single button that
+                                                        opens the roster
+                                                        popup in pick mode.
+                                                        Only shown when the
+                                                        offer is not the
+                                                        user's own and his
+                                                        roster is loaded. */}
+                                                {canRespond &&
+                                                    slot.slotIndex ===
+                                                    firstEmptyRespondingIdx && (
                                                         <button
                                                             type='button'
                                                             onClick={() =>
@@ -6254,8 +6326,9 @@ function OfferCard({
                                                             Choisir un joueur
                                                         </button>
                                                     )}
-                                        </>
-                                    )}
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
                             );
 
@@ -6289,7 +6362,7 @@ function OfferCard({
                                             }
                                             : undefined
                                     }
-                                    className={`grid grid-cols-[1fr_auto_1fr] items-stretch px-1 py-2 transition-colors ${onSlotClick
+                                    className={`relative grid grid-cols-[1fr_auto_1fr] items-stretch px-1 py-2 transition-colors ${onSlotClick
                                         ? 'cursor-pointer hover:bg-[#00A8FF]/10 focus:outline-none focus-visible:bg-[#00A8FF]/15'
                                         : ''
                                         }`}
@@ -6315,6 +6388,308 @@ function OfferCard({
                                 </div>
                             );
                         })}
+
+                        {/*
+                         * Extra responding slots added on this tab.
+                         *
+                         * The responder clicked "Ajouter un joueur"
+                         * one or more times. Each extra renders as a
+                         * row with the responding player's picker on
+                         * the left and a small "Retirer" button in
+                         * the middle. There is no offering-side
+                         * column because an extra has no counterpart
+                         * on the original offer.
+                         *
+                         * Extras are only rendered on browse offers
+                         * the connected user can respond to
+                         * (`canRespond`), so swapSides is always
+                         * true here and the responding column always
+                         * sits on the left.
+                         */}
+                        {canRespond &&
+                            extraResponderSlots.map((slotIndex) => {
+                                const currentPick =
+                                    picks[slotIndex] ?? null;
+
+                                const entry =
+                                    currentPick != null
+                                        ? userRoster?.entries.find(
+                                            (e) =>
+                                                e.playerId ===
+                                                currentPick,
+                                        ) ?? null
+                                        : null;
+
+                                const overrideId =
+                                    offeringOverrides[slotIndex] ??
+                                    null;
+
+                                /**
+                                 * Red "remove" button for the
+                                 * RESPONDING side of this extra.
+                                 * Rendered inside the responding
+                                 * player's card, at the top-left of
+                                 * the name row. Clicking it clears
+                                 * the responding pick; if that
+                                 * leaves the extra empty on both
+                                 * sides, the whole extra slot is
+                                 * dropped.
+                                 */
+                                const respondingRemoveButton =
+                                    currentPick != null ? (
+                                        <button
+                                            type='button'
+                                            aria-label='Retirer ce joueur'
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                pickForSlot(
+                                                    offer.id,
+                                                    slotIndex,
+                                                    null,
+                                                );
+
+                                                if (
+                                                    overrideId == null ||
+                                                    overrideId ===
+                                                    CLEARED_OFFERING_SENTINEL
+                                                ) {
+                                                    removeExtraResponderSlot(
+                                                        offer.id,
+                                                        slotIndex,
+                                                    );
+                                                }
+                                            }}
+                                            className='flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
+                                        >
+                                            <svg
+                                                viewBox='0 0 24 24'
+                                                className='h-[10px] w-[10px]'
+                                                fill='none'
+                                                stroke='white'
+                                                strokeWidth={4}
+                                                strokeLinecap='round'
+                                                aria-hidden='true'
+                                            >
+                                                <line
+                                                    x1='5'
+                                                    y1='12'
+                                                    x2='19'
+                                                    y2='12'
+                                                />
+                                            </svg>
+                                        </button>
+                                    ) : undefined;
+
+                                /**
+                                 * Red "remove" button for the
+                                 * OFFERING side of this extra.
+                                 * Rendered inside the offering
+                                 * player's card, at the top-right
+                                 * of the name row. Clicking it
+                                 * clears the offering override; if
+                                 * that leaves the extra empty on
+                                 * both sides, the whole extra slot
+                                 * is dropped.
+                                 */
+                                const offeringRemoveButton =
+                                    overrideId != null &&
+                                        overrideId !==
+                                        CLEARED_OFFERING_SENTINEL ? (
+                                        <button
+                                            type='button'
+                                            aria-label='Retirer ce joueur'
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setOfferingOverrideForSlot(
+                                                    offer.id,
+                                                    slotIndex,
+                                                    null,
+                                                );
+
+                                                if (currentPick == null) {
+                                                    removeExtraResponderSlot(
+                                                        offer.id,
+                                                        slotIndex,
+                                                    );
+                                                }
+                                            }}
+                                            className='flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
+                                        >
+                                            <svg
+                                                viewBox='0 0 24 24'
+                                                className='h-[10px] w-[10px]'
+                                                fill='none'
+                                                stroke='white'
+                                                strokeWidth={4}
+                                                strokeLinecap='round'
+                                                aria-hidden='true'
+                                            >
+                                                <line
+                                                    x1='5'
+                                                    y1='12'
+                                                    x2='19'
+                                                    y2='12'
+                                                />
+                                            </svg>
+                                        </button>
+                                    ) : undefined;
+
+                                return (
+                                    <div
+                                        key={`extra-${slotIndex}`}
+                                        className='grid grid-cols-[1fr_auto_1fr] items-stretch px-1 py-2'
+                                        style={{
+                                            borderTop:
+                                                '1px dashed rgba(0, 168, 255, 0.15)',
+                                        }}
+                                    >
+                                        {/* ---- LEFT column: responding ---- */}
+                                        <div className='flex min-w-0 flex-col items-center justify-center text-center'>
+                                            <div className='flex flex-col items-center'>
+                                                {entry ? (
+                                                    <RespondingPlayerBlock
+                                                        entry={entry}
+                                                        matches={[]}
+                                                        currentPick={
+                                                            currentPick
+                                                        }
+                                                        onPick={() => { }}
+                                                        slotIndex={slotIndex}
+                                                        wouldBustCap={() =>
+                                                            false
+                                                        }
+                                                        onChangeRequest={() =>
+                                                            requestPickForSlot(
+                                                                buildSyntheticExtraSlot(
+                                                                    slotIndex,
+                                                                ),
+                                                            )
+                                                        }
+                                                        topLeftSlot={
+                                                            respondingRemoveButton
+                                                        }
+                                                    />
+                                                ) : slotIndex ===
+                                                    firstEmptyRespondingIdx ? (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() =>
+                                                            requestPickForSlot(
+                                                                buildSyntheticExtraSlot(
+                                                                    slotIndex,
+                                                                ),
+                                                            )
+                                                        }
+                                                        className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-left text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 focus:outline-none md:text-sm'
+                                                    >
+                                                        Choisir un joueur
+                                                    </button>
+                                                ) : (
+                                                    <div />
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* ---- MIDDLE column: pure spacer.
+                                             No button. Each side owns its
+                                             own remove control. ---- */}
+                                        <div className='flex w-5 items-center justify-center md:w-12' />
+
+                                        {/* ---- RIGHT column: offering ---- */}
+                                        <div className='flex min-w-0 flex-col items-center justify-center text-center'>
+                                            <div className='flex flex-col items-center'>
+                                                {overrideId != null &&
+                                                    overrideId !==
+                                                    CLEARED_OFFERING_SENTINEL ? (() => {
+                                                        const overrideEntry =
+                                                            creatorRoster?.entries.find(
+                                                                (e) =>
+                                                                    e.playerId ===
+                                                                    overrideId,
+                                                            ) ?? null;
+
+                                                        if (!overrideEntry) {
+                                                            return (
+                                                                <div className='flex flex-col items-center gap-1'>
+                                                                    <span className='text-[0.65rem] font-bold uppercase tracking-wider text-[#00E5FF] md:text-xs'>
+                                                                        Joueur choisi
+                                                                    </span>
+                                                                </div>
+                                                            );
+                                                        }
+
+                                                        return (
+                                                            <SlotPlayerBlock
+                                                                playerId={
+                                                                    overrideEntry.playerId
+                                                                }
+                                                                nhlPlayerId={
+                                                                    overrideEntry.nhlPlayerId
+                                                                }
+                                                                firstName={
+                                                                    overrideEntry.firstName
+                                                                }
+                                                                lastName={
+                                                                    overrideEntry.lastName
+                                                                }
+                                                                nhlTeam={
+                                                                    overrideEntry.nhlTeamAbbreviation
+                                                                }
+                                                                position={
+                                                                    overrideEntry.position
+                                                                }
+                                                                age={
+                                                                    overrideEntry.age
+                                                                }
+                                                                currentContract={
+                                                                    overrideEntry.currentContract
+                                                                }
+                                                                secondContract={
+                                                                    overrideEntry.secondContract
+                                                                }
+                                                                currentSeasonStats={
+                                                                    overrideEntry.currentSeason
+                                                                }
+                                                                lastSeasonStats={
+                                                                    overrideEntry.lastSeason
+                                                                }
+                                                                emptyLabel='Joueur choisi'
+                                                                bordered
+                                                                onClick={() =>
+                                                                    requestOfferingPickForSlot(
+                                                                        buildSyntheticExtraSlot(
+                                                                            slotIndex,
+                                                                        ),
+                                                                    )
+                                                                }
+                                                                topRightSlot={
+                                                                    offeringRemoveButton
+                                                                }
+                                                            />
+                                                        );
+                                                    })() : slotIndex ===
+                                                        firstEmptyOfferingIdx ? (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() =>
+                                                            requestOfferingPickForSlot(
+                                                                buildSyntheticExtraSlot(
+                                                                    slotIndex,
+                                                                ),
+                                                            )
+                                                        }
+                                                        className='mt-1 w-fit cursor-pointer rounded bg-emerald-500 px-3 py-1 text-left text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 focus:outline-none md:text-sm'
+                                                    >
+                                                        Choisir un joueur
+                                                    </button>
+                                                ) : (
+                                                    <div />
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
                     </div>
                 </div>
 
@@ -6424,15 +6799,21 @@ function OfferCard({
                         {/* ---- RIGHT column ---- */}
                         {swapSides ? (
                             // Browse offer: the creator's side. The
-                            // offer's own picks are locked (already in
-                            // the trade, the responder cannot remove
-                            // them). The responder can add additional
-                            // requested picks, stored under the
-                            // offer:requested key.
+                            // offer's own picks AND the requested
+                            // additions are fully editable.
+                            //
+                            // Removing one of the offer's own picks
+                            // records it in the removed-creator-picks
+                            // store; the effective creator list
+                            // subtracts it out. Removing a requested
+                            // pick just drops it from the requested
+                            // store. Re-adding a creator pick that
+                            // was previously removed cancels the
+                            // removal instead of adding to requested.
                             <div className='flex min-w-0 flex-col items-center justify-start text-center'>
                                 <TradePicksSlot
                                     selectedPicks={[
-                                        ...creatorPicks,
+                                        ...effectiveCreatorPicks,
                                         ...requestedDraftPickIds
                                             .map((id) =>
                                                 creatorAvailablePicks.find(
@@ -6450,27 +6831,52 @@ function OfferCard({
                                         creatorAvailablePicks
                                     }
                                     editable={canRespond}
-                                    lockedPickIds={creatorPicks.map(
-                                        (p) => p.id,
-                                    )}
-                                    onAddPick={(id) =>
-                                        DraftPicks.addPick(
-                                            DraftPicks.offerPicksKey(
+                                    onAddPick={(id) => {
+                                        const isCreatorOwnedPick =
+                                            creatorPicks.some(
+                                                (p) => p.id === id,
+                                            );
+
+                                        if (isCreatorOwnedPick) {
+                                            // Re-adding a creator
+                                            // pick that was previously
+                                            // removed cancels the
+                                            // removal.
+                                            removeRemovedCreatorPick(
                                                 offer.id,
-                                                'requested',
-                                            ),
-                                            id,
-                                        )
-                                    }
-                                    onRemovePick={(id) =>
-                                        DraftPicks.removePick(
-                                            DraftPicks.offerPicksKey(
+                                                id,
+                                            );
+                                        } else {
+                                            DraftPicks.addPick(
+                                                DraftPicks.offerPicksKey(
+                                                    offer.id,
+                                                    'requested',
+                                                ),
+                                                id,
+                                            );
+                                        }
+                                    }}
+                                    onRemovePick={(id) => {
+                                        const isCreatorOwnedPick =
+                                            creatorPicks.some(
+                                                (p) => p.id === id,
+                                            );
+
+                                        if (isCreatorOwnedPick) {
+                                            addRemovedCreatorPick(
                                                 offer.id,
-                                                'requested',
-                                            ),
-                                            id,
-                                        )
-                                    }
+                                                id,
+                                            );
+                                        } else {
+                                            DraftPicks.removePick(
+                                                DraftPicks.offerPicksKey(
+                                                    offer.id,
+                                                    'requested',
+                                                ),
+                                                id,
+                                            );
+                                        }
+                                    }}
                                 />
                             </div>
                         ) : (
@@ -6503,10 +6909,43 @@ function OfferCard({
                     </div>
                 )}
 
+                {/* The "Ajouter un joueur" button was removed. New
+                    extra responding slots are appended automatically
+                    by the useEffect that watches `extraResponderSlots`
+                    above: once every base slot has a responding pick,
+                    a trailing empty extra appears, and picking a
+                    player on any trailing extra immediately creates
+                    the next one. */}
+
                 {offer.note && (
                     <p className='rounded-md border border-[#00A8FF]/25 bg-[#00A8FF]/5 px-2 py-1.5 text-sm italic text-[#FFC72C]'>
                         « {offer.note} »
                     </p>
+                )}
+
+                {/* Responder's optional message, matching the
+                    "Message (optionnel)" field on the Créer card.
+                    Only rendered on the "Voir les offres" side,
+                    where the responder is building a reply. */}
+                {canRespond && (
+                    <div>
+                        <label className='text-xs font-semibold uppercase tracking-wider text-[#7DD3FC]'>
+                            Message (optionnel)
+                        </label>
+                        <textarea
+                            value={responseNote}
+                            onChange={(e) =>
+                                setResponseNote(
+                                    offer.id,
+                                    e.target.value,
+                                )
+                            }
+                            rows={2}
+                            maxLength={1000}
+                            placeholder='Ex : je peux ajouter un choix de repêchage si tu ajoutes un défenseur.'
+                            className={`mt-1 ${inputClass}`}
+                        />
+                    </div>
                 )}
 
                 {/* Response button: only for offers the user does not
@@ -6530,35 +6969,20 @@ function OfferCard({
                         <div className='flex flex-wrap items-stretch justify-center gap-1.5'>
                             <button
                                 type='button'
-                                disabled={respondBusy}
-                                onClick={() =>
-                                    onUseAsBase?.(offer, picks)
-                                }
-                                className='min-w-0 flex-1 cursor-pointer rounded-md border border-[#00C8FF] bg-transparent px-2 py-1 text-[0.65rem] font-bold uppercase tracking-wide text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
-                            >
-                                Utiliser comme base
-                            </button>
-
-                            <button
-                                type='button'
                                 disabled={respondBusy || !hasAnyPick}
                                 onClick={handleResetPicks}
-                                className='w-[7.2rem] cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40'
+                                className='flex-1 cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40'
                             >
                                 Réinitialiser
                             </button>
 
                             <button
                                 type='button'
-                                disabled={
-                                    !allSlotsFilled ||
-                                    respondBusy
-                                }
+                                disabled={!hasAnyPick || respondBusy}
                                 onClick={handleOffer}
-                                className={`w-24 rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${allSlotsFilled &&
-                                    !respondBusy
-                                    ? 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
-                                    : 'cursor-not-allowed bg-zinc-800 text-zinc-500'
+                                className={`flex-1 rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${hasAnyPick && !respondBusy
+                                        ? 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
+                                        : 'cursor-not-allowed bg-zinc-800 text-zinc-500'
                                     }`}
                             >
                                 {respondBusy ? 'Envoi...' : 'Offrir'}
@@ -8179,6 +8603,58 @@ function DirectOfferCard({
     const slots = directDraft.slots;
     const note = directDraft.note;
 
+    /**
+  * Ensures the slots array always has a trailing empty slot the
+  * user can use to start a new trade pair.
+  *
+  * This is what replaced the "Ajouter un joueur" button on the
+  * Créer tab. As soon as EITHER side of the last slot gets a
+  * player, a fresh empty slot is appended, so the user always
+  * has one "Choisir un joueur" chooser per side to work with
+  * (see the first-empty-per-side rendering further down).
+  *
+  * Reads `d.slots` from the store rather than the captured
+  * value, so a double-invocation in React strict mode cannot
+  * append the same slot twice. When the last slot is empty on
+  * both sides the effect is a no-op, which is what makes it
+  * converge.
+  */
+    useLayoutEffect(() => {
+        updateDirectOfferDraft((d) => {
+            if (d.slots.length === 0) {
+                return {
+                    ...d,
+                    slots: [
+                        {
+                            offeringPlayerId: null,
+                            targetPlayerId: null,
+                        },
+                    ],
+                };
+            }
+
+            const last = d.slots[d.slots.length - 1];
+
+            if (
+                last.offeringPlayerId != null ||
+                last.targetPlayerId != null
+            ) {
+                return {
+                    ...d,
+                    slots: [
+                        ...d.slots,
+                        {
+                            offeringPlayerId: null,
+                            targetPlayerId: null,
+                        },
+                    ],
+                };
+            }
+
+            return d;
+        });
+    }, [slots]);
+
     // Fetch the connected user's roster once.
     useEffect(() => {
         let cancelled = false;
@@ -8425,64 +8901,47 @@ function DirectOfferCard({
     }, [slots]);
 
     /**
-     * True when the two sides of the draft do not have the same
-     * number of players picked. Includes the case where only one
-     * side has been filled so far.
-     */
-    const sidesUnbalanced =
-        connectedPickedCount !== targetPickedCount;
-
-    /**
-     * True when no player has been picked on either side. A trade
-     * with nothing in it is not offerable.
-     */
+  * True when no player has been picked on either side.
+  */
     const noPlayersSelected =
         connectedPickedCount === 0 && targetPickedCount === 0;
 
     /**
-  * Single "cannot offer" flag, the OR of the two structural
-  * blocking conditions:
-  *
-  *   - noPlayersSelected → nothing has been drafted yet.
-  *   - sidesUnbalanced   → the number of players picked differs
-  *                         between the two sides (this also
-  *                         covers "one side empty, other side
-  *                         filled", which is not a valid trade).
-  *
-  * Cap violations are intentionally NOT blocking. A manager can
-  * send a direct offer that puts either team over the cap; the
-  * other manager decides whether to accept. The red cap line on
-  * the header is a warning, not a gate.
-  *
-  * The "Offrir" button is disabled while this is true, and
-  * `handleOffer` re-checks it defensively so a stray activation
-  * can never slip a submission through.
-  */
+     * True when at least one draft pick is selected on either
+     * side. A direct offer can be picks-only, in which case it is
+     * valid with zero players on both sides.
+     */
+    const hasAnyPick =
+        connectedPickIds.length > 0 || targetPickIds.length > 0;
+
+    /**
+     * Single "cannot offer" flag:
+     *
+     *   - noPlayersSelected && !hasAnyPick → nothing has been
+     *     drafted at all (no players, no picks). Rejected.
+     *
+     * Unbalanced player counts and one-sided slots are allowed:
+     * the two managers can agree on a trade where one side gives
+     * more players than the other, or where a slot carries a
+     * player on only one side.
+     *
+     * Cap violations are intentionally NOT blocking. A manager can
+     * send a direct offer that puts either team over the cap; the
+     * other manager decides whether to accept. The red cap line on
+     * the header is a warning, not a gate.
+     *
+     * The "Offrir" button is disabled while this is true, and
+     * `handleOffer` re-checks it defensively so a stray activation
+     * can never slip a submission through.
+     */
     const offerDisabled =
-        noPlayersSelected || sidesUnbalanced;
+        noPlayersSelected && !hasAnyPick;
 
     // NOTE: the "clear target picks on target team change" logic
     // used to live here as an effect on [targetTeamId]. It is now
     // handled inline by the picker's onSelect in MarketplacePage,
     // because the effect fired on every mount as well, which wiped
     // restored picks when the user came back from a PlayerPage.
-
-    function addSlot() {
-        updateDirectOfferDraft((d) => ({
-            ...d,
-            slots: [
-                ...d.slots,
-                { offeringPlayerId: null, targetPlayerId: null },
-            ],
-        }));
-    }
-
-    function removeSlot(idx: number) {
-        updateDirectOfferDraft((d) => ({
-            ...d,
-            slots: d.slots.filter((_, i) => i !== idx),
-        }));
-    }
 
     function updateSlot(
         idx: number,
@@ -8510,26 +8969,29 @@ function DirectOfferCard({
         // Defensive guard: the button is already disabled while
         // `offerDisabled` is true, but a stray activation (keyboard,
         // automation, or a future change that re-wires the click
-        // handler) must never be able to submit an empty trade or
-        // one with mismatched sides. Cap violations are allowed.
+        // handler) must never be able to submit a completely empty
+        // trade. Cap violations are allowed.
         if (offerDisabled) return;
         if (targetTeamId == null) return;
         if (submitting) return;
 
-        // Build the request from the filled slots. Empty slots are
-        // already impossible here (the button is disabled unless
-        // both sides have the same, non-zero number of picks), but
-        // the filter keeps the request clean if that invariant ever
-        // changes.
+        // Build the request from the filled slots. A slot is kept
+        // as long as it carries a player on at least one side, so
+        // unbalanced and one-sided slots reach the backend. A slot
+        // with neither side filled is dropped.
+        //
+        // It is possible for requestSlots to be empty when the
+        // offer is picks-only; that is valid and the backend
+        // accepts it.
         const requestSlots = slots
             .filter(
                 (s) =>
-                    s.offeringPlayerId != null &&
+                    s.offeringPlayerId != null ||
                     s.targetPlayerId != null,
             )
             .map((s) => ({
-                connectedPlayerId: s.offeringPlayerId as number,
-                targetPlayerId: s.targetPlayerId as number,
+                connectedPlayerId: s.offeringPlayerId,
+                targetPlayerId: s.targetPlayerId,
             }));
 
         if (requestSlots.length === 0) return;
@@ -8569,6 +9031,20 @@ function DirectOfferCard({
             setSubmitting(false);
         }
     }
+
+    /**
+     * First empty slot index per side. The "Choisir un joueur"
+     * chooser renders ONLY on that slot for each side, so the user
+     * always sees exactly one chooser per side regardless of how
+     * many slots exist. Slots beyond the first empty on a given
+     * side render as an empty cell.
+     */
+    const firstEmptyLeftIdx = slots.findIndex(
+        (s) => s.offeringPlayerId == null,
+    );
+    const firstEmptyRightIdx = slots.findIndex(
+        (s) => s.targetPlayerId == null,
+    );
 
     return (
         <article
@@ -8703,11 +9179,11 @@ function DirectOfferCard({
                                 targetTeamName == null;
 
                             /**
-  * Salary of one picked player for the
-  * cap context, or 0 when the pick is
-  * empty or the entry cannot be found.
-  * Same lookup rule the salary memos use.
-  */
+* Salary of one picked player for the
+* cap context, or 0 when the pick is
+* empty or the entry cannot be found.
+* Same lookup rule the salary memos use.
+*/
                             const salaryOfLeftPick = (
                                 playerId: number | null,
                             ): number => {
@@ -8847,16 +9323,16 @@ function DirectOfferCard({
                             };
 
                             /**
-                             * Same as handleLeftClick, but for the
-                             * RIGHT (target) side of this slot. The
-                             * popup opens on the target team and the
-                             * position is locked to the left side's
-                             * pick when the left side has one.
-                             *
-                             * Guarded by targetPickerDisabled: if
-                             * the target team has not been selected
-                             * yet, there is nothing to open.
-                             */
+   * Same as handleLeftClick, but for the
+   * RIGHT (target) side of this slot. The
+   * popup opens on the target team and the
+   * position is locked to the left side's
+   * pick when the left side has one.
+   *
+   * Guarded by targetPickerDisabled: if
+   * the target team has not been selected
+   * yet, there is nothing to open.
+   */
                             const handleRightClick = () => {
                                 if (
                                     targetTeamId == null ||
@@ -8893,6 +9369,81 @@ function DirectOfferCard({
                                 });
                             };
 
+                            /**
+                             * Per-player remove circles, matching
+                             * the "Voir les offres" card. The left
+                             * circle sits at the top-left of the
+                             * left player's name box and clears
+                             * ONLY that side; the right circle
+                             * sits at the top-right and clears
+                             * ONLY that side. Removing a player
+                             * does not drop the slot itself —
+                             * only the middle red X does that.
+                             */
+                            const leftRemoveButton = (
+                                <button
+                                    type='button'
+                                    aria-label='Retirer ce joueur'
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateSlot(idx, {
+                                            offeringPlayerId:
+                                                null,
+                                        });
+                                    }}
+                                    className='flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
+                                >
+                                    <svg
+                                        viewBox='0 0 24 24'
+                                        className='h-[10px] w-[10px]'
+                                        fill='none'
+                                        stroke='white'
+                                        strokeWidth={4}
+                                        strokeLinecap='round'
+                                        aria-hidden='true'
+                                    >
+                                        <line
+                                            x1='5'
+                                            y1='12'
+                                            x2='19'
+                                            y2='12'
+                                        />
+                                    </svg>
+                                </button>
+                            );
+
+                            const rightRemoveButton = (
+                                <button
+                                    type='button'
+                                    aria-label='Retirer ce joueur'
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateSlot(idx, {
+                                            targetPlayerId:
+                                                null,
+                                        });
+                                    }}
+                                    className='flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
+                                >
+                                    <svg
+                                        viewBox='0 0 24 24'
+                                        className='h-[10px] w-[10px]'
+                                        fill='none'
+                                        stroke='white'
+                                        strokeWidth={4}
+                                        strokeLinecap='round'
+                                        aria-hidden='true'
+                                    >
+                                        <line
+                                            x1='5'
+                                            y1='12'
+                                            x2='19'
+                                            y2='12'
+                                        />
+                                    </svg>
+                                </button>
+                            );
+
                             return (
                                 <div
                                     key={idx}
@@ -8928,8 +9479,11 @@ function DirectOfferCard({
                                                 onChangeRequest={
                                                     handleLeftClick
                                                 }
+                                                topLeftSlot={
+                                                    leftRemoveButton
+                                                }
                                             />
-                                        ) : (
+                                        ) : idx === firstEmptyLeftIdx ? (
                                             <button
                                                 type='button'
                                                 onClick={
@@ -8939,42 +9493,16 @@ function DirectOfferCard({
                                             >
                                                 Choisir un joueur
                                             </button>
+                                        ) : (
+                                            <div />
                                         )}
 
                                     </div>
 
                                     <div
+                                        aria-hidden='true'
                                         className={`flex items-center justify-center ${SLOT_ARROW_COL}`}
-                                    >
-                                        {slots.length > 1 && (
-                                            <button
-                                                type='button'
-                                                onClick={() =>
-                                                    removeSlot(idx)
-                                                }
-                                                aria-label='Retirer ce joueur'
-                                                title='Retirer ce joueur'
-                                                className='flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full bg-[#EF4444] transition-colors hover:bg-[#DC2626]'
-                                            >
-                                                <svg
-                                                    viewBox='0 0 24 24'
-                                                    className='h-[10px] w-[10px]'
-                                                    fill='none'
-                                                    stroke='white'
-                                                    strokeWidth={4}
-                                                    strokeLinecap='round'
-                                                    aria-hidden='true'
-                                                >
-                                                    <line
-                                                        x1='5'
-                                                        y1='12'
-                                                        x2='19'
-                                                        y2='12'
-                                                    />
-                                                </svg>
-                                            </button>
-                                        )}
-                                    </div>
+                                    />
 
                                     {/* RIGHT: target player — same
                                         two-state pattern. Before a
@@ -8999,8 +9527,11 @@ function DirectOfferCard({
                                                         ? undefined
                                                         : handleRightClick
                                                 }
+                                                topRightSlot={
+                                                    rightRemoveButton
+                                                }
                                             />
-                                        ) : (
+                                        ) : idx === firstEmptyRightIdx ? (
                                             <button
                                                 type='button'
                                                 onClick={
@@ -9014,6 +9545,8 @@ function DirectOfferCard({
                                                     ? 'Choisir un gestionnaire'
                                                     : 'Choisir un joueur'}
                                             </button>
+                                        ) : (
+                                            <div />
                                         )}
                                     </div>
                                 </div>
@@ -9087,19 +9620,12 @@ function DirectOfferCard({
                     </div>
                 </div>
 
-                {/* Ajouter un joueur — placed under the two
-                    "Ajouter un choix" buttons so the picks row stays
-                    visually grouped on its own, and colored to match
-                    "Choisir un joueur" (filled green, dark text) so
-                    the two "add" actions on the form share one
-                    palette. */}
-                <button
-                    type='button'
-                    onClick={addSlot}
-                    className='mx-auto block w-fit cursor-pointer rounded-md bg-emerald-500 px-6 py-1 text-xs font-bold uppercase tracking-wide text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
-                >
-                    Ajouter un joueur
-                </button>
+                {/* The "Ajouter un joueur" button was removed. New
+                    trade pairs are appended automatically by the
+                    useEffect that watches `slots` above: once the
+                    trailing empty slot becomes fully filled, a fresh
+                    empty slot with a "Choisir un joueur" on both
+                    sides is added below it. */}
 
                 {/* Message (same style as Publier une annonce) */}
                 <div>
