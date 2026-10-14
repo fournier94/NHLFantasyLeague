@@ -1300,6 +1300,34 @@ export default function MarketplacePage() {
             note: '',
         }));
 
+        // Seed the draft picks as well as the slots.
+        //
+        // On the browse tab the offer's CREATOR is the other
+        // manager, so when the draft opens on the Créer tab that
+        // other manager becomes our TARGET team. Every pick on
+        // the creator's side therefore goes to DIRECT_TARGET_KEY:
+        //   - offer.picks is what the creator explicitly put on
+        //     the table.
+        //   - The local "requested" store holds any extra picks
+        //     the user asked the creator for on the browse card
+        //     before the browse tab became display-only. Read it
+        //     too so nothing that was already chosen is lost.
+        const requestedPickIds = DraftPicks.getPicks(
+            DraftPicks.offerPicksKey(offer.id, 'requested'),
+        );
+
+        DraftPicks.setPicks(DraftPicks.DIRECT_TARGET_KEY, [
+            ...offer.picks.map((p) => p.id),
+            ...requestedPickIds,
+        ]);
+
+        // The user's own side starts empty. The browse tab has
+        // had no way to add or remove picks since it became
+        // display-only, but we clear the offering key explicitly
+        // so a stale entry from a previous session cannot leak
+        // into the freshly-seeded draft.
+        DraftPicks.clearPicks(DraftPicks.DIRECT_OFFERING_KEY);
+
         setView('add');
     }
 
@@ -2396,8 +2424,31 @@ function AddOfferPanel({
         [slots],
     );
 
-    const lastSlotComplete = slotIsComplete(slots[slots.length - 1]);
-    const canAddSlot = lastSlotComplete && slots.length < MAX_SLOTS;
+    // Show the "add another player" button as soon as the last
+    // slot has any content at all: either a demanded position has
+    // been selected, or an offering player has been picked. This
+    // is a looser gate than slotIsComplete, which requires BOTH.
+    //
+    // The intent is to let the user chain a second (and third, ...)
+    // player into the trade as soon as he starts expressing what
+    // he wants, without waiting for the first slot to be fully
+    // built out.
+    //
+    // Submit logic is unchanged: any slot that ends up incomplete
+    // when the user publishes is still dropped before the request
+    // goes to the API (see the `slots.filter(slotIsComplete)`
+    // call in handleConfirmPublish).
+    const lastSlotHasContent = (() => {
+        const last = slots[slots.length - 1];
+        if (!last) return false;
+        return (
+            last.positionGroup !== '' ||
+            last.offeringPlayerId !== null
+        );
+    })();
+
+    const canAddSlot =
+        lastSlotHasContent && slots.length < MAX_SLOTS;
 
     /**
      * Only the first slot must be complete (the trade needs at least
@@ -2668,31 +2719,22 @@ function AddOfferPanel({
                 />
             </div>
 
-            <div
-                className='sticky bottom-0 z-30 mt-3 flex w-full flex-col gap-2'
-                style={{
-                    backgroundColor: FRAME_BG,
-                    paddingTop: '0.6rem',
-                    paddingBottom: '0.75rem',
-                }}
-            >
+            <div className='mt-3 flex w-full flex-col gap-2'>
                 {/* Add-slot button, sticky with the action bar so the
                     user can always add a new player to the trade
-                    without scrolling back up. */}
+                    without scrolling back up.
+
+                    Design matches the "Ajouter un joueur" button on
+                    the Créer tab (solid emerald, dark text, uppercase,
+                    w-fit centered) so both "add" actions across the
+                    marketplace read as the same control. */}
                 {canAddSlot && (
                     <button
                         type='button'
                         onClick={addSlot}
-                        className='w-full cursor-pointer rounded-lg border border-dashed border-[#00A8FF]/60 bg-transparent px-3 py-2 text-xs font-semibold transition-colors hover:bg-[#00A8FF]/10'
+                        className='mx-auto block w-fit cursor-pointer rounded-md bg-emerald-500 px-6 py-1 text-xs font-bold uppercase tracking-wide text-emerald-950 transition-colors hover:bg-emerald-400 md:text-sm'
                     >
-                        <span className='italic text-zinc-400'>
-                            Ajouter un {slots.length + 1}e joueur à
-                            l'échange (
-                            <span className='font-bold not-italic text-emerald-400'>
-                                optionnel
-                            </span>
-                            )
-                        </span>
+                        Ajouter un {slots.length + 1}e joueur à l'échange
                     </button>
                 )}
 
