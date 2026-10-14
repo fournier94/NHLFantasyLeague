@@ -236,13 +236,60 @@ function contractLabel(
     return `${salary} · ${years}`;
 }
 
+/**
+ * A slot counts as "complete" (i.e. publishable) as soon as it has
+ * EITHER a demanded position OR an offered player. The user is not
+ * forced to fill both:
+ *
+ *   - Offering a player alone is a valid announcement
+ *     ("I'm offering X, send me offers").
+ *   - Picking a position alone is also valid
+ *     ("I'm looking for a D, no specific player on the table").
+ *
+ * When only a player is picked, the position group that goes on
+ * the wire is derived from the player's real position in
+ * slotToRequest. When only a position is picked, the offering
+ * player stays null and the slot is a pure demand.
+ */
 function slotIsComplete(slot: SlotState): boolean {
-    return slot.positionGroup !== '' && slot.firstHandled !== null;
+    return slot.positionGroup !== '' || slot.offeringPlayerId !== null;
 }
 
-function slotToRequest(slot: SlotState): CreateTradeOfferSlotRequest {
+/**
+ * Builds the request slot that goes on the wire.
+ *
+ * Position derivation:
+ *   - If the user explicitly picked a position, use it.
+ *   - Otherwise, if a player was picked, derive the position
+ *     group from the player's real position on his roster entry.
+ *     This lets the user announce a trade with only ONE of the
+ *     two fields set: offering a player alone is a valid
+ *     announcement, and the demand side silently inherits the
+ *     player's position group so the backend accepts it.
+ *   - Otherwise the slot is empty and the caller should have
+ *     filtered it out before reaching this mapper.
+ */
+function slotToRequest(
+    slot: SlotState,
+    entries: RosterEntry[],
+): CreateTradeOfferSlotRequest {
+    let positionGroup = slot.positionGroup;
+
+    if (
+        positionGroup === '' &&
+        slot.offeringPlayerId != null
+    ) {
+        const entry = entries.find(
+            (e) => e.playerId === slot.offeringPlayerId,
+        );
+
+        if (entry) {
+            positionGroup = toPositionGroup(entry.position);
+        }
+    }
+
     return {
-        positionGroup: slot.positionGroup,
+        positionGroup,
         offeringPlayerId: slot.offeringPlayerId,
         demandMinContractYears: parseOptionalInt(slot.minContractYears),
         demandMaxSalary: parseOptionalMoney(slot.maxSalary),
@@ -2239,9 +2286,25 @@ function AddOfferPanel({
                             ) ?? null
                             : null;
 
+                    // Mirror slotToRequest's position
+                    // derivation so the preview shows the
+                    // same position group the API will
+                    // receive.
+                    let positionGroup = s.positionGroup;
+
+                    if (
+                        positionGroup === '' &&
+                        s.offeringPlayerId != null &&
+                        entry != null
+                    ) {
+                        positionGroup = toPositionGroup(
+                            entry.position,
+                        );
+                    }
+
                     return {
                         slotIndex: i,
-                        positionGroup: s.positionGroup,
+                        positionGroup,
                         offeringPlayerId: s.offeringPlayerId,
                         offeringPlayerNhlPlayerId:
                             entry?.nhlPlayerId ?? null,
@@ -2527,7 +2590,7 @@ function AddOfferPanel({
             const request = {
                 slots: slots
                     .filter(slotIsComplete)
-                    .map(slotToRequest),
+                    .map((s) => slotToRequest(s, entries)),
                 note: note.trim() === '' ? null : note.trim(),
                 draftPickIds: publishPickIds.slice(),
             };
