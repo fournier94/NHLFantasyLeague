@@ -82,6 +82,7 @@ import {
     clearOfferingOverridesForOffer,
     getOfferingOverridesForOffer,
     setOfferingOverrideForSlot,
+    setOfferingOverridesForOffer,
     subscribeToOfferingOverrides,
 } from '@/lib/marketplaceOfferingOverrides';
 import {
@@ -94,6 +95,7 @@ import {
     clearPicksForOffer,
     getPicksForOffer,
     pickForSlot,
+    setPicksForOffer,
     subscribeToPicks,
 } from '@/lib/marketplaceTradeState';
 import {
@@ -469,24 +471,32 @@ const MARK_SEEN_DELAY_MS = 1000;
  * Shared style for the two team-name buttons on the offer card
  * header (creator on the left, responder on the right). Both are
  * single buttons — not a segmented toggle — that open the roster
- * popup. They size to their content, so a short team name gets a
- * compact pill and a longer one still fits within the column with
- * an ellipsis.
+ * popup.
  *
- * Colors mirror the "Marché" active segment on the main
- * marketplace toggle: solid fill, dark navy text, glow chain.
- * Fill uses the FP gold from ClassementPage (#FFC72C) so the two
- * header buttons read as part of the "highlighted" family, the
- * same accent the standings table uses for its FP column.
+ * Design: text-only neon filament, matching the team-picker label
+ * on Mon équipe / Game Day. No box, no border, no background —
+ * only the glyphs are visible.
  *
- * Same object is reused on all four call sites (clickable and
- * non-clickable variants of both sides) so tuning the look is a
- * one-spot change.
+ * Filament technique applied to text:
+ *   - the outer stroke is the "tube"   -> silver (#B8C0CC)
+ *   - the inner fill is the "filament" -> warm near-white (#FFFDF0)
+ *   - paintOrder: 'stroke fill' draws the stroke on top of the
+ *     fill, so the outline stays crisp at any zoom level, exactly
+ *     like the Mon équipe team picker.
+ *
+ * No text-shadow, no filter, no drop-shadow: all light stays
+ * inside the glyph's own footprint. That is the whole point of
+ * the contained-filament approach the league uses everywhere.
+ *
+ * The classNames on every call site are kept in sync (they drop
+ * the pill styling and add a small px-1 so the outer half of the
+ * stroke is not clipped by `truncate`).
  */
 const TEAM_NAME_BUTTON_STYLE: React.CSSProperties = {
-    backgroundColor: '#14B8A6',
-    color: '#1D1B61',
-    border: '1px solid #5EEAD4',
+    color: '#FFFDF0',
+    WebkitTextStrokeWidth: '1.5px',
+    WebkitTextStrokeColor: '#B8C0CC',
+    paintOrder: 'stroke fill',
 };
 
 // ---------------------------------------------------------------------
@@ -4017,36 +4027,48 @@ function SlotPlayerBlock({
         </div>
     );
 
-    const hasOverlays =
-        topLeftSlot != null || topRightSlot != null;
-
     return (
         <>
-            {hasOverlays ? (
-                <div className='relative w-fit'>
-                    {nameRow}
+            {nameRow}
 
-                    {topLeftSlot != null && (
-                        <div className='absolute left-1 top-1 z-20'>
-                            {topLeftSlot}
-                        </div>
-                    )}
+            {/*
+             * Stats table wrapped in a relative container so the
+             * remove button (passed in as topLeftSlot /
+             * topRightSlot) can be anchored to the LEFT or RIGHT
+             * edge of the table, vertically centred between the
+             * two data rows.
+             *
+             * The button deliberately straddles the table's own
+             * edge (half in, half out) via -translate-x-1/2 /
+             * translate-x-1/2 so it reads as a badge sitting on
+             * top of the container border.
+             *
+             * top-2/3 lands the button between the two stat data
+             * rows (the table has a small header row + two data
+             * rows, so the boundary between the data rows sits at
+             * roughly 2/3 of the table's total height). Tune that
+             * value if the visual position needs to shift up or
+             * down.
+             */}
+            <div className='relative w-full'>
+                <StatLinesTable
+                    current={currentSeasonStats ?? null}
+                    previous={lastSeasonStats ?? null}
+                    isGoalie={toPositionGroup(position) === 'G'}
+                />
 
-                    {topRightSlot != null && (
-                        <div className='absolute right-1 top-1 z-20'>
-                            {topRightSlot}
-                        </div>
-                    )}
-                </div>
-            ) : (
-                nameRow
-            )}
+                {topLeftSlot != null && (
+                    <div className='absolute -left-3 top-2/3 z-20 -translate-x-1/2 -translate-y-1/2'>
+                        {topLeftSlot}
+                    </div>
+                )}
 
-            <StatLinesTable
-                current={currentSeasonStats ?? null}
-                previous={lastSeasonStats ?? null}
-                isGoalie={toPositionGroup(position) === 'G'}
-            />
+                {topRightSlot != null && (
+                    <div className='absolute -right-3 top-2/3 z-20 translate-x-1/2 -translate-y-1/2'>
+                        {topRightSlot}
+                    </div>
+                )}
+            </div>
 
             {currentContractLabel && (
                 <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.7rem] leading-none font-semibold text-emerald-400 md:text-[0.75rem]'>
@@ -4177,20 +4199,14 @@ function RespondingPlayerBlock({
                  * (border, background, padding, rounded corners)
                  * moves onto the button, keeping the exact same
                  * appearance as before.
+                 *
+                 * The remove button (topLeftSlot / topRightSlot) is
+                 * NO LONGER rendered inside this wrapper. It has
+                 * moved to the stats table wrapper below so it can
+                 * sit on the outer edge of the whole player block,
+                 * vertically centred between the two stat data rows.
                  */}
                 <div className='relative inline-flex w-fit min-w-0'>
-                    {topLeftSlot != null && (
-                        <div className='absolute left-1 top-1 z-20'>
-                            {topLeftSlot}
-                        </div>
-                    )}
-
-                    {topRightSlot != null && (
-                        <div className='absolute right-1 top-1 z-20'>
-                            {topRightSlot}
-                        </div>
-                    )}
-
                     <button
                         ref={triggerRef}
                         type='button'
@@ -4305,11 +4321,34 @@ function RespondingPlayerBlock({
 
             {entry && (
                 <>
-                    <StatLinesTable
-                        current={entry.currentSeason}
-                        previous={entry.lastSeason}
-                        isGoalie={isGoalie}
-                    />
+                    {/*
+                     * Stats table wrapped in a relative container so
+                     * the remove button (topLeftSlot / topRightSlot)
+                     * can be anchored to the LEFT or RIGHT edge of
+                     * the table, vertically centred between the two
+                     * data rows. Same positioning rule as
+                     * SlotPlayerBlock, kept in sync on purpose so
+                     * both sides of a trade card behave identically.
+                     */}
+                    <div className='relative w-full'>
+                        <StatLinesTable
+                            current={entry.currentSeason}
+                            previous={entry.lastSeason}
+                            isGoalie={isGoalie}
+                        />
+
+                        {topLeftSlot != null && (
+                            <div className='absolute -left-3 top-2/3 z-20 -translate-x-1/2 -translate-y-1/2'>
+                                {topLeftSlot}
+                            </div>
+                        )}
+
+                        {topRightSlot != null && (
+                            <div className='absolute -right-3 top-2/3 z-20 translate-x-1/2 -translate-y-1/2'>
+                                {topRightSlot}
+                            </div>
+                        )}
+                    </div>
 
                     {currentContractLabel && (
                         <div className='mt-0.5 flex flex-wrap items-center justify-center gap-x-1 text-[0.7rem] leading-none font-semibold text-emerald-400 md:text-[0.75rem]'>
@@ -4427,6 +4466,242 @@ function buildSyntheticExtraSlot(slotIndex: number): TradeOfferSlot {
         offeringPlayerCurrentSeasonStats: null,
         offeringPlayerLastSeasonStats: null,
     };
+}
+
+/**
+ * Compacts the responder's slot state for one "Voir les offres"
+ * offer.
+ *
+ * Shape rules:
+ *
+ *   1. Base slots (indices 0..baseCount-1) are NEVER touched.
+ *      They are server-owned and stay on their own index.
+ *   2. Extras are compacted:
+ *        - every extra that is empty on both sides (no pick, no
+ *          override, not explicitly cleared) is dropped;
+ *        - the surviving extras are renumbered to consecutive
+ *          indices starting at baseCount, and their picks and
+ *          overrides are moved with them;
+ *        - exactly one trailing empty extra is left, iff the
+ *          last slot in the system (base or extra) carries a
+ *          responding pick.
+ *
+ * This is what makes "remove a pick from a middle extra" work:
+ * the surviving picks float up to fill the gap instead of
+ * leaving a hole behind.
+ *
+ * Writes across three stores (`marketplaceTradeState` for picks,
+ * `marketplaceOfferingOverrides` for offering overrides,
+ * `marketplaceExtraResponderSlots` for the extras list). Each
+ * store notifies its own subscribers, and React 18+ batches
+ * those notifications into a single commit, so the render the
+ * user sees is the final compacted state, not an intermediate.
+ *
+ * Silent no-op when nothing needs to change. That check is what
+ * makes it safe to call from a `useLayoutEffect` — calling it
+ * twice in a row with the same underlying state returns without
+ * notifying anything, so the effect converges instead of
+ * looping.
+ */
+/**
+ * Shallow equality for the two numeric-keyed maps this file
+ * stores picks and overrides in. Used only to decide whether the
+ * compaction below actually needs to write to the stores, so a
+ * no-op call does not trigger a React re-render (and therefore
+ * cannot loop the effect that called us).
+ */
+function numericMapEqual<T>(
+    a: Record<number, T | null>,
+    b: Record<number, T | null>,
+): boolean {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+
+    if (aKeys.length !== bKeys.length) return false;
+
+    for (const k of aKeys) {
+        const i = Number(k);
+        if ((a[i] ?? null) !== (b[i] ?? null)) return false;
+    }
+
+    return true;
+}
+
+/**
+ * Compacts the responder's slot state for one "Voir les offres"
+ * offer into a gap-free shape, so that removing a responding
+ * pick from the middle of the list pulls the picks below it up.
+ *
+ * Scope of the compaction, chosen to mirror the DirectOfferCard
+ * (Créer) behaviour on the RESPONDING side only:
+ *
+ *   - The responding picks (the responder's own players) are
+ *     collected in display order across base slots and extras,
+ *     nulls are dropped, and the survivors are renumbered to
+ *     consecutive indices starting at 0.
+ *
+ *   - The offering overrides (the responder's replacements on
+ *     the creator's side) are compacted the same way. The
+ *     CLEARED sentinel is preserved through the renumber.
+ *
+ *   - The extras list is reset and re-added to exactly the
+ *     number needed so that (a) every renumbered content index
+ *     is in range and (b) at least one trailing empty extra
+ *     exists when the last filled slot is at or past the last
+ *     base slot.
+ *
+ * The base slots (indices 0..baseCount-1) are never removed or
+ * reordered: they are server-owned and represent the original
+ * offer's own positions. Only the CONTENT on those slots (the
+ * responder's pick and any override) is subject to the shift.
+ *
+ * Writes across three stores (picks, overrides, extras). Each
+ * store notifies independently, but React 18+ batches those
+ * notifications into a single commit, so the user never sees an
+ * intermediate state.
+ *
+ * Silent no-op when the state already matches the compacted
+ * shape. That check is what makes it safe to call from a
+ * useLayoutEffect: calling it twice in a row with the same
+ * underlying state returns without notifying anything, so the
+ * effect converges instead of looping.
+ */
+function compactResponderContent(
+    offerId: number,
+    baseSlots: TradeOfferSlot[],
+): void {
+    const baseCount = baseSlots.length;
+    const allPicks = getPicksForOffer(offerId);
+    const allOverrides = getOfferingOverridesForOffer(offerId);
+    const currentExtras = [...getExtraResponderSlots(offerId)];
+
+    const orderedIndices = [
+        ...baseSlots.map((s) => s.slotIndex),
+        ...currentExtras,
+    ];
+
+    const baseSlotByIndex = new Map(
+        baseSlots.map((s) => [s.slotIndex, s]),
+    );
+
+    // -----------------------------------------------------------------
+    // Step 1: compute the EFFECTIVE offering player and responding
+    // pick for every currently-rendered slot.
+    //
+    // "Effective offering player" means: the responder's override
+    // if there is one, the creator's own player if not, and null
+    // if the responder explicitly cleared the slot.
+    // -----------------------------------------------------------------
+    const effectiveOffering: (number | null)[] = [];
+    const effectiveResponding: (number | null)[] = [];
+
+    for (const idx of orderedIndices) {
+        const baseSlot = baseSlotByIndex.get(idx);
+        const rawOff = allOverrides[idx];
+
+        let off: number | null;
+        if (rawOff === CLEARED_OFFERING_SENTINEL) off = null;
+        else if (rawOff != null) off = rawOff;
+        else off = baseSlot?.offeringPlayerId ?? null;
+
+        effectiveOffering.push(off);
+        effectiveResponding.push(allPicks[idx] ?? null);
+    }
+
+    // -----------------------------------------------------------------
+    // Step 2: compact each side independently — drop nulls, keep
+    // relative order. This is the "shift up" step.
+    // -----------------------------------------------------------------
+    const compactedOff: number[] = [];
+    const compactedResp: number[] = [];
+
+    for (const v of effectiveOffering) {
+        if (v != null) compactedOff.push(v);
+    }
+    for (const v of effectiveResponding) {
+        if (v != null) compactedResp.push(v);
+    }
+
+    const totalRows = Math.max(
+        compactedOff.length,
+        compactedResp.length,
+    );
+
+    // -----------------------------------------------------------------
+    // Step 3: rebuild the state so slot i shows
+    // compactedOff[i] / compactedResp[i].
+    //
+    // For OVERRIDES the rule is:
+    //   - desired == base's own player  → no override (fallback works)
+    //   - desired == null && base had a player → set CLEARED so the
+    //     base player does not reappear
+    //   - otherwise → set the override to the desired player
+    //   - extra slot with desired == null → no override needed, the
+    //     extra just renders empty (and will be dropped by Step 4)
+    // -----------------------------------------------------------------
+    const newOverrides: Record<number, number | null> = {};
+    const newPicks: Record<number, number | null> = {};
+
+    for (let i = 0; i < orderedIndices.length; i++) {
+        const idx = orderedIndices[i];
+        const baseSlot = baseSlotByIndex.get(idx);
+        const baseOff = baseSlot?.offeringPlayerId ?? null;
+
+        const desiredOff =
+            i < totalRows ? compactedOff[i] ?? null : null;
+        const desiredResp =
+            i < totalRows ? compactedResp[i] ?? null : null;
+
+        if (desiredOff == null) {
+            if (baseSlot != null && baseOff != null) {
+                newOverrides[idx] = CLEARED_OFFERING_SENTINEL;
+            }
+        } else if (baseSlot != null && desiredOff === baseOff) {
+            // Falls through to the base player: no override needed.
+        } else {
+            newOverrides[idx] = desiredOff;
+        }
+
+        if (desiredResp != null) {
+            newPicks[idx] = desiredResp;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Step 4: extras. Base slots always render, so we only need an
+    // extra when totalRows + 1 exceeds what the base slots can
+    // hold (totalRows content + 1 trailing empty chooser).
+    // -----------------------------------------------------------------
+    const newExtrasCount = Math.max(0, totalRows + 1 - baseCount);
+
+    // -----------------------------------------------------------------
+    // Step 5: change detection. Idempotent, so the effect that calls
+    // us converges in one extra pass instead of looping.
+    // -----------------------------------------------------------------
+    const picksEqual = numericMapEqual(allPicks, newPicks);
+    const overridesEqual = numericMapEqual(
+        allOverrides,
+        newOverrides,
+    );
+    const extrasEqual = currentExtras.length === newExtrasCount;
+
+    if (picksEqual && overridesEqual && extrasEqual) return;
+
+    if (!picksEqual) {
+        setPicksForOffer(offerId, newPicks);
+    }
+
+    if (!overridesEqual) {
+        setOfferingOverridesForOffer(offerId, newOverrides);
+    }
+
+    if (!extrasEqual) {
+        clearExtraResponderSlots(offerId);
+
+        for (let i = 0; i < newExtrasCount; i++) {
+            addExtraResponderSlot(offerId, baseCount);
+        }
+    }
 }
 
 function OfferCard({
@@ -4735,6 +5010,93 @@ function OfferCard({
     };
 
     /**
+  * Highest slot index that should be rendered on an interactive
+  * browse card. Everything past this index is an empty trailing
+  * slot that the compaction left behind and that the UI does
+  * not need to show.
+  *
+  * The rule, mirroring the invariant that compactResponderContent
+  * maintains:
+  *
+  *   - Content rows (offering or responding, after overrides are
+  *     applied) are packed from index 0 upward.
+  *   - Exactly one trailing chooser is rendered right after the
+  *     last content row, so the user always has a "Choisir un
+  *     joueur" button.
+  *   - Every slot beyond the chooser is hidden.
+  *
+  * Returns MAX_SAFE_INTEGER on cards that are not interactive
+  * browse cards (response cards, own offers, publish preview),
+  * so the existing render logic there is untouched.
+  *
+  * Recomputed on every state change rather than read from a
+  * store, so it stays in sync with whatever the compaction last
+  * wrote without any extra coordination.
+  */
+    const browseVisibleUntilIndex = useMemo(() => {
+        if (isResponseCard) return Number.MAX_SAFE_INTEGER;
+        if (!canRespond) return Number.MAX_SAFE_INTEGER;
+
+        const allIndices = [
+            ...offer.slots.map((s) => s.slotIndex),
+            ...extraResponderSlots,
+        ].sort((a, b) => a - b);
+
+        if (allIndices.length === 0) return 0;
+
+        const baseSlotByIndex = new Map(
+            offer.slots.map((s) => [s.slotIndex, s]),
+        );
+
+        const hasContent = (idx: number): boolean => {
+            const baseSlot = baseSlotByIndex.get(idx);
+            const raw = offeringOverrides[idx];
+
+            const hasOffering =
+                raw === CLEARED_OFFERING_SENTINEL
+                    ? false
+                    : raw != null
+                        ? true
+                        : baseSlot?.offeringPlayerId != null;
+
+            const hasResponding = picks[idx] != null;
+
+            return hasOffering || hasResponding;
+        };
+
+        let lastContentPos = -1;
+
+        for (let i = 0; i < allIndices.length; i++) {
+            if (hasContent(allIndices[i])) {
+                lastContentPos = i;
+            }
+        }
+
+        // No content anywhere: keep exactly one chooser row.
+        if (lastContentPos === -1) {
+            return allIndices[0];
+        }
+
+        // Content + one chooser right after it.
+        const chooserPos = lastContentPos + 1;
+
+        if (chooserPos < allIndices.length) {
+            return allIndices[chooserPos];
+        }
+
+        // Should not be reachable given the compaction's invariant,
+        // but keep a safe fallback.
+        return allIndices[allIndices.length - 1];
+    }, [
+        isResponseCard,
+        canRespond,
+        offer.slots,
+        extraResponderSlots,
+        picks,
+        offeringOverrides,
+    ]);
+
+    /**
      * Response-card slot filtering and ordering.
      *
      * On Reçues and Envoyées, the responder's answer is often
@@ -4762,53 +5124,67 @@ function OfferCard({
      * those cards always carry real content on both sides
      * because they represent the annonce itself.
      */
-      /**
-     * Response-card slot compaction.
-     *
-     * On Reçues and Envoyées the responder's answer is often
-     * unbalanced: some slots carry a responding player, some
-     * don't, and some carry no offering player at all. Raw, that
-     * leaves holes on one side of a row while the other side is
-     * populated, and both-empty rows sitting in the middle of the
-     * card.
-     *
-     * The fix is a per-side compaction:
-     *
-     *   1. Walk the original slots in order and collect every
-     *      player that lives on the LEFT side (offering) into one
-     *      list, and every player on the RIGHT side (responding)
-     *      into another list.
-     *
-     *   2. Re-pair the two lists by index. Merged row i takes the
-     *      i-th left player and the i-th right player.
-     *
-     *   3. Rows where neither list has an entry at that index are
-     *      simply never produced, so both-empty rows vanish.
-     *
-     * Concrete example: [Hagel|∅, ∅|Podkolzin, Marner|∅] becomes
-     * [Hagel|Podkolzin, Marner|∅]. Podkolzin floated up into the
-     * empty right cell of row 0, Marner floated up into the empty
-     * left cell of row 1.
-     *
-     * On every other card shape (browse, publish preview, own
-     * offers) the original slot array is returned unchanged —
-     * those cards are the annonce itself and must not be
-     * reordered.
-     *
-     * The merged row's slotIndex is taken from whichever original
-     * slot provided its content. It is unique across the merged
-     * array (each original slot contributes at most one row per
-     * side, and the two lists are zipped with distinct indices),
-     * so it remains safe as a React key.
-     *
-     * offeringOverrides is intentionally NOT consulted here.
-     * Response cards are read-only — the store is always empty
-     * on them, and effectiveOfferingPlayerIdForSlot already falls
-     * back to slot.offeringPlayerId when no override exists.
-     */
+    /**
+   * Response-card slot compaction.
+   *
+   * On Reçues and Envoyées the responder's answer is often
+   * unbalanced: some slots carry a responding player, some
+   * don't, and some carry no offering player at all. Raw, that
+   * leaves holes on one side of a row while the other side is
+   * populated, and both-empty rows sitting in the middle of the
+   * card.
+   *
+   * The fix is a per-side compaction:
+   *
+   *   1. Walk the original slots in order and collect every
+   *      player that lives on the LEFT side (offering) into one
+   *      list, and every player on the RIGHT side (responding)
+   *      into another list.
+   *
+   *   2. Re-pair the two lists by index. Merged row i takes the
+   *      i-th left player and the i-th right player.
+   *
+   *   3. Rows where neither list has an entry at that index are
+   *      simply never produced, so both-empty rows vanish.
+   *
+   * Concrete example: [Hagel|∅, ∅|Podkolzin, Marner|∅] becomes
+   * [Hagel|Podkolzin, Marner|∅]. Podkolzin floated up into the
+   * empty right cell of row 0, Marner floated up into the empty
+   * left cell of row 1.
+   *
+   * On every other card shape (browse, publish preview, own
+   * offers) the original slot array is returned unchanged —
+   * those cards are the annonce itself and must not be
+   * reordered.
+   *
+   * The merged row's slotIndex is taken from whichever original
+   * slot provided its content. It is unique across the merged
+   * array (each original slot contributes at most one row per
+   * side, and the two lists are zipped with distinct indices),
+   * so it remains safe as a React key.
+   *
+   * offeringOverrides is intentionally NOT consulted here.
+   * Response cards are read-only — the store is always empty
+   * on them, and effectiveOfferingPlayerIdForSlot already falls
+   * back to slot.offeringPlayerId when no override exists.
+   */
     const visibleResponseSlots = useMemo(() => {
         if (!isResponseCard) {
-            return offer.slots;
+            // Interactive browse card: hide base slots that sit
+            // past the content+chooser window computed above. The
+            // compaction has already moved every player up into
+            // consecutive indices, so this filter only drops the
+            // empty tail slots that no longer carry anything.
+            //
+            // Non-interactive cards (own offers, publish preview)
+            // fall through with canRespond = false and are left
+            // untouched by browseVisibleUntilIndex (it returns
+            // MAX_SAFE_INTEGER in that case).
+            if (!canRespond) return offer.slots;
+
+            return offer.slots.filter(
+                (s) => s.slotIndex <= browseVisibleUntilIndex,
+            );
         }
 
         const leftSlots: TradeOfferSlot[] = [];
@@ -4900,75 +5276,48 @@ function OfferCard({
         }
 
         return merged;
-    }, [isResponseCard, offer.slots]);
+    }, [
+        isResponseCard,
+        canRespond,
+        offer.slots,
+        browseVisibleUntilIndex,
+    ]);
 
     /**
-  * Ensures a trailing empty extra slot exists as soon as every
-  * base slot of the offer and every existing extra are filled.
-  *
-  * This is what replaced the "Ajouter un joueur" button on the
-  * "Voir les offres" tab. As soon as the responder fills the
-  * last empty responding slot, a new empty extra is appended,
-  * so there is always exactly one "Choisir un joueur" chooser
-  * on the responding side.
-  *
-  * The effect only fires on cards the connected user can
-  * respond to (canRespond is false on own offers, saved
-  * responses and the publish preview), so it never mutates
-  * state in a context that cannot add slots anyway.
-  *
-  * Reads the CURRENT extras from the store rather than the
-  * captured value, so a double-invocation in React strict mode
-  * cannot append the same extra twice. Converges because the
-  * newly appended extra is empty, which makes the effect a
-  * no-op on the next render.
-  */
+* Keeps the "Voir les offres" slot state compact after every
+* responding-pick / offering-override change.
+*
+* All the work is delegated to compactResponderContent, which
+* enforces a gap-free shape on the RESPONDING side:
+*
+*   - Base slots (indices 0..baseCount-1) are never moved.
+*   - Responding picks are packed from index 0 upward, dropping
+*     nulls, so removing a pick from a middle slot pulls the
+*     picks below it up.
+*   - Offering overrides are compacted the same way, with the
+*     CLEARED sentinel preserved.
+*   - Extras are reset and re-added to exactly the count that
+*     fits the compacted content, plus one trailing empty extra
+*     when a chooser is needed.
+*
+* This matches the DirectOfferCard (Créer) behaviour on the
+* side the responder is editing. The offering side stays
+* server-owned and is not reordered.
+*
+* The helper is a silent no-op when the state already matches
+* the compacted shape, so this effect converges: it runs once
+* on a real change, mutates the stores, and returns on the
+* next pass because nothing is left to compact.
+*
+* The effect only fires on cards the connected user can respond
+* to (canRespond is false on own offers, saved responses and
+* the publish preview), so it never mutates state in a context
+* that cannot add slots anyway.
+*/
     useLayoutEffect(() => {
         if (!canRespond) return;
 
-        const baseCount = offer.slots.length;
-        const currentExtras = getExtraResponderSlots(offer.id);
-
-        // Full list of slot indices currently rendered: the offer's
-        // base slots plus every extra the responder has added.
-        const allSlotIndices = [
-            ...offer.slots.map((s) => s.slotIndex),
-            ...currentExtras,
-        ];
-
-        // Find the highest-index slot currently on screen. That is
-        // the slot whose emptiness (or non-emptiness) drives the
-        // append decision, exactly the way DirectOfferCard does it.
-        const lastSlotIndex = Math.max(...allSlotIndices);
-
-        const lastBaseSlot = offer.slots.find(
-            (s) => s.slotIndex === lastSlotIndex,
-        );
-
-        const lastOfferingRaw = offeringOverrides[lastSlotIndex];
-
-        // "Filled" for the offering side: an explicit override
-        // counts, the offer creator's own offering player (base
-        // slot, no override) counts, an explicit clear does NOT.
-        const lastOfferingFilled =
-            lastOfferingRaw === CLEARED_OFFERING_SENTINEL
-                ? false
-                : lastOfferingRaw != null
-                    ? true
-                    : lastBaseSlot?.offeringPlayerId != null;
-
-        const lastRespondingFilled =
-            picks[lastSlotIndex] != null;
-
-        // If the last slot is empty on both sides, do nothing.
-        // Otherwise append a fresh empty extra so both sides keep
-        // a "Choisir un joueur" chooser available. This mirrors the
-        // DirectOfferCard behaviour: one chooser per side, always.
-        if (!lastOfferingFilled && !lastRespondingFilled) {
-            return;
-        }
-
-        addExtraResponderSlot(offer.id, baseCount);
+        compactResponderContent(offer.id, offer.slots);
     }, [
         canRespond,
         offer.id,
@@ -6097,14 +6446,14 @@ function OfferCard({
                             offer.createdByFantasyTeamName,
                         )
                     }
-                    className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                    className='max-w-full cursor-pointer truncate px-1 py-0.5 text-center text-base leading-none font-medium uppercase tracking-wider transition-opacity hover:opacity-85 md:text-xl'
                     style={TEAM_NAME_BUTTON_STYLE}
                 >
                     {offer.createdByFantasyTeamName}
                 </button>
             ) : (
                 <div
-                    className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
+                    className='max-w-full truncate px-1 py-0.5 text-center text-base leading-none font-medium uppercase tracking-wider md:text-xl'
                     style={TEAM_NAME_BUTTON_STYLE}
                 >
                     {offer.createdByFantasyTeamName}
@@ -6132,14 +6481,14 @@ function OfferCard({
                                 rightTeamName,
                             )
                         }
-                        className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                        className='max-w-full cursor-pointer truncate px-1 py-0.5 text-center text-base leading-none font-medium uppercase tracking-wider transition-opacity hover:opacity-85 md:text-xl'
                         style={TEAM_NAME_BUTTON_STYLE}
                     >
                         {rightTeamName}
                     </button>
                 ) : (
                     <div
-                        className='max-w-full truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider md:text-sm'
+                        className='max-w-full truncate px-1 py-0.5 text-center text-base leading-none font-medium uppercase tracking-wider md:text-xl'
                         style={TEAM_NAME_BUTTON_STYLE}
                     >
                         {rightTeamName}
@@ -6160,7 +6509,7 @@ function OfferCard({
 
     return (
         <article
-            className='relative overflow-hidden rounded-lg'
+            className='relative rounded-lg [overflow:clip] [overflow-clip-margin:24px]'
             style={{
                 backgroundColor: FRAME_BG,
                 border: `${OFFER_TUBE_PX}px solid ${tubeColor}`,
@@ -6822,9 +7171,14 @@ function OfferCard({
                          * sits on the left.
                          */}
                         {canRespond &&
-                            extraResponderSlots.map((slotIndex) => {
-                                const currentPick =
-                                    picks[slotIndex] ?? null;
+                            extraResponderSlots
+                                .filter(
+                                    (idx) =>
+                                        idx <= browseVisibleUntilIndex,
+                                )
+                                .map((slotIndex) => {
+                                    const currentPick =
+                                        picks[slotIndex] ?? null;
 
                                 const entry =
                                     currentPick != null
@@ -9012,54 +9366,88 @@ function DirectOfferCard({
     const note = directDraft.note;
 
     /**
-  * Ensures the slots array always has a trailing empty slot the
-  * user can use to start a new trade pair.
-  *
-  * This is what replaced the "Ajouter un joueur" button on the
-  * Créer tab. As soon as EITHER side of the last slot gets a
-  * player, a fresh empty slot is appended, so the user always
-  * has one "Choisir un joueur" chooser per side to work with
-  * (see the first-empty-per-side rendering further down).
-  *
-  * Reads `d.slots` from the store rather than the captured
-  * value, so a double-invocation in React strict mode cannot
-  * append the same slot twice. When the last slot is empty on
-  * both sides the effect is a no-op, which is what makes it
-  * converge.
-  */
+* Keeps the slots array in its invariant shape by compacting
+* EACH SIDE independently:
+*
+*   1. The offering side is treated as an ordered list of
+*      players. Nulls are dropped so gaps do not survive.
+*   2. The target side is treated the same way.
+*   3. The two lists are re-paired by index.
+*   4. Exactly one trailing empty slot is appended, giving the
+*      user a fresh chooser for the next trade pair.
+*
+* This is what makes removing the FIRST player (or any middle
+* player) pull the ones under it towards the top. The previous
+* version only dropped slots that were empty on BOTH sides, so
+* clearing one side of a two-sided slot left it in place and
+* nothing below shifted up.
+*
+* The same per-side compaction model is used when a trade card
+* *displays* a response (see visibleResponseSlots), so the
+* visual result of editing the draft matches the visual result
+* of viewing a saved response. Unbalanced trades (more players
+* on one side) are rendered as a run of one-sided rows at the
+* bottom, exactly as they were before.
+*
+* Change-detection compares by value, so the effect converges
+* in one pass: the compacted output is fed back into the effect
+* by the store notify, and the next run sees an identical
+* array and does nothing.
+*/
     useLayoutEffect(() => {
         updateDirectOfferDraft((d) => {
-            if (d.slots.length === 0) {
-                return {
-                    ...d,
-                    slots: [
-                        {
-                            offeringPlayerId: null,
-                            targetPlayerId: null,
-                        },
-                    ],
-                };
+            // Build each side as an independent ordered list.
+            const offeringPlayers: number[] = [];
+            const targetPlayers: number[] = [];
+
+            for (const slot of d.slots) {
+                if (slot.offeringPlayerId != null) {
+                    offeringPlayers.push(slot.offeringPlayerId);
+                }
+                if (slot.targetPlayerId != null) {
+                    targetPlayers.push(slot.targetPlayerId);
+                }
             }
 
-            const last = d.slots[d.slots.length - 1];
+            // Re-pair by index. Number of paired rows is the
+            // longer of the two lists.
+            const maxCount = Math.max(
+                offeringPlayers.length,
+                targetPlayers.length,
+            );
 
-            if (
-                last.offeringPlayerId != null ||
-                last.targetPlayerId != null
-            ) {
-                return {
-                    ...d,
-                    slots: [
-                        ...d.slots,
-                        {
-                            offeringPlayerId: null,
-                            targetPlayerId: null,
-                        },
-                    ],
-                };
+            const next: DirectOfferSlot[] = [];
+
+            for (let i = 0; i < maxCount; i++) {
+                next.push({
+                    offeringPlayerId: offeringPlayers[i] ?? null,
+                    targetPlayerId: targetPlayers[i] ?? null,
+                });
             }
 
-            return d;
+            // Always leave exactly one trailing empty slot for
+            // the next chooser.
+            next.push({
+                offeringPlayerId: null,
+                targetPlayerId: null,
+            });
+
+            // Change-detection by value. Returning the same
+            // object skips the store notify, which keeps the
+            // effect from looping on the second pass.
+            const unchanged =
+                next.length === d.slots.length &&
+                next.every(
+                    (s, i) =>
+                        s.offeringPlayerId ===
+                        d.slots[i].offeringPlayerId &&
+                        s.targetPlayerId ===
+                        d.slots[i].targetPlayerId,
+                );
+
+            if (unchanged) return d;
+
+            return { ...d, slots: next };
         });
     }, [slots]);
 
@@ -9476,17 +9864,18 @@ function DirectOfferCard({
     );
 
     return (
-        <article
-            className='relative overflow-hidden rounded-lg'
-            style={{
-                backgroundColor: FRAME_BG,
-                border: `${OFFER_TUBE_PX}px solid ${OFFER_TUBE_COLOR}`,
+        < article
+            className = 'relative rounded-lg [overflow:clip] [overflow-clip-margin:24px]'
+    style = {{
+        backgroundColor: FRAME_BG,
+            border: `${OFFER_TUBE_PX}px solid ${OFFER_TUBE_COLOR}`,
                 boxShadow: [
                     `inset 0 0 0 1px ${OFFER_FILAMENT}`,
                     `inset 0 0 10px ${OFFER_BLOOM_NEAR}`,
                     `inset 0 0 28px ${OFFER_BLOOM_FAR}`,
                 ].join(', '),
-            }}
+            }
+}
         >
             <div className='space-y-3 p-2 md:p-3'>
                 {/* Header: connected team (left) + target (right) */}
@@ -9507,7 +9896,7 @@ function DirectOfferCard({
                                         connectedTeamName,
                                     )
                                 }
-                                className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                                className='max-w-full cursor-pointer truncate px-1 py-0.5 text-center text-base leading-none font-medium uppercase tracking-wider transition-opacity hover:opacity-85 md:text-xl'
                                 style={TEAM_NAME_BUTTON_STYLE}
                             >
                                 {connectedTeamName}
@@ -9550,7 +9939,7 @@ function DirectOfferCard({
                                             targetTeamName,
                                         )
                                     }
-                                    className='max-w-full cursor-pointer truncate rounded px-3 py-0.5 text-center text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 md:text-sm'
+                                    className='max-w-full cursor-pointer truncate px-1 py-0.5 text-center text-base leading-none font-medium uppercase tracking-wider transition-opacity hover:opacity-85 md:text-xl'
                                     style={TEAM_NAME_BUTTON_STYLE}
                                 >
                                     {targetTeamName}
@@ -9988,9 +10377,17 @@ function DirectOfferCard({
                     picks on the left, the target team's picks on the
                     right. Both sides are always editable, so both
                     "Ajouter un choix" buttons are visible from the
-                    start. */}
+                    start.
+
+                    pt-2 pb-0: the row keeps its top padding (so the
+                    buttons breathe against the dashed top border)
+                    but drops its bottom padding. The bottom gap is
+                    instead produced by the message field's own
+                    marginTop below, so the two elements are always
+                    locked relative to each other. See the message
+                    block further down. */}
                 <div
-                    className='grid grid-cols-[1fr_auto_1fr] items-stretch px-1 py-2'
+                    className='grid grid-cols-[1fr_auto_1fr] items-stretch px-1 pt-2 pb-0'
                     style={{
                         borderTop:
                             '1px dashed rgba(0, 168, 255, 0.15)',
@@ -10056,8 +10453,25 @@ function DirectOfferCard({
                     empty slot with a "Choisir un joueur" on both
                     sides is added below it. */}
 
-                {/* Message (same style as Publier une annonce) */}
-                <div>
+                {/* Message (same style as Publier une annonce).
+                    marginTop is set via inline style so it wins
+                    over the parent's space-y-3 (which would
+                    otherwise set 12px). 8px is what makes the
+                    "Ajouter un choix" row above sit tightly above
+                    the "Message (optionnel)" label, so the buttons
+                    and the message read as one visual group and
+                    the picks row can never drift further up away
+                    from the message.
+
+                    This is the ONLY thing anchoring the picks row
+                    to the message, on purpose: the picks row and
+                    the message field are direct siblings in the
+                    same flex column, so tightening the space
+                    between them is the correct place to make the
+                    change. Do not move this value into the parent
+                    space-y-3, or every other gap in the card
+                    changes too. */}
+                <div style={{ marginTop: '8px' }}>
                     <label className='text-xs font-semibold uppercase tracking-wider text-[#7DD3FC]'>
                         Message (optionnel)
                     </label>
