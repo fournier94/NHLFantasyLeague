@@ -179,10 +179,20 @@ namespace NhlFantasyLeague.api.Services.Jobs
         // on top of the live refresh's boxscore fetches and pushing the
         // combined request rate above the NHL's 2 req/sec ceiling.
         private static readonly TimeSpan FrequentRefreshInterval =
-            TimeSpan.FromMinutes(30);
+         TimeSpan.FromMinutes(30);
 
+        // Live-window interval was reduced from 2 hours to 1 hour.
+        //
+        // The 2-hour value was chosen when the frequent refresh and
+        // the live refresh could genuinely stack their NHL API calls
+        // on top of each other. With the shared NhlApiRateLimiter
+        // now serializing every NHL request process-wide, that
+        // stacking can no longer happen, so the throttle is no
+        // longer needed. 1 hour keeps a modest throttle against the
+        // live window while cutting the worst-case staleness of
+        // injury data in half.
         private static readonly TimeSpan FrequentRefreshLiveWindowInterval =
-            TimeSpan.FromHours(2);
+            TimeSpan.FromHours(1);
 
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly LiveGameCache _cache;
@@ -293,7 +303,31 @@ namespace NhlFantasyLeague.api.Services.Jobs
         private bool _heavyLockStuckWarningIssued;
 
         private DateTime _lastLiveKickUtc = DateTime.MinValue;
-        private DateTime _lastFrequentRefreshKickUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// UTC instant of the last time the frequent refresh actually
+        /// acquired the heavy lock and began its work.
+        ///
+        /// IMPORTANT: this is a SUCCESS timestamp, not a KICK
+        /// timestamp. It is updated inside RunFrequentRefreshAsync
+        /// after TryAcquireHeavyLockAsync returns true. The previous
+        /// version updated it at kick time, which meant a skipped
+        /// run (because another heavy job held the lock) still
+        /// consumed the whole interval. That is how a 15-minute
+        /// weekly-refresh retry chain silently suppressed every
+        /// frequent refresh for hours on 2026-10-14, letting injury
+        /// data go stale while ESPN had already cleared players.
+        /// </summary>
+        private DateTime _lastFrequentRefreshSuccessUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// True while a frequent-refresh attempt is in flight.
+        /// Prevents the tick from spawning overlapping attempts
+        /// every 30 seconds while the previous attempt is still
+        /// waiting on the heavy lock.
+        /// </summary>
+        private bool _frequentRefreshAttemptInFlight;
+
         private bool _recomputeRequested;
 
         public ScheduledJobsRunner(
@@ -729,24 +763,41 @@ namespace NhlFantasyLeague.api.Services.Jobs
             // ---- Priority 9: frequent refresh -------------------------
             // Cadence depends on the live window. Off-peak (02:00-11:00
             // ET) it fires every 30 minutes. During the live window
-            // (11:00-02:00 ET) it drops to every 2 hours, so the ~63
-            // HTTP calls it makes per run never stack on top of the
-            // live refresh's boxscore fetches.
+            // (11:00-02:00 ET) it drops to every hour.
+            //
+            // TIMING IS GATED ON THE LAST SUCCESSFUL RUN, NOT THE
+            // LAST KICK. If the previous attempt failed to acquire
+            // the heavy lock (because a longer job held it), the
+            // timestamp is not advanced, and the tick retries on the
+            // next 30-second cycle until the lock frees. Once the
+            // job actually starts, the success timestamp is set, and
+            // the next attempt is a full interval away.
+            //
+            // _frequentRefreshAttemptInFlight prevents the tick from
+            // spawning a new attempt every 30 seconds while the
+            // previous attempt is still waiting on the lock. It is
+            // cleared in a finally inside RunFrequentRefreshAsync.
             {
                 var frequentInterval = IsInsideLiveWindow(timeOfDayEt)
                     ? FrequentRefreshLiveWindowInterval
                     : FrequentRefreshInterval;
 
-                bool kick;
+                bool shouldTry;
+
                 lock (_stateLock)
                 {
-                    kick = nowUtc - _lastFrequentRefreshKickUtc
-                        >= frequentInterval;
+                    shouldTry =
+                        !_frequentRefreshAttemptInFlight &&
+                        nowUtc - _lastFrequentRefreshSuccessUtc
+                            >= frequentInterval;
 
-                    if (kick) _lastFrequentRefreshKickUtc = nowUtc;
+                    if (shouldTry)
+                    {
+                        _frequentRefreshAttemptInFlight = true;
+                    }
                 }
 
-                if (kick)
+                if (shouldTry)
                 {
                     FireAndForget(
                         ct,
@@ -1085,19 +1136,30 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// Typical cost: ~63 HTTP calls, ~90 seconds.
         /// </summary>
         private async Task RunFrequentRefreshAsync(
-     CancellationToken ct = default)
+CancellationToken ct = default)
         {
-            if (!await TryAcquireHeavyLockAsync(
-                    "Frequent refresh (injuries + rosters)", ct))
-            {
-                _logger.LogInformation(
-                    "Frequent refresh skipped: another heavy job is " +
-                    "running.");
-                return;
-            }
+            var acquiredLock = false;
 
             try
             {
+                if (!await TryAcquireHeavyLockAsync(
+                        "Frequent refresh (injuries + rosters)", ct))
+                {
+                    // Another heavy job is running. Do NOT advance
+                    // _lastFrequentRefreshSuccessUtc: the tick must
+                    // be able to retry on its next cycle. Log at
+                    // Debug so a long heavy-lock hold does not spam
+                    // the production log with thousands of identical
+                    // "skipped" lines.
+                    _logger.LogDebug(
+                        "Frequent refresh skipped: another heavy job " +
+                        "is running.");
+
+                    return;
+                }
+
+                acquiredLock = true;
+
                 using var scope = _scopeFactory.CreateScope();
 
                 var injuryService = scope.ServiceProvider
@@ -1143,7 +1205,26 @@ namespace NhlFantasyLeague.api.Services.Jobs
             }
             finally
             {
-                ReleaseHeavyLock();
+                if (acquiredLock)
+                {
+                    // Record the moment the job actually started, so
+                    // the next attempt is a full interval away. The
+                    // tick reads this under _stateLock.
+                    lock (_stateLock)
+                    {
+                        _lastFrequentRefreshSuccessUtc = DateTime.UtcNow;
+                    }
+
+                    ReleaseHeavyLock();
+                }
+
+                // Always release the in-flight flag, whether we
+                // acquired the lock or not. This is what lets the
+                // next tick retry after a skip.
+                lock (_stateLock)
+                {
+                    _frequentRefreshAttemptInFlight = false;
+                }
             }
         }
 

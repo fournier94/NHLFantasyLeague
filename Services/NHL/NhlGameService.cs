@@ -394,6 +394,32 @@ namespace NhlFantasyLeague.api.Services.NHL
                     $"Persist: {ex.GetType().Name}: {ex.Message}");
             }
 
+            // Clear any stale injury flag on a player who appeared in a
+            // LIVE or CRIT game that we just processed. If the player is
+            // on the ice for a game currently being played, he is
+            // obviously healthy, so any injury flag we still hold on
+            // him is stale.
+            //
+            // Independent try/catch: a failure here must not override
+            // the successful persist above, and it must not prevent the
+            // rest of the live refresh from completing.
+            //
+            // Scoped to LIVE and CRIT games only, by the helper. A
+            // FINAL game is not used, because a player could have been
+            // injured during the game and ESPN has not yet reported it.
+            try
+            {
+                var cleared = await ClearInjuryFlagsForLivePlayersAsync(
+                    persistable, ct);
+
+                result.InjuriesClearedFromLiveGames = cleared;
+            }
+            catch (Exception ex)
+            {
+                result.Errors.Add(
+                    $"Injury clear: {ex.GetType().Name}: {ex.Message}");
+            }
+
             PruneBoxscoreCache(now);
 
             return result;
@@ -1797,6 +1823,109 @@ PersistFinalGamesResult result)
         }
 
         /// <summary>
+        /// Clears the injury flags of every player who appeared in a
+        /// LIVE or CRIT boxscore that was just processed by the live
+        /// refresh. A player who is on the ice for a game currently
+        /// being played is obviously healthy, so any ESPN-sourced
+        /// injury flag we still hold on him is stale.
+        ///
+        /// SCOPE
+        ///
+        /// Only LIVE and CRIT games are used. A FINAL boxscore is
+        /// deliberately excluded: a player could have been injured
+        /// during the game (took a hit, left early) and ESPN has not
+        /// yet reported it, so clearing his flag based on a finished
+        /// boxscore would erase correct data. The live refresh
+        /// persists boxscores for LIVE, CRIT, FINAL and OFF games,
+        /// so this scope has to be enforced inside the helper.
+        ///
+        /// CALLED ONLY FROM RefreshLiveGamesCacheAsync. The post-game
+        /// write (PersistFinalGamesForDateAsync) and the season
+        /// reconciliation do not call this. They run on older games
+        /// where the "on the ice = healthy" reasoning does not apply.
+        ///
+        /// SAVES CHANGES IMMEDIATELY. The helper calls SaveChangesAsync
+        /// itself; the caller wraps it in try/catch so a failure here
+        /// never overrides the successful persist that already ran.
+        ///
+        /// Returns the number of players whose flag was cleared.
+        /// </summary>
+        private async Task<int> ClearInjuryFlagsForLivePlayersAsync(
+            List<LiveGameSnapshot> snapshots,
+            CancellationToken ct)
+        {
+            var liveNhlPlayerIds = new HashSet<int>();
+
+            foreach (var snapshot in snapshots)
+            {
+                if (snapshot.Boxscore == null)
+                {
+                    continue;
+                }
+
+                var isLive =
+                    string.Equals(
+                        snapshot.GameState,
+                        "LIVE",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(
+                        snapshot.GameState,
+                        "CRIT",
+                        StringComparison.OrdinalIgnoreCase);
+
+                if (!isLive)
+                {
+                    continue;
+                }
+
+                CollectNhlPlayerIds(
+                    snapshot.Boxscore.PlayerByGameStats.AwayTeam,
+                    liveNhlPlayerIds);
+
+                CollectNhlPlayerIds(
+                    snapshot.Boxscore.PlayerByGameStats.HomeTeam,
+                    liveNhlPlayerIds);
+            }
+
+            if (liveNhlPlayerIds.Count == 0)
+            {
+                return 0;
+            }
+
+            var injuredPlayers = await _dbContext.Players
+                .Where(p =>
+                    liveNhlPlayerIds.Contains(p.NhlPlayerId) &&
+                    p.IsInjured)
+                .ToListAsync(ct);
+
+            if (injuredPlayers.Count == 0)
+            {
+                return 0;
+            }
+
+            var now = DateTime.UtcNow;
+
+            foreach (var p in injuredPlayers)
+            {
+                p.IsInjured = false;
+                p.InjuryStatus = null;
+                p.InjuryKind = InjuryKind.None;
+                p.InjuryShortDescription = null;
+                p.InjuryLongDescription = null;
+                p.InjuryType = null;
+                p.InjuryDetail = null;
+                p.InjurySide = null;
+                p.InjuryReturnDate = null;
+                p.InjuryFantasyStatus = null;
+                p.InjuryUpdatedAt = now;
+            }
+
+            await _dbContext.SaveChangesAsync(ct);
+
+            return injuredPlayers.Count;
+        }
+
+        /// <summary>
         /// Upserts the per-game NhlGameStat row for one NHL game.
         /// Called from PersistSnapshotsAsync for every snapshot that
         /// has a boxscore. Idempotent: the row is looked up by
@@ -1997,6 +2126,15 @@ PersistFinalGamesResult result)
         public int GamesPersisted { get; set; }
         public int PlayersUpdated { get; set; }
         public int TeamDelta { get; set; }
+
+        /// <summary>
+        /// Number of players whose stale injury flag was cleared on
+        /// this tick because they appeared in a LIVE or CRIT
+        /// boxscore. Zero on a healthy day; non-zero indicates ESPN
+        /// had listed a player as injured while he was actually on
+        /// the ice.
+        /// </summary>
+        public int InjuriesClearedFromLiveGames { get; set; }
 
         public List<string> Errors { get; set; } = new();
     }

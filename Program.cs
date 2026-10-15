@@ -41,6 +41,11 @@ builder.Services.AddScoped<SystemEventLogService>();
 
 builder.Services.AddSingleton<NhlApiRateLimiter>();
 
+// Tracks consecutive refreshes during which an NHL team has been
+// missing from the ESPN injuries payload. Shared state, so
+// singleton; see InjuryPayloadMissTracker for the rationale.
+builder.Services.AddSingleton<InjuryPayloadMissTracker>();
+
 // Both handlers are transient because AddHttpMessageHandler
 // resolves them per client. They are stateless; all shared state
 // lives on the singleton limiter.

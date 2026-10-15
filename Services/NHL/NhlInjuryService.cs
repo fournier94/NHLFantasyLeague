@@ -15,6 +15,7 @@ namespace NhlFantasyLeague.api.Services.NHL
         private readonly AppDbContext _dbContext;
         private readonly ILogger<NhlInjuryService> _logger;
         private readonly ExternalSourceHealthService _health;
+        private readonly InjuryPayloadMissTracker _injuryMissTracker;
 
         private const string EspnInjuriesUrl =
             "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries";
@@ -31,16 +32,27 @@ namespace NhlFantasyLeague.api.Services.NHL
         /// </summary>
         private const int MinimumPlausibleInjuries = 5;
 
+        /// <summary>
+        /// How many consecutive refreshes a team must be missing from
+        /// the ESPN payload before its players' injury flags are
+        /// cleared anyway. One miss is treated as a transient CDN
+        /// blip and skipped; two misses is treated as a real "ESPN
+        /// is not reporting this team" signal.
+        /// </summary>
+        private const int ConsecutiveMissesBeforeForceClear = 2;
+
         public NhlInjuryService(
             HttpClient httpClient,
             AppDbContext dbContext,
             ILogger<NhlInjuryService> logger,
-            ExternalSourceHealthService health)
+            ExternalSourceHealthService health,
+            InjuryPayloadMissTracker injuryMissTracker)
         {
             _httpClient = httpClient;
             _dbContext = dbContext;
             _logger = logger;
             _health = health;
+            _injuryMissTracker = injuryMissTracker;
         }
 
         public async Task<NhlInjurySyncResult> RefreshAsync(
@@ -251,18 +263,77 @@ namespace NhlFantasyLeague.api.Services.NHL
             // then harmless: only the players ESPN actually reported on
             // are affected.
             var previouslyInjured = allPlayers
-                .Where(p => p.IsInjured)
+      .Where(p => p.IsInjured)
+      .ToList();
+
+            // First pass: determine, per team present in the DB,
+            // whether it is missing from the ESPN payload and for
+            // how many consecutive refreshes.
+            //
+            // A team that is missing for the first time is skipped
+            // (leave its players alone; the next refresh decides).
+            // A team that has been missing for
+            // ConsecutiveMissesBeforeForceClear refreshes is treated
+            // as a real "ESPN is not reporting this team" signal and
+            // its players are cleared like any other team that is
+            // not on the injured list.
+            var allDbTeamIds = allPlayers
+                .Where(p => p.NhlTeamId.HasValue)
+                .Select(p => p.NhlTeamId!.Value)
+                .Distinct()
                 .ToList();
 
+            var teamsToForceClear = new HashSet<int>();
+
+            foreach (var teamId in allDbTeamIds)
+            {
+                if (payloadTeamIds.Contains(teamId))
+                {
+                    _injuryMissTracker.RecordHit(teamId);
+                    continue;
+                }
+
+                var misses = _injuryMissTracker.RecordMiss(teamId);
+
+                if (misses >= ConsecutiveMissesBeforeForceClear)
+                {
+                    teamsToForceClear.Add(teamId);
+
+                    _logger.LogWarning(
+                        "ESPN injury payload has been missing NHL team " +
+                        "{TeamId} for {Misses} consecutive refreshes. " +
+                        "Force-clearing the injury flags of that team's " +
+                        "players.",
+                        teamId,
+                        misses);
+
+                    // Reset so the warning is not re-emitted on every
+                    // subsequent refresh. The counter restarts at 0,
+                    // and the next miss starts a fresh count.
+                    _injuryMissTracker.Reset(teamId);
+                }
+            }
+
+            // Second pass: apply the clear. A player is cleared when
+            //   - his NHL team is in the payload (the normal case), or
+            //   - his team was force-cleared above, or
+            //   - he has no NHL team at all (free agent / unsigned).
             foreach (var p in allPlayers)
             {
-                if (p.NhlTeamId.HasValue &&
-                    !payloadTeamIds.Contains(p.NhlTeamId.Value))
+                if (p.NhlTeamId.HasValue)
                 {
-                    // ESPN did not report on this player's team in this
-                    // payload, so we have no information about his
-                    // injury status. Leave his fields alone.
-                    continue;
+                    var teamId = p.NhlTeamId.Value;
+
+                    var inPayload = payloadTeamIds.Contains(teamId);
+                    var forceClear = teamsToForceClear.Contains(teamId);
+
+                    if (!inPayload && !forceClear)
+                    {
+                        // Missing from the payload for the first time.
+                        // Leave the player alone; the next refresh
+                        // decides.
+                        continue;
+                    }
                 }
 
                 p.IsInjured = false;
