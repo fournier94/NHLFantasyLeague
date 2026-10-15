@@ -25,7 +25,9 @@
     <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\AuthContext.tsx" />
     <None Remove="frontend\src\lib\directOfferState.ts" />
+    <None Remove="frontend\src\lib\marketplaceCounterOfferState.ts" />
     <None Remove="frontend\src\lib\marketplaceExtraResponderSlots.ts" />
+    <None Remove="frontend\src\lib\marketplaceNavigationStore.ts" />
     <None Remove="frontend\src\lib\marketplaceNotificationsStore.ts" />
     <None Remove="frontend\src\lib\marketplaceOfferingOverrides.ts" />
     <None Remove="frontend\src\lib\marketplacePicksState.ts" />
@@ -71,7 +73,9 @@
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\directOfferState.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplaceCounterOfferState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceExtraResponderSlots.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\marketplaceNavigationStore.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceNotificationsStore.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceOfferingOverrides.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplacePicksState.ts" />

@@ -8,7 +8,11 @@
     useSyncExternalStore,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate } from 'react-router-dom';
+import {
+    Link,
+    useNavigate,
+    useSearchParams,
+} from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import {
     acceptTradeOfferResponse,
@@ -35,6 +39,7 @@ import {
     type RosterEntry,
     type SeasonStatLine,
     type TeamRoster,
+    type MarketplaceNotificationCount,
     type TradeOffer,
     type TradeOfferResponse,
     type TradeOfferSlot,
@@ -50,12 +55,26 @@ import {
     type TradeCapContext,
 } from '@/lib/marketplacePopupRestoration';
 import {
+    clearCountering,
+    getCounteringResponse,
+    startCountering,
+    subscribeToCounterOfferState,
+} from '@/lib/marketplaceCounterOfferState';
+import {
     getMarketplaceSection,
     setMarketplaceSection,
 } from '@/lib/marketplaceSectionState';
+import {
+    consumeMarketplaceNavigationRequest,
+    getMarketplaceNavigationRequestId,
+    requestMarketplaceNavigation,
+    subscribeToMarketplaceNavigationRequest,
+} from '@/lib/marketplaceNavigationStore';
 import * as DraftPicks from '@/lib/marketplacePicksState';
 import {
+    getMarketplaceNotificationsSnapshot,
     refreshMarketplaceNotificationsNow,
+    subscribeToMarketplaceNotifications,
 } from '@/lib/marketplaceNotificationsStore';
 import { TradePicksSlot } from '@/components/marketplace/TradePicksSlot';
 import {
@@ -107,6 +126,28 @@ import {
     removeRemovedCreatorPick,
     subscribeToRemovedCreatorPicks,
 } from '@/lib/marketplaceRemovedCreatorPicksState';
+
+/**
+ * Defensive accessor for the accepted-sent-response count.
+ *
+ * The `unseenAcceptedSentResponses` field is present only when the
+ * backend has been extended with the `UnseenAcceptedSentResponses`
+ * count. On a deployment that has not yet shipped that backend
+ * change, the field is missing from the JSON and reads as undefined
+ * at runtime even if TypeScript says otherwise.
+ *
+ * Returning 0 in that case keeps the Envoyées badge hidden rather
+ * than rendering "NaN" or throwing.
+ */
+function getAcceptedSentCount(
+    notifications: MarketplaceNotificationCount,
+): number {
+    const raw = (notifications as {
+        unseenAcceptedSentResponses?: number;
+    }).unseenAcceptedSentResponses;
+
+    return typeof raw === 'number' ? raw : 0;
+}
 
 // ---------------------------------------------------------------------
 // Types
@@ -450,7 +491,7 @@ const SLOT_ARROW_COL = 'w-5 md:w-12';
  * How long the browse list must stay on screen before the frontend
  * fires markOffersSeen.
  */
-const MARK_SEEN_DELAY_MS = 2000;
+const MARK_SEEN_DELAY_MS = 1000;
 
 /**
  * Shared style for the two team-name buttons on the offer card
@@ -490,10 +531,61 @@ export default function MarketplacePage() {
     // same way. Every change is persisted back by the sync effect
     // below, so a remount (after clicking a player name and coming
     // back via Fermer or browser Back) lands on the same tab.
-    const [view, setView] = useState<View>(
-        () => getMarketplaceSection().view,
-    );
+    /**
+     * URL search params. Used to route the user to a specific
+     * section when he arrives from the navbar's priority link.
+     *
+     * The section store remains the fallback: on a plain
+     * `/marketplace` visit the params are absent and the store
+     * decides what tab was last open.
+     */
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    const [view, setView] = useState<View>(() => {
+        // First render: prefer the URL param, fall back to the store.
+        const urlView = searchParams.get('view');
+
+        if (
+            urlView === 'received' ||
+            urlView === 'sent' ||
+            urlView === 'add' ||
+            urlView === 'browse'
+        ) {
+            return urlView;
+        }
+
+        return getMarketplaceSection().view;
+    });
+
     const [browseRefreshTick, setBrowseRefreshTick] = useState(0);
+
+    /**
+ * Live marketplace notification counts, per category:
+ *
+ *   - unseenOffers             → "Marché" (new or modified
+ *                                 offers in Voir les offres)
+ *   - unseenResponses          → "Reçues" (pending responses
+ *                                 on the user's own offers)
+ *   - unseenAcceptedSentResp.  → "Envoyées" (responses the
+ *                                 user sent that have been
+ *                                 accepted)
+ *
+ * Subscribed via useSyncExternalStore so the segmented button
+ * labels update the moment the store's poll or a manual refresh
+ * brings in new numbers — same source the navbar badge reads
+ * from, so the two are always in sync.
+ *
+ * The counts are computed once per render and reused by the
+ * four button labels below.
+ */
+    const marketplaceNotifications = useSyncExternalStore(
+        subscribeToMarketplaceNotifications,
+        getMarketplaceNotificationsSnapshot,
+    );
+
+    const marketplaceCount = marketplaceNotifications.unseenOffers;
+    const receivedCount = marketplaceNotifications.unseenResponses;
+    const sentCount = getAcceptedSentCount(marketplaceNotifications);
 
     /**
      * Team list + selected target for the "Créer" tab (direct
@@ -996,10 +1088,10 @@ export default function MarketplacePage() {
     }, []);
 
     /**
-     * Fetch the fantasy team list once. Used by the Créer tab's
-     * manager picker. Non-fatal on failure: the dropdown just stays
-     * empty until the next mount.
-     */
+  * Fetch the fantasy team list once. Used by the Créer tab's
+  * manager picker. Non-fatal on failure: the dropdown just stays
+  * empty until the next mount.
+  */
     useEffect(() => {
         let cancelled = false;
 
@@ -1019,6 +1111,25 @@ export default function MarketplacePage() {
     }, []);
 
     /**
+     * Force a fresh marketplace notification count on mount.
+     *
+     * The notification store already refetches on tab visibility
+     * and window focus, but a user who navigates to /marketplace
+     * from another page in the same tab never leaves and re-enters
+     * the tab, so neither of those fires. This call guarantees the
+     * badge is current the moment the marketplace is opened, so a
+     * count left over from a previous session (deleted offer,
+     * already-accepted response, etc.) is corrected before the
+     * user can act on it.
+     *
+     * Non-fatal: the store swallows network errors, and the next
+     * scheduled poll retries.
+     */
+    useEffect(() => {
+        refreshMarketplaceNotificationsNow();
+    }, []);
+
+    /**
   * Sub-view inside the "Marché" tab. Only relevant when
   * `view === 'browse'`.
   *
@@ -1032,7 +1143,20 @@ export default function MarketplacePage() {
   */
     const [browseSubView, setBrowseSubView] = useState<
         'view' | 'mine' | 'publish'
-    >(() => getMarketplaceSection().browseSubView);
+    >(() => {
+        // First render: prefer the URL param, fall back to the store.
+        const urlSub = searchParams.get('sub');
+
+        if (
+            urlSub === 'view' ||
+            urlSub === 'mine' ||
+            urlSub === 'publish'
+        ) {
+            return urlSub;
+        }
+
+        return getMarketplaceSection().browseSubView;
+    });
 
     // Persist the current section on every change so a remount
     // restores it. Covers every transition: browse sub-tabs, the
@@ -1041,6 +1165,88 @@ export default function MarketplacePage() {
     useEffect(() => {
         setMarketplaceSection({ view, browseSubView });
     }, [view, browseSubView]);
+
+    /**
+     * Apply URL params on mount and on subsequent changes.
+     *
+     * The searchParams object is opaque to React so we depend on
+     * its stringified form. Reading via a fresh URLSearchParams
+     * inside the effect keeps the parse logic in one place.
+     *
+     * After applying, the params are removed from the URL (with
+     * `replace: true` so the browser history does not grow). That
+     * way, when the user switches tabs inside the page and later
+     * remounts MarketplacePage, the section store takes over and
+     * the user's last tab is restored — the priority navigation
+     * only fires on an explicit navbar click.
+     */
+    const searchString = searchParams.toString();
+
+    useEffect(() => {
+        if (searchString === '') return;
+
+        const params = new URLSearchParams(searchString);
+
+        const urlView = params.get('view');
+        const urlSub = params.get('sub');
+
+        let applied = false;
+
+        if (
+            urlView === 'received' ||
+            urlView === 'sent' ||
+            urlView === 'add' ||
+            urlView === 'browse'
+        ) {
+            setView(urlView);
+            applied = true;
+        }
+
+        if (
+            urlSub === 'view' ||
+            urlSub === 'mine' ||
+            urlSub === 'publish'
+        ) {
+            setBrowseSubView(urlSub);
+            applied = true;
+        }
+
+        if (applied) {
+            const next = new URLSearchParams(searchString);
+            next.delete('view');
+            next.delete('sub');
+            setSearchParams(next, { replace: true });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchString, setSearchParams]);
+
+    /**
+     * Consume pending navigation requests from child panels.
+     *
+     * Any component below (OfferCard, DirectOfferCard, ...) can call
+     * `requestMarketplaceNavigation('sent')` after a successful
+     * action to ask the page to switch tabs. The page subscribes
+     * here, consumes the request, and applies it.
+     *
+     * The request id is a monotonic counter, so every request
+     * triggers exactly one re-render and one consume.
+     */
+    const navRequestId = useSyncExternalStore(
+        subscribeToMarketplaceNavigationRequest,
+        getMarketplaceNavigationRequestId,
+    );
+
+    useEffect(() => {
+        const pending = consumeMarketplaceNavigationRequest();
+
+        if (pending === null) return;
+
+        setView(pending.view);
+
+        if (pending.browseSubView !== null) {
+            setBrowseSubView(pending.browseSubView);
+        }
+    }, [navRequestId]);
 
     /**
      * Offer currently being edited, or null when the user is
@@ -1064,86 +1270,12 @@ export default function MarketplacePage() {
     // The old "Publier une annonce" sub-view now lives in the Marché
     // tab.
 
-       /**
-     * "Contre-offre" handler for the Reçues panel. Copies the
-     * received response into the Créer draft and switches the page
-     * to the Créer tab, so the user can tweak and send a direct
-     * counter-offer to the manager who responded.
-     *
-     * Mapping:
-     *   - draft.selectedTargetTeamId = the responder's team
-     *   - draft slot i:
-     *       offeringPlayerId = the user's own offered player on
-     *                          the original offer slot i (from
-     *                          the offer side of the response)
-     *       targetPlayerId   = the responder's player on slot i
-     *                          (from the response side)
-     *   - DraftPicks DIRECT_OFFERING_KEY = offer.picks +
-     *     response.requestedPicks (everything the user gives)
-     *   - DraftPicks DIRECT_TARGET_KEY   = response.respondingPicks
-     *     (everything the responder gives)
-     *
-     * The note is reset, matching "Utiliser comme base": the note
-     * on the received response is a message from the other manager,
-     * not a message from the current user to him.
-     *
-     * After the draft is populated and the view switches, the
-     * response is rejected on the server so it disappears from
-     * Reçues. The underlying offer stays Active for other
-     * responders. If the reject call fails (transient network
-     * error), the response will simply reappear the next time
-     * Reçues loads — the draft the user is looking at is not
-     * affected.
-     */
-    function handleCounterOffer(response: TradeOfferResponse): void {
-        const sortedSlots = [...response.slots].sort(
-            (a, b) => a.slotIndex - b.slotIndex,
-        );
-
-        const draftSlots = sortedSlots.map((s) => ({
-            offeringPlayerId: s.offeringPlayerId ?? null,
-            targetPlayerId: s.respondingPlayerId ?? null,
-        }));
-
-        updateDirectOfferDraft((d) => ({
-            ...d,
-            selectedTargetTeamId: String(
-                response.respondingFantasyTeamId,
-            ),
-            slots:
-                draftSlots.length > 0
-                    ? draftSlots
-                    : [
-                        {
-                            offeringPlayerId: null,
-                            targetPlayerId: null,
-                        },
-                    ],
-            note: '',
-        }));
-
-        DraftPicks.setPicks(
-            DraftPicks.DIRECT_OFFERING_KEY,
-            [
-                ...(response.creatorPicks ?? []).map((p) => p.id),
-                ...(response.requestedPicks ?? []).map((p) => p.id),
-            ],
-        );
-
-        DraftPicks.setPicks(
-            DraftPicks.DIRECT_TARGET_KEY,
-            (response.respondingPicks ?? []).map((p) => p.id),
-        );
-
-        // Fire and forget: the user is already in the Créer tab
-        // by the time this resolves. If it fails, the response
-        // will reappear on the next Reçues load.
-        rejectTradeOfferResponse(response.id).catch(() => {
-            // Non-fatal.
-        });
-
-        setView('add');
-    }
+    // NOTE: "Contre-offre" no longer navigates to the Créer tab. It
+    // is now handled entirely inside ReceivedOffersPanel, which
+    // swaps the clicked response's OfferCard for an inline
+    // DirectOfferCard locked on the responding team. The shared
+    // state lives in lib/marketplaceCounterOfferState.ts so the
+    // in-progress counter survives a PlayerPage round-trip.
 
     return (
         <section className='-mt-4 space-y-4 sm:-mt-6'>
@@ -1162,7 +1294,30 @@ export default function MarketplacePage() {
 
                         <button
                             type='button'
-                            onClick={() => setView('browse')}
+                            onClick={() => {
+                                // Clicking the "Marché" tab always
+                                // lands on the (browse, view)
+                                // subsection, regardless of which
+                                // browse sub-tab was previously
+                                // active. This makes the top-nav
+                                // "Marché" button behave the same
+                                // as the navbar marketplace icon:
+                                // the user is dropped on "Voir les
+                                // offres" and never on "Vos offres
+                                // actives" or "Publier une annonce"
+                                // by accident.
+                                //
+                                // The one exception is a back-
+                                // navigation from a PlayerPage,
+                                // which is handled by the URL-param
+                                // logic on MarketplacePage's mount:
+                                // there are no URL params on that
+                                // return trip, so the section store
+                                // restores the saved
+                                // (browse, publish) state instead.
+                                setView('browse');
+                                setBrowseSubView('view');
+                            }}
                             className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${view === 'browse'
                                 ? 'bg-white text-[#1D1B61]'
                                 : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
@@ -1179,6 +1334,9 @@ export default function MarketplacePage() {
                             }
                         >
                             Marché
+                            {marketplaceCount > 0
+                                ? ` (${marketplaceCount})`
+                                : ''}
                         </button>
 
                         <button
@@ -1221,8 +1379,18 @@ export default function MarketplacePage() {
                                     : undefined
                             }
                         >
-                            <span className='hidden sm:inline'>Offres reçues</span>
-                            <span className='sm:hidden'>Reçues</span>
+                            <span className='hidden sm:inline'>
+                                Offres reçues
+                                {receivedCount > 0
+                                    ? ` (${receivedCount})`
+                                    : ''}
+                            </span>
+                            <span className='sm:hidden'>
+                                Reçues
+                                {receivedCount > 0
+                                    ? ` (${receivedCount})`
+                                    : ''}
+                            </span>
                         </button>
 
                         <button
@@ -1243,8 +1411,18 @@ export default function MarketplacePage() {
                                     : undefined
                             }
                         >
-                            <span className='hidden sm:inline'>Offres envoyées</span>
-                            <span className='sm:hidden'>Envoyées</span>
+                            <span className='hidden sm:inline'>
+                                Offres envoyées
+                                {sentCount > 0
+                                    ? ` (${sentCount})`
+                                    : ''}
+                            </span>
+                            <span className='sm:hidden'>
+                                Envoyées
+                                {sentCount > 0
+                                    ? ` (${sentCount})`
+                                    : ''}
+                            </span>
                         </button>
                     </div>
 
@@ -1357,26 +1535,48 @@ export default function MarketplacePage() {
                 </div>
             </div>
 
-            {view === 'add' && user?.fantasyTeamId != null && (
-                <DirectOfferCard
-                    connectedTeamId={user.fantasyTeamId}
-                    connectedTeamName={
-                        user.fantasyTeamName ?? 'Mon équipe'
-                    }
-                    targetTeamId={
-                        selectedDirectOfferTeamId
-                            ? Number(selectedDirectOfferTeamId)
-                            : null
-                    }
-                    targetTeamName={
-                        selectedDirectOfferTeamId
-                            ? directOfferTeams.find(
-                                (t) =>
-                                    t.id ===
-                                    Number(selectedDirectOfferTeamId),
-                            )?.name ?? null
-                            : null
-                    }
+            {view === 'add' && user?.fantasyTeamId != null && (() => {
+                /*
+                 * Compute the effective target team with a defensive
+                 * filter: never let the current user offer to
+                 * himself. The direct-offer draft store is a
+                 * module-level singleton and could hold a stale
+                 * selection from a previous session (e.g. two
+                 * accounts used back-to-back in the same browser
+                 * tab). The picker already excludes the user's own
+                 * team from its list, but a value already stored in
+                 * the draft bypasses that filter.
+                 *
+                 * When the stored target equals the current user's
+                 * own team, we treat it as "no target selected" so
+                 * the picker placeholder shows and the "Offrir"
+                 * button stays disabled.
+                 */
+                const parsedTargetId =
+                    selectedDirectOfferTeamId
+                        ? Number(selectedDirectOfferTeamId)
+                        : null;
+
+                const effectiveTargetTeamId =
+                    parsedTargetId === user.fantasyTeamId
+                        ? null
+                        : parsedTargetId;
+
+                const effectiveTargetTeamName =
+                    effectiveTargetTeamId != null
+                        ? directOfferTeams.find(
+                            (t) => t.id === effectiveTargetTeamId,
+                        )?.name ?? null
+                        : null;
+
+                return (
+                    <DirectOfferCard
+                        connectedTeamId={user.fantasyTeamId}
+                        connectedTeamName={
+                            user.fantasyTeamName ?? 'Mon équipe'
+                        }
+                        targetTeamId={effectiveTargetTeamId}
+                        targetTeamName={effectiveTargetTeamName}
                     onOpenTeamRoster={(id) =>
                         navigate(`/mon-equipe?teamId=${id}`)
                     }
@@ -1398,17 +1598,24 @@ export default function MarketplacePage() {
                                 req.referencePlayer ?? null,
                         })
                     }
-                    onRequestTargetTeam={() =>
-                        setTeamPickerOpenToken((t) => t + 1)
-                    }
-                />
-            )}
+                        onRequestTargetTeam={() =>
+                            setTeamPickerOpenToken((t) => t + 1)
+                        }
+                        onSubmitted={() =>
+                            requestMarketplaceNavigation('sent')
+                        }
+                    />
+                );
+            })()}
 
             {view === 'browse' && browseSubView !== 'publish' && (
                 <BrowseOffersPanel
                     refreshTick={browseRefreshTick}
                     teamId={user?.fantasyTeamId ?? null}
                     mode={browseSubView}
+                    onResponded={() =>
+                        requestMarketplaceNavigation('sent')
+                    }
                     onOpenTeamRoster={(id) =>
                         navigate(`/mon-equipe?teamId=${id}`)
                     }
@@ -1526,7 +1733,24 @@ export default function MarketplacePage() {
                     onOpenTeamRoster={(id) =>
                         navigate(`/mon-equipe?teamId=${id}`)
                     }
-                    onCounterOffer={handleCounterOffer}
+                    onRequestPlayerPick={(req) =>
+                        setRosterPopupTeam({
+                            id: req.teamId,
+                            name: req.teamName,
+                            directPickContext: {
+                                slotIndex: req.slotIndex,
+                                side: req.side,
+                                lockedPosition: req.lockedPosition,
+                                capContext: req.capContext,
+                                currentPickedPlayerId:
+                                    req.currentPickedPlayerId,
+                                onPick: req.onPick,
+                                onClearPick: req.onClearPick,
+                            },
+                            referencePlayer:
+                                req.referencePlayer ?? null,
+                        })
+                    }
                 />
             )}
 
@@ -2490,6 +2714,7 @@ function BrowseOffersPanel({
     onEditOffer,
     onRequestPlayerPick,
     onRequestOfferingPlayerPick,
+    onResponded,
 }: {
     refreshTick: number;
     teamId: number | null;
@@ -2541,6 +2766,12 @@ function BrowseOffersPanel({
         teamName: string,
         pick: PendingPickContext,
     ) => void;
+    /**
+     * Optional. Fired after the responder successfully sends a
+     * response on any offer card in the browse list. MarketplacePage
+     * uses this to switch to the Envoyées tab.
+     */
+    onResponded?: () => void;
 }) {
     const [offers, setOffers] = useState<TradeOffer[]>([]);
     const [loading, setLoading] = useState(true);
@@ -2683,6 +2914,7 @@ function BrowseOffersPanel({
                     onRequestOfferingPlayerPick={
                         onRequestOfferingPlayerPick
                     }
+                    onResponded={onResponded}
                     swapSides
                 />
             ))}
@@ -2790,19 +3022,14 @@ function responseToOfferShape(
 function ReceivedOffersPanel({
     refreshTick,
     onOpenTeamRoster,
-    onCounterOffer,
+    onRequestPlayerPick,
 }: {
     refreshTick: number;
     onOpenTeamRoster: (teamId: number, teamName: string) => void;
-    /**
-     * Called when the user clicks "Contre-offre" on a received
-     * response. The parent handles the transition (populate the
-     * Créer draft, switch the tab, reject the response). Optional
-     * so the panel can still be rendered without it in a future
-     * preview context.
-     */
-    onCounterOffer?: (response: TradeOfferResponse) => void;
+    onRequestPlayerPick: (req: DirectOfferPickRequest) => void;
 }) {
+    const { user } = useAuth();
+
     const [responses, setResponses] = useState<TradeOfferResponse[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -2813,6 +3040,18 @@ function ReceivedOffersPanel({
      * only.
      */
     const [busyId, setBusyId] = useState<number | null>(null);
+
+    /**
+     * The response currently being countered, or null. When set,
+     * the clicked response's OfferCard is swapped for a Créer-style
+     * DirectOfferCard locked on the responding team. The state is
+     * stored in a module-level store so it survives a PlayerPage
+     * round-trip (the pick popup's player-name links navigate away).
+     */
+    const counteringResponse = useSyncExternalStore(
+        subscribeToCounterOfferState,
+        getCounteringResponse,
+    );
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -2936,6 +3175,102 @@ function ReceivedOffersPanel({
         }
     }
 
+    /**
+     * Opens the counter-offer card for the given response.
+     *
+     * Seeds the direct-offer draft from the response:
+     *   - target team      = the responding manager
+     *   - slot i (offering side) = the user's own offered player
+     *                              on the original offer (unchanged)
+     *   - slot i (target side)   = the responder's player on slot i
+     *   - draft picks (offering) = offer.picks + response.requestedPicks
+     *   - draft picks (target)   = response.respondingPicks
+     *
+     * Appends one fresh empty slot so the user always has a place
+     * to add more players. The DirectOfferCard's own auto-append
+     * effect takes over from there.
+     *
+     * The response is NOT rejected yet. It is only rejected once
+     * the counter-offer is successfully sent (or left in place if
+     * the user cancels).
+     */
+    function startCounterOffer(response: TradeOfferResponse): void {
+        const sortedSlots = [...response.slots].sort(
+            (a, b) => a.slotIndex - b.slotIndex,
+        );
+
+        const draftSlots = sortedSlots.map((s) => ({
+            offeringPlayerId: s.offeringPlayerId ?? null,
+            targetPlayerId: s.respondingPlayerId ?? null,
+        }));
+
+        draftSlots.push({
+            offeringPlayerId: null,
+            targetPlayerId: null,
+        });
+
+        updateDirectOfferDraft((d) => ({
+            ...d,
+            selectedTargetTeamId: String(
+                response.respondingFantasyTeamId,
+            ),
+            slots: draftSlots,
+            note: '',
+        }));
+
+        DraftPicks.setPicks(
+            DraftPicks.DIRECT_OFFERING_KEY,
+            [
+                ...(response.creatorPicks ?? []).map((p) => p.id),
+                ...(response.requestedPicks ?? []).map((p) => p.id),
+            ],
+        );
+
+        DraftPicks.setPicks(
+            DraftPicks.DIRECT_TARGET_KEY,
+            (response.respondingPicks ?? []).map((p) => p.id),
+        );
+
+        startCountering(response);
+    }
+
+    /**
+     * Backs out of an active counter-offer without sending
+     * anything. Resets the draft and the pick store so a fresh
+     * counter on another response starts clean.
+     */
+    function cancelCounterOffer(): void {
+        clearCountering();
+        resetDirectOfferSlotsAndNote();
+        DraftPicks.clearDirectPicks();
+    }
+
+    /**
+     * Fires after the DirectOfferCard has successfully sent the
+     * counter-offer. Rejects the original response so it disappears
+     * from Reçues (both sides see the withdrawal), then lets the
+     * next refresh re-sync the list.
+     */
+    async function handleCounterSubmitted(): Promise<void> {
+        const id = counteringResponse?.id ?? null;
+
+        clearCountering();
+
+        if (id === null) return;
+
+        // Optimistically remove the response from the local list so
+        // the panel does not briefly flash the OfferCard for it
+        // before the reload lands.
+        setResponses((prev) => prev.filter((r) => r.id !== id));
+
+        try {
+            await rejectTradeOfferResponse(id);
+        } catch {
+            // Non-fatal. The next scheduled refresh will re-add
+            // the response if the reject did not go through.
+        }
+    }
+
     if (loading) {
         return (
             <p className='text-center text-muted-foreground'>
@@ -2952,7 +3287,7 @@ function ReceivedOffersPanel({
         );
     }
 
-    if (responses.length === 0) {
+    if (responses.length === 0 && counteringResponse == null) {
         return (
             <p className='rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
                 Aucune offre reçue pour le moment.
@@ -2960,34 +3295,82 @@ function ReceivedOffersPanel({
         );
     }
 
+    /**
+     * Effective list of cards to render:
+     *   - every received response, in the order returned by the API;
+     *   - if the countering response is not in that list (edge case:
+     *     the response briefly fell out during a re-fetch, or was
+     *     removed by the optimistic delete before the server
+     *     responded), append it at the end so the user does not
+     *     lose his work in progress.
+     */
+    const renderedCards: TradeOfferResponse[] = [...responses];
+
+    if (
+        counteringResponse !== null &&
+        !responses.some((r) => r.id === counteringResponse.id)
+    ) {
+        renderedCards.push(counteringResponse);
+    }
+
     return (
         <div className='space-y-3'>
-            {responses.map((response) => (
-                <OfferCard
-                    key={response.id}
-                    offer={responseToOfferShape(response)}
-                    busy={busyId === response.id}
-                    onCancel={() => {
-                        // Responses cannot be cancelled by the recipient.
-                        // No-op.
-                    }}
-                    userRoster={null}
-                    onAccept={() => void handleAccept(response.id)}
-                    onReject={() => void handleReject(response.id)}
-                    onCounterOffer={
-                        onCounterOffer
-                            ? () => onCounterOffer(response)
-                            : undefined
-                    }
-                    onCancelAcceptedTrade={
-                        response.status === 'Accepted'
-                            ? () =>
-                                void handleCancelAccepted(response.id)
-                            : undefined
-                    }
-                    onOpenTeamRoster={onOpenTeamRoster}
-                />
-            ))}
+            {renderedCards.map((response) => {
+                const isCountering =
+                    counteringResponse?.id === response.id;
+
+                if (isCountering && user?.fantasyTeamId != null) {
+                    return (
+                        <DirectOfferCard
+                            key={`counter-${response.id}`}
+                            connectedTeamId={user.fantasyTeamId}
+                            connectedTeamName={
+                                user.fantasyTeamName ?? 'Mon équipe'
+                            }
+                            targetTeamId={
+                                response.respondingFantasyTeamId
+                            }
+                            targetTeamName={
+                                response.respondingFantasyTeamName
+                            }
+                            onOpenTeamRoster={onOpenTeamRoster}
+                            onRequestPlayerPick={onRequestPlayerPick}
+                            onRequestTargetTeam={() => {
+                                // No-op: the target team is locked
+                                // when countering a received offer.
+                            }}
+                            onCancel={cancelCounterOffer}
+                            onSubmitted={() => {
+                                void handleCounterSubmitted();
+                                requestMarketplaceNavigation('sent');
+                            }}
+                        />
+                    );
+                }
+
+                return (
+                    <OfferCard
+                        key={response.id}
+                        offer={responseToOfferShape(response)}
+                        busy={busyId === response.id}
+                        onCancel={() => {
+                            // Responses cannot be cancelled by the
+                            // recipient. No-op.
+                        }}
+                        userRoster={null}
+                        onAccept={() => void handleAccept(response.id)}
+                        onReject={() => void handleReject(response.id)}
+                        onCounterOffer={() => startCounterOffer(response)}
+                        onCancelAcceptedTrade={
+                            response.status === 'Accepted'
+                                ? () =>
+                                    void handleCancelAccepted(response.id)
+                                : undefined
+                        }
+                        onOpenTeamRoster={onOpenTeamRoster}
+                    />
+                );
+            })}
         </div>
     );
 }
@@ -3031,6 +3414,41 @@ function SentOffersPanel({
     useEffect(() => {
         void load();
     }, [load, refreshTick]);
+
+    /**
+     * Fire-and-forget "seen" marker, 2 seconds after the list has
+     * been on screen. Marks the user's own sent responses as seen
+     * so the "accepted" gold badge on the navbar clears once the
+     * user has actually looked at the Envoyées panel.
+     *
+     * Uses the same markResponsesSeen endpoint as the Reçues
+     * panel: the backend accepts either side of the response
+     * (offer creator or responding team), and the shared view-row
+     * table records both. A response is either received or sent,
+     * never both, so the two panels never fight over the same
+     * marker.
+     *
+     * On success, forces an immediate refetch of the navbar badge
+     * so the count drops without waiting for the next 60-second
+     * poll tick.
+     */
+    useEffect(() => {
+        if (responses.length === 0) return;
+
+        const ids = responses.map((r) => r.id);
+
+        const timer = window.setTimeout(() => {
+            markResponsesSeen(ids)
+                .then(() => refreshMarketplaceNotificationsNow())
+                .catch(() => {
+                    // Non-fatal.
+                });
+        }, MARK_SEEN_DELAY_MS);
+
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, [responses]);
 
     async function handleCancel(responseId: number) {
         if (!window.confirm('Annuler cette offre envoyée ?')) return;
@@ -4046,6 +4464,7 @@ function OfferCard({
     onOpenTeamRoster,
     onRequestPlayerPick,
     onRequestOfferingPlayerPick,
+    onResponded,
     swapSides = false,
 }: {
     offer: TradeOffer;
@@ -4125,16 +4544,24 @@ function OfferCard({
      * escape hatch for a private league where managers trust each
      * other.
      */
-    onCancelAcceptedTrade?: () => void;
-    /**
-  * When provided, the two manager names in the card header
-  * become clickable buttons that call this callback with the
-  * team id and name. MarketplacePage uses it to open a roster
-  * popup instead of navigating to /mon-equipe. When undefined
-  * (e.g. the publish preview popup), the names render as plain
-  * non-interactive text.
-  */
-    onOpenTeamRoster?: (teamId: number, teamName: string) => void;
+        onCancelAcceptedTrade?: () => void;
+        /**
+      * When provided, the two manager names in the card header
+      * become clickable buttons that call this callback with the
+      * team id and name. MarketplacePage uses it to open a roster
+      * popup instead of navigating to /mon-equipe. When undefined
+      * (e.g. the publish preview popup), the names render as plain
+      * non-interactive text.
+      */
+        onOpenTeamRoster?: (teamId: number, teamName: string) => void;
+        /**
+         * Optional. Fired after the responder successfully sends a
+         * response to the offer (the "Offrir" button's success branch).
+         * MarketplacePage uses this to switch to the Envoyées tab so
+         * the responder immediately sees his newly-sent response
+         * listed there.
+         */
+        onResponded?: () => void;
     /**
   * When provided, the responder's picker is a "Choisir un
   * joueur" button that opens the roster popup in pick mode,
@@ -5341,6 +5768,12 @@ function OfferCard({
                 DraftPicks.clearOfferPicks(offer.id);
                 clearRemovedCreatorPicks(offer.id);
                 clearResponseNote(offer.id);
+
+                // Ask the parent to switch to Envoyées. The parent
+                // only wires this when the card is on the browse
+                // tab, so the publish preview and the Reçues /
+                // Envoyées panels are unaffected.
+                onResponded?.();
             } else {
                 setRespondError(result.message);
             }
@@ -8537,25 +8970,18 @@ function DirectOfferCard({
     onOpenTeamRoster,
     onRequestPlayerPick,
     onRequestTargetTeam,
+    onCancel,
+    onSubmitted,
 }: {
     connectedTeamId: number;
     connectedTeamName: string;
     targetTeamId: number | null;
     targetTeamName: string | null;
     onOpenTeamRoster: (teamId: number, teamName: string) => void;
-    /**
-     * Called when the user clicks a "Choisir un joueur" button on
-     * either side of a slot. The parent opens the roster popup in
-     * pick mode for the given team, slot and side.
-     */
     onRequestPlayerPick: (req: DirectOfferPickRequest) => void;
-    /**
-     * Called when the user clicks the right-side button of a slot
-     * while no target team has been selected yet. The parent
-     * opens the "Offrir à" team picker so the user can choose the
-     * target team before picking a player.
-     */
     onRequestTargetTeam: () => void;
+    onCancel?: () => void;
+    onSubmitted?: () => void;
 }) {
     const [connectedRoster, setConnectedRoster] =
         useState<TeamRoster | null>(null);
@@ -8975,6 +9401,22 @@ function DirectOfferCard({
         if (targetTeamId == null) return;
         if (submitting) return;
 
+        // Defensive guard against self-targeting. The picker
+        // excludes the user's own team and MarketplacePage coerces
+        // a stale selection back to null, but a future code path
+        // (a new entry point, a store bug, a race) must not be
+        // able to submit a "trade with yourself" and rely on the
+        // backend to reject it. The backend already refuses it;
+        // surfacing the error here as a clear client-side message
+        // gives the user a better experience and keeps the
+        // invariant visible in the UI layer too.
+        if (targetTeamId === connectedTeamId) {
+            setSubmitError(
+                'Vous ne pouvez pas vous envoyer une offre à vous-même.',
+            );
+            return;
+        }
+
         // Build the request from the filled slots. A slot is kept
         // as long as it carries a player on at least one side, so
         // unbalanced and one-sided slots reach the backend. A slot
@@ -9018,6 +9460,11 @@ function DirectOfferCard({
                 // manager without re-selecting him.
                 resetDirectOfferSlotsAndNote();
                 DraftPicks.clearDirectPicks();
+
+                // Notify the parent. The Reçues panel's
+                // "Contre-offre" workflow uses this to reject the
+                // original response and refresh the list.
+                onSubmitted?.();
             } else {
                 setSubmitError(result.message);
             }
@@ -9661,8 +10108,19 @@ function DirectOfferCard({
                     </p>
                 )}
 
-                {/* Action row — three buttons (Analyse / Réinitialiser / Offrir) */}
+                {/* Action row — Retour (optional) / Analyse / Réinitialiser / Offrir */}
                 <div className='flex items-stretch gap-1.5'>
+                    {onCancel && (
+                        <button
+                            type='button'
+                            disabled={submitting}
+                            onClick={onCancel}
+                            className='flex-1 cursor-pointer rounded-md border border-white/40 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40'
+                        >
+                            Retour
+                        </button>
+                    )}
+
                     <button
                         type='button'
                         disabled={submitting}

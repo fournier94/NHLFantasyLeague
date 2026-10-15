@@ -2030,8 +2030,16 @@ export function markResponsesSeen(
  * API and never serves a stale cached count.
  */
 export interface MarketplaceNotificationCount {
+    /** Green: new or modified offers in "Voir les offres". */
     unseenOffers: number;
+
+    /** Gold: new pending responses on the user's own offers. */
     unseenResponses: number;
+
+    /** Gold: responses the user sent that have been accepted. */
+    unseenAcceptedSentResponses: number;
+
+    /** Combined count. This is what the navbar badge renders. */
     total: number;
 }
 

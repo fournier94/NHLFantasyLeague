@@ -40,6 +40,9 @@ import {
     subscribeToMarketplaceNotifications,
 } from '@/lib/marketplaceNotificationsStore';
 import {
+    computeMarketplaceTargetPath,
+} from '@/lib/marketplaceNavigationStore';
+import {
     auraPulseClass,
     auraPulseStyle,
     auraRangeFor,
@@ -80,6 +83,14 @@ const GAMEDAY_CYAN = '#00E5FF';
 const INJURY_RED = '#EF4444';
 const SEARCH_WHITE = '#FFFFFF';
 const MARKETPLACE_VIOLET = '#A855F7';
+
+/**
+ * Green used for the marketplace badge when only "Voir les offres"
+ * items are pending. Matches the "Nouvelle offre" chip that is
+ * rendered on top of a fresh or modified offer card, so the badge
+ * and the chip read as the same green signal.
+ */
+const MARKETPLACE_GREEN = '#22C55E';
 
 /**
  * Two-layer glow, matching the crown effect on the Classement page:
@@ -260,23 +271,42 @@ function MarketplaceBadge() {
 }
 
 function MarketplaceBadgeContent() {
-    const count = useSyncExternalStore(
+    const notifications = useSyncExternalStore(
         subscribeToMarketplaceNotifications,
         getMarketplaceNotificationsSnapshot,
     );
 
-    if (count <= 0) return null;
+    if (notifications.total <= 0) return null;
 
-    const label = count > 99 ? '99+' : String(count);
+    // Gold takes priority over green. A new response on the user's
+    // own offer, or an acceptance of an offer the user sent, is
+    // more urgent than a new or modified listing in Voir les
+    // offres. When both categories have items, the badge stays
+    // gold and shows the combined count so the user still knows
+    // how many things need attention.
+    const hasGold =
+        notifications.unseenResponses > 0 ||
+        notifications.unseenAcceptedSentResponses > 0;
+
+    const backgroundColor = hasGold
+        ? GOLD
+        : MARKETPLACE_GREEN;
+
+    const color = hasGold ? '#000000' : '#04160A';
+
+    const label =
+        notifications.total > 99
+            ? '99+'
+            : String(notifications.total);
 
     return (
         <span
-            aria-label={`${count} nouvelle${count > 1 ? 's' : ''} notification${count > 1 ? 's' : ''} dans le marché`}
+            aria-label={`${notifications.total} nouvelle${notifications.total > 1 ? 's' : ''} notification${notifications.total > 1 ? 's' : ''} dans le marché`}
             className='pointer-events-none absolute left-1/2 top-1/2 flex h-5 min-w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 px-1 text-[0.6rem] font-bold leading-none'
             style={{
                 borderColor: '#080D1A',
-                backgroundColor: GOLD,
-                color: '#000000',
+                backgroundColor,
+                color,
             }}
         >
             {label}
@@ -305,6 +335,33 @@ export function TopBar() {
         isFirefox,
         promptInstall,
     } = usePwaInstall();
+
+    /**
+     * Current marketplace notification counts. Used to decide where
+     * both marketplace icons should take the user (Priority 1:
+     * Reçues, Priority 2: Voir les offres, Priority 3: default).
+     *
+     * Subscribing here means TopBar re-renders whenever the counts
+     * change — the same frequency as the badge's own subscription
+     * that is already mounted below, so there is no extra
+     * notification churn. The store dedupes identical poll results,
+     * so this fires only on an actual change.
+     */
+    const marketplaceNotifications = useSyncExternalStore(
+        subscribeToMarketplaceNotifications,
+        getMarketplaceNotificationsSnapshot,
+    );
+
+    /**
+     * Target URL for both marketplace icons. When a priority
+     * applies, it carries a query param so MarketplacePage jumps
+     * straight to the correct section on mount. Otherwise it is
+     * the plain `/marketplace` path, and the section store decides
+     * what to show.
+     */
+    const marketplaceTarget = computeMarketplaceTargetPath(
+        marketplaceNotifications,
+    );
 
     async function handleLogout() {
         await logout();
@@ -493,7 +550,7 @@ export function TopBar() {
                     </Link>
 
                     <Link
-                        to='/marketplace'
+                        to={marketplaceTarget}
                         className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/marketplace'
                             ? 'font-medium text-primary'
                             : 'text-muted-foreground hover:text-foreground'
@@ -595,7 +652,7 @@ export function TopBar() {
                         <a> is a symmetric p-2 box around the icon,
                         the badge effectively centers on the icon. */}
                     <Link
-                        to='/marketplace'
+                        to={marketplaceTarget}
                         aria-label='Marketplace'
                         className={`relative cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/marketplace'
                             ? 'text-primary'

@@ -1056,9 +1056,9 @@ offeredPlayerIds, ct);
         /// the number the badge renders.
         /// </summary>
         public async Task<MarketplaceNotificationCountDto>
-            GetNotificationCountAsync(
-                int userId,
-                CancellationToken ct = default)
+       GetNotificationCountAsync(
+           int userId,
+           CancellationToken ct = default)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -1071,7 +1071,14 @@ offeredPlayerIds, ct);
 
             var myTeamId = user.FantasyTeamId.Value;
 
-            // --- Unseen offers --------------------------------------------
+            // --- Unseen offers (green) -----------------------------------
+            //
+            // Active browse offers the user has never seen, minus the
+            // ones he has already responded to (a pending response
+            // hides the offer from the browse list, so it should not
+            // be counted as "new to look at" on the badge). Direct
+            // offers are excluded — they are private and never
+            // appear in Voir les offres.
             var seenOfferIds = _dbContext.TradeOfferViews
                 .Where(v => v.UserId == userId)
                 .Select(v => v.TradeOfferId);
@@ -1083,16 +1090,26 @@ offeredPlayerIds, ct);
                 .Select(r => r.TradeOfferId);
 
             var unseenOffers = await _dbContext.TradeOffers
-     .AsNoTracking()
-     .Where(o =>
-         o.Status == TradeOfferStatus.Active &&
-         !o.IsDirectOffer &&
-         o.CreatedByFantasyTeamId != myTeamId &&
-         !seenOfferIds.Contains(o.Id) &&
-         !respondedOfferIds.Contains(o.Id))
-     .CountAsync(ct);
+                .AsNoTracking()
+                .Where(o =>
+                    o.Status == TradeOfferStatus.Active &&
+                    !o.IsDirectOffer &&
+                    o.CreatedByFantasyTeamId != myTeamId &&
+                    !seenOfferIds.Contains(o.Id) &&
+                    !respondedOfferIds.Contains(o.Id))
+                .CountAsync(ct);
 
-            // --- Unseen responses -----------------------------------------
+            // --- Unseen responses (gold, part 1) -------------------------
+            //
+            // Pending responses on the user's own offers that he has
+            // not yet opened the Reçues tab on.
+            //
+            // The `TradeOffer.Status == Active` filter MUST match the
+            // filter used by ListReceivedResponsesAsync. If the
+            // offer was Cancelled or Closed, its responses are no
+            // longer shown in Reçues, so they must not be counted
+            // here either: a badge that counts something the user
+            // cannot open can never be cleared.
             var seenResponseIds = _dbContext.TradeOfferResponseViews
                 .Where(v => v.UserId == userId)
                 .Select(v => v.TradeOfferResponseId);
@@ -1102,6 +1119,31 @@ offeredPlayerIds, ct);
                 .Where(r =>
                     r.Status == TradeOfferResponseStatus.Pending &&
                     r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
+                    r.TradeOffer.Status == TradeOfferStatus.Active &&
+                    !seenResponseIds.Contains(r.Id))
+                .CountAsync(ct);
+
+            // --- Unseen accepted sent responses (gold, part 2) -----------
+            //
+            // Responses the user's team sent to someone else's offer
+            // that have since been accepted, and that the user has
+            // not yet opened the Envoyées tab on. The same
+            // TradeOfferResponseView marker is reused: a response is
+            // either received (on the user's own offer) or sent
+            // (from the user's team), never both, so there is no
+            // collision on the (UserId, TradeOfferResponseId) key.
+            //
+            // Same rule as unseenResponses: the `Active` filter
+            // must match ListSentResponsesAsync, or an accepted
+            // response on a Cancelled offer would be counted and
+            // could never be seen.
+            var unseenAcceptedSentResponses = await _dbContext
+                .TradeOfferResponses
+                .AsNoTracking()
+                .Where(r =>
+                    r.Status == TradeOfferResponseStatus.Accepted &&
+                    r.RespondingFantasyTeamId == myTeamId &&
+                    r.TradeOffer.Status == TradeOfferStatus.Active &&
                     !seenResponseIds.Contains(r.Id))
                 .CountAsync(ct);
 
@@ -1109,16 +1151,23 @@ offeredPlayerIds, ct);
             {
                 UnseenOffers = unseenOffers,
                 UnseenResponses = unseenResponses,
-                Total = unseenOffers + unseenResponses,
+                UnseenAcceptedSentResponses =
+                    unseenAcceptedSentResponses,
+                Total =
+                    unseenOffers +
+                    unseenResponses +
+                    unseenAcceptedSentResponses,
             };
         }
 
         /// <summary>
         /// Records that the calling user has seen the given
-        /// responses on his Reçues tab. Idempotent: responses the
-        /// user already saw are skipped. Responses on offers the
-        /// user did not create are silently filtered out so a
-        /// caller cannot mark someone else's responses as seen.
+        /// responses, either as the offer's creator (Reçues tab) or
+        /// as the responding manager (Envoyées tab). Idempotent:
+        /// responses the user already saw are skipped. Responses
+        /// the user is not part of on either side are silently
+        /// filtered out so a caller cannot mark someone else's
+        /// responses as seen.
         ///
         /// Returns the number of view rows inserted.
         /// </summary>
@@ -1143,14 +1192,20 @@ offeredPlayerIds, ct);
 
             var myTeamId = user.FantasyTeamId.Value;
 
-            // Only responses on offers the user created are valid
-            // candidates. This is the authorization check: a user
-            // cannot mark someone else's responses as seen.
+            // A response is a valid candidate when the user is on
+            // either side of it:
+            //   - the offer's creator  → the user sees it in Reçues
+            //   - the responding team  → the user sees it in Envoyées
+            //
+            // The same view-row table records both: a response is
+            // either received or sent, never both, so there is no
+            // collision on (UserId, TradeOfferResponseId).
             var validResponseIds = await _dbContext.TradeOfferResponses
                 .AsNoTracking()
                 .Where(r =>
                     rawResponseIds.Contains(r.Id) &&
-                    r.TradeOffer.CreatedByFantasyTeamId == myTeamId)
+                    (r.TradeOffer.CreatedByFantasyTeamId == myTeamId ||
+                     r.RespondingFantasyTeamId == myTeamId))
                 .Select(r => r.Id)
                 .ToListAsync(ct);
 

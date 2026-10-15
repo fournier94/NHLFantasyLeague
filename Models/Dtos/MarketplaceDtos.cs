@@ -73,8 +73,31 @@
 
     public class MarketplaceNotificationCountDto
     {
+        /// <summary>
+        /// Green count: active browse offers the user has never
+        /// seen. Because modifying an offer deletes the other
+        /// users' "seen" markers, a modified offer is counted here
+        /// again on its next browse, which is exactly the "new or
+        /// modified offer in Voir les offres" signal.
+        /// </summary>
         public int UnseenOffers { get; set; }
+
+        /// <summary>
+        /// Gold count, part 1: pending responses on the user's own
+        /// offers that he has not yet opened the Reçues tab on.
+        /// </summary>
         public int UnseenResponses { get; set; }
+
+        /// <summary>
+        /// Gold count, part 2: responses the user sent to someone
+        /// else's offer that have since been accepted, and which he
+        /// has not yet opened the Envoyées tab on.
+        /// </summary>
+        public int UnseenAcceptedSentResponses { get; set; }
+
+        /// <summary>
+        /// Combined count. This is what the navbar badge renders.
+        /// </summary>
         public int Total { get; set; }
     }
 

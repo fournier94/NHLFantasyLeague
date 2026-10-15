@@ -21,6 +21,9 @@ import {
     type PlayerPageStyle,
     type RegisterRequest,
 } from '@/api/client';
+import { resetDirectOfferDraft } from '@/lib/directOfferState';
+import { clearDirectPicks } from '@/lib/marketplacePicksState';
+import { clearMarketplacePopupRestore } from '@/lib/marketplacePopupRestoration';
 
 interface AuthContextValue {
     user: AuthUser | null;
@@ -100,6 +103,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(null);
         });
     }, []);
+
+    /**
+     * Reset every user-scoped module-level store when the current
+     * user identity changes.
+     *
+     * WHY THIS EXISTS
+     *
+     * The marketplace stores (direct-offer draft, pick selections,
+     * popup restoration) are module-level singletons that survive
+     * unmounts on purpose, so a PlayerPage round-trip does not lose
+     * an in-progress form. But they are not aware of WHO the user
+     * is: when a user logs out and a different user logs in inside
+     * the same browser tab, the store still holds the previous
+     * user's selection. That is how the "Créer" tab can end up
+     * pre-populated with a target team that is the current user's
+     * own team (the previous user had picked it, and it happens to
+     * belong to the current user).
+     *
+     * The effect fires on every change of user?.id:
+     *   - from undefined to a value (initial /Auth/me resolved),
+     *   - from a value to a different value (login as another account),
+     *   - from a value to undefined (logout or 401).
+     *
+     * Every reset function is a no-op when the store is already in
+     * its default state, so the mount-time run costs nothing.
+     */
+    useEffect(() => {
+        resetDirectOfferDraft();
+        clearDirectPicks();
+        clearMarketplacePopupRestore();
+    }, [user?.id]);
 
     // Toggle a class on <html> based on the user's PlayerPage style.
     //
