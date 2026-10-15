@@ -39,7 +39,6 @@ import {
     type RosterEntry,
     type SeasonStatLine,
     type TeamRoster,
-    type MarketplaceNotificationCount,
     type TradeOffer,
     type TradeOfferResponse,
     type TradeOfferSlot,
