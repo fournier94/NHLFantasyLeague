@@ -195,9 +195,21 @@ namespace NhlFantasyLeague.api.Services.Jobs
         /// <summary>
         /// A heavy job that holds the lock for longer than this is
         /// considered stuck. The watchdog logs a warning once per hold.
+        ///
+        /// Raised from 30 to 60 minutes on 2026-10-15 to match the
+        /// post-rate-limiter runtime of the weekly deep refresh.
+        ///
+        /// With the shared NHL API rate limiter enforcing a 500 ms
+        /// floor on every NHL request, the weekly population step
+        /// (about 2,800 calls) takes ~25-30 minutes on a healthy
+        /// day. A 30-minute threshold would therefore fire on
+        /// healthy runs and stop being a signal. 60 minutes still
+        /// catches the real failure mode (a 15-minute retry chain
+        /// holding the lock for hours, as happened on 2026-10-14)
+        /// while leaving zero false positives.
         /// </summary>
         private static readonly TimeSpan HeavyLockStuckThreshold =
-            TimeSpan.FromMinutes(30);
+            TimeSpan.FromMinutes(60);
 
         // ---- Stable job names ----------------------------------------
         //

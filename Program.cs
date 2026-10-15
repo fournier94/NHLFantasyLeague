@@ -18,16 +18,66 @@ using System.IO.Compression;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Attach the HTTP error logging handler to every HttpClient the app
-// registers, so 429s and transport failures across all external
-// sources (NHL, ESPN, CapFreeze, AHL feed) are recorded in the
-// SystemEventLogs table without touching each AddHttpClient call.
+// ---------------------------------------------------------------------
+// System event logging (errors + warnings surfaced in the admin page)
+// ---------------------------------------------------------------------
+//
+// Registered once, at the top. Used by both the HTTP error logging
+// handler and the scheduled jobs runner.
+
 builder.Services.AddScoped<SystemEventLogService>();
+
+// ---------------------------------------------------------------------
+// NHL API rate limiting
+// ---------------------------------------------------------------------
+//
+// Process-wide rate limiter for every NHL API call. The limiter
+// is a singleton so that all HTTP clients that talk to the NHL
+// share the same meter. See NhlApiRateLimiter for the algorithm.
+//
+// Registered explicitly as a singleton so a future refactor cannot
+// accidentally change its lifetime; the sharing only works if
+// there is exactly one instance.
+
+builder.Services.AddSingleton<NhlApiRateLimiter>();
+
+// Both handlers are transient because AddHttpMessageHandler
+// resolves them per client. They are stateless; all shared state
+// lives on the singleton limiter.
+builder.Services.AddTransient<NhlRateLimitHandler>();
 builder.Services.AddTransient<HttpErrorLoggingHandler>();
+
+// Attach both handlers to every HttpClient the app registers.
+//
+// ORDER MATTERS.
+//
+// In .NET's handler pipeline, the FIRST handler registered is the
+// OUTERMOST (called first on the request, last on the response).
+// The LAST registered handler is the INNERMOST (called last on the
+// request, first on the response, closest to the network).
+//
+// We register, in this order:
+//
+//   1. HttpErrorLoggingHandler (outermost)
+//      Sees every request and response, writes failures to the DB.
+//      Being outermost means it inspects the response AFTER the
+//      rate limiter's finally has released the semaphore, so a
+//      slow DB write can never hold the NHL API gate.
+//
+//   2. NhlRateLimitHandler (innermost)
+//      Holds the semaphore across the actual HTTP call. Being
+//      closest to the network means the semaphore is only held
+//      during the real request, and released before any
+//      downstream handler sees the result.
+//
+// Reversing this order would put the DB write inside the
+// semaphore, which is the failure mode we designed the limiter
+// to avoid.
 
 builder.Services.ConfigureHttpClientDefaults(http =>
 {
     http.AddHttpMessageHandler<HttpErrorLoggingHandler>();
+    http.AddHttpMessageHandler<NhlRateLimitHandler>();
 });
 
 // Render injects a PORT environment variable. Locally, PORT is
@@ -184,13 +234,6 @@ builder.Services.AddScoped<MarketplaceService>();
 
 builder.Services.AddScoped<ExternalSourceHealthService>();
 
-// ---------------------------------------------------------------------
-// System event logging (errors + warnings surfaced in the admin page)
-// ---------------------------------------------------------------------
-
-builder.Services.AddScoped<SystemEventLogService>();
-builder.Services.AddTransient<HttpErrorLoggingHandler>();
-
 builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(90);
@@ -200,28 +243,15 @@ builder.Services.AddHttpClient<PlayerRosterStatusService>(client =>
 // Background jobs, live cache, response cache
 // ---------------------------------------------------------------------
 
-// Existing long-running job runner (refresh-all, roster status,
-// hat-trick backfill). Browser-facing; polled.
 builder.Services.AddSingleton<BackgroundJobService>();
-
-// In-memory live game cache. Serves Game Day without touching the DB.
 builder.Services.AddSingleton<LiveGameCache>();
-
-// Response cache. Short-circuits repeated GETs so user traffic does
-// not wake Neon on every page load.
 builder.Services.AddSingleton<ResponseCacheService>();
-
-// Scheduled jobs runner. Owns the six jobs and their state. Injects
-// IServiceScopeFactory so it can create scopes for scoped services.
 builder.Services.AddSingleton<ScheduledJobsRunner>();
 
-// The tick loop. Runs every 30 s in the background.
 builder.Services.AddHostedService<ScheduledJobsHostedService>();
 
-// Game Day service (schedule, boxscore, live cache refresh, post-game write).
 builder.Services.AddHttpClient<NhlGameService>();
 
-// Bootstraps the Commissioner role from appsettings on startup.
 builder.Services.AddHostedService<CommissionerBootstrapService>();
 
 var app = builder.Build();
@@ -245,13 +275,8 @@ app.UseResponseCompression();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Updates ApplicationUser.LastActiveAt on every authenticated
-// request, throttled to at most one write per user per 5 minutes.
-// Registered after UseAuthorization so only requests that got
-// through the auth pipeline reach it.
 app.UseMiddleware<NhlFantasyLeague.api.Services.Auth.LastActiveMiddleware>();
 
-// Lightweight warm-up endpoint for the cron job.
 app.MapGet("/ping", () => Results.Ok("pong"))
    .AllowAnonymous();
 
