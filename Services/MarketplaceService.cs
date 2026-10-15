@@ -1056,9 +1056,9 @@ offeredPlayerIds, ct);
         /// the number the badge renders.
         /// </summary>
         public async Task<MarketplaceNotificationCountDto>
-       GetNotificationCountAsync(
-           int userId,
-           CancellationToken ct = default)
+  GetNotificationCountAsync(
+      int userId,
+      CancellationToken ct = default)
         {
             var user = await _dbContext.Users
                 .AsNoTracking()
@@ -1147,12 +1147,53 @@ offeredPlayerIds, ct);
                     !seenResponseIds.Contains(r.Id))
                 .CountAsync(ct);
 
+            // --- Persistent per-section totals ---------------------------
+            //
+            // These two counters back the "Reçues" and "Envoyées"
+            // segmented button labels on the Marketplace page. They
+            // are DIFFERENT from the unseen counters above: they do
+            // NOT get reduced when the user marks responses as seen.
+            //
+            // Both count "rows the corresponding panel renders",
+            // matching ListReceivedResponsesAsync /
+            // ListSentResponsesAsync exactly:
+            //   - status is Pending or Accepted (Rejected and
+            //     Cancelled rows are filtered out by the panels),
+            //   - the parent offer is still Active.
+            //
+            // The intent is that opening Reçues or Envoyées clears
+            // the navbar badge (that's the unseen counter's job) but
+            // does NOT change the button label, so the user can
+            // always see at a glance how many trades are sitting in
+            // each of those two sections.
+            var totalReceivedResponses = await _dbContext
+                .TradeOfferResponses
+                .AsNoTracking()
+                .Where(r =>
+                    (r.Status == TradeOfferResponseStatus.Pending ||
+                     r.Status == TradeOfferResponseStatus.Accepted) &&
+                    r.TradeOffer.CreatedByFantasyTeamId == myTeamId &&
+                    r.TradeOffer.Status == TradeOfferStatus.Active)
+                .CountAsync(ct);
+
+            var totalSentResponses = await _dbContext
+                .TradeOfferResponses
+                .AsNoTracking()
+                .Where(r =>
+                    (r.Status == TradeOfferResponseStatus.Pending ||
+                     r.Status == TradeOfferResponseStatus.Accepted) &&
+                    r.RespondingFantasyTeamId == myTeamId &&
+                    r.TradeOffer.Status == TradeOfferStatus.Active)
+                .CountAsync(ct);
+
             return new MarketplaceNotificationCountDto
             {
                 UnseenOffers = unseenOffers,
                 UnseenResponses = unseenResponses,
                 UnseenAcceptedSentResponses =
                     unseenAcceptedSentResponses,
+                TotalReceivedResponses = totalReceivedResponses,
+                TotalSentResponses = totalSentResponses,
                 Total =
                     unseenOffers +
                     unseenResponses +

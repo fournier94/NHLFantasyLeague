@@ -128,25 +128,18 @@ import {
 } from '@/lib/marketplaceRemovedCreatorPicksState';
 
 /**
- * Defensive accessor for the accepted-sent-response count.
+ * Defensive numeric accessor for the persistent per-section
+ * counters used by the "Reçues" and "Envoyées" button labels.
  *
- * The `unseenAcceptedSentResponses` field is present only when the
- * backend has been extended with the `UnseenAcceptedSentResponses`
- * count. On a deployment that has not yet shipped that backend
- * change, the field is missing from the JSON and reads as undefined
- * at runtime even if TypeScript says otherwise.
- *
- * Returning 0 in that case keeps the Envoyées badge hidden rather
- * than rendering "NaN" or throwing.
+ * These two fields (`totalReceivedResponses` and
+ * `totalSentResponses`) ship together with the frontend that
+ * consumes them, so they should always be present. The helper
+ * exists purely so a partial deployment (an old API behind a new
+ * SPA, or a broken JSON payload) renders the button without a
+ * count instead of rendering "NaN" or "undefined".
  */
-function getAcceptedSentCount(
-    notifications: MarketplaceNotificationCount,
-): number {
-    const raw = (notifications as {
-        unseenAcceptedSentResponses?: number;
-    }).unseenAcceptedSentResponses;
-
-    return typeof raw === 'number' ? raw : 0;
+function safeInt(value: number | undefined): number {
+    return typeof value === 'number' ? value : 0;
 }
 
 // ---------------------------------------------------------------------
@@ -453,26 +446,6 @@ const ACCEPTED_FILAMENT = 'rgba(255, 250, 220, 0.95)';
 const ACCEPTED_BLOOM_NEAR = 'rgba(255, 199, 44, 0.55)';
 const ACCEPTED_BLOOM_FAR = 'rgba(255, 199, 44, 0.15)';
 
-/**
- * Publish button neon. Same contained filament technique as the
- * offer card, applied to the button's own bounding box:
- *
- *   Layer 1 (outer)   : thick cyan border -- the tube.
- *   Layer 2 (middle)  : thin pale-cyan inset ring -- the filament.
- *   Layer 3 (inner)   : soft cyan inset bloom -- light spilling in.
- *
- * All contained. Nothing extends past the button's own box.
- *
- * Filament color note: previously #FFFDF0 (a warm near-white) which
- * read as a pure-white line inside the cyan tube. Now a pale cyan so
- * the button reads as one continuous cyan material, matching the
- * offer card and the search popup frame.
- */
-const PUBLISH_TUBE_COLOR = '#00C8FF';
-const PUBLISH_FILAMENT = 'rgba(200, 245, 255, 0.9)';
-const PUBLISH_BLOOM_NEAR = 'rgba(0, 200, 255, 0.55)';
-const PUBLISH_BLOOM_FAR = 'rgba(0, 200, 255, 0.2)';
-
 const inputClass =
     'w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60';
 
@@ -583,9 +556,24 @@ export default function MarketplacePage() {
         getMarketplaceNotificationsSnapshot,
     );
 
+    // "Marché" keeps the original behavior: the label shows the
+    // unseen-offers count, which drops to 0 the moment the user
+    // opens the browse tab. The navbar badge drops at the same
+    // time, because it reads the same unseen counter.
     const marketplaceCount = marketplaceNotifications.unseenOffers;
-    const receivedCount = marketplaceNotifications.unseenResponses;
-    const sentCount = getAcceptedSentCount(marketplaceNotifications);
+
+    // "Reçues" and "Envoyées" changed: their labels now show the
+    // TOTAL number of rows in each section (Pending + Accepted,
+    // on still-active offers). This count is persistent — opening
+    // the section no longer zeroes the label. The navbar badge
+    // still drops on visit, because that is driven by the
+    // separate "unseen" counters, which are not consumed here.
+    const receivedCount = safeInt(
+        marketplaceNotifications.totalReceivedResponses,
+    );
+    const sentCount = safeInt(
+        marketplaceNotifications.totalSentResponses,
+    );
 
     /**
      * Team list + selected target for the "Créer" tab (direct
@@ -1327,8 +1315,6 @@ export default function MarketplacePage() {
                                     ? {
                                         boxShadow:
                                             '0 0 4px rgba(255, 255, 255, 0.8), 0 0 8px rgba(0, 168, 255, 0.55), 0 0 16px rgba(0, 168, 255, 0.28), 0 0 26px rgba(0, 168, 255, 0.12), inset 0 0 3px rgba(0, 168, 255, 0.25)',
-                                        textShadow:
-                                            '0 0 2px rgba(0, 168, 255, 0.7), 0 0 4px rgba(0, 168, 255, 0.35)',
                                     }
                                     : undefined
                             }
@@ -1351,8 +1337,6 @@ export default function MarketplacePage() {
                                     ? {
                                         boxShadow:
                                             '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                        textShadow:
-                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                     }
                                     : undefined
                             }
@@ -1373,8 +1357,6 @@ export default function MarketplacePage() {
                                     ? {
                                         boxShadow:
                                             '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                        textShadow:
-                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                     }
                                     : undefined
                             }
@@ -1405,8 +1387,6 @@ export default function MarketplacePage() {
                                     ? {
                                         boxShadow:
                                             '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                        textShadow:
-                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                     }
                                     : undefined
                             }
@@ -2510,30 +2490,33 @@ function AddOfferPanel({
                     />
                 </div>
 
-                <div className='flex w-full items-stretch gap-2'>
+                <div className='flex items-stretch gap-1.5'>
                     <button
                         type='button'
                         disabled={!canSubmit || submitting}
                         onClick={handleSubmit}
-                        className='flex-1 cursor-pointer whitespace-nowrap rounded-lg border-2 border-[#00C8FF] bg-transparent px-3 py-1.5 text-center text-xs font-semibold text-white transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
+                        className='flex-1 cursor-pointer rounded-md border border-[#00C8FF] bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-[#00C8FF] transition-colors hover:bg-[#00A8FF]/10 disabled:cursor-not-allowed disabled:opacity-40'
                     >
                         Prévisualiser l'offre
                     </button>
 
                     <button
                         type='button'
+                        disabled={submitting}
+                        onClick={handleResetAll}
+                        className='flex-1 cursor-pointer rounded-md border border-destructive/60 bg-transparent px-2 py-1 text-center text-xs font-bold uppercase tracking-wide text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40'
+                    >
+                        Réinitialiser
+                    </button>
+
+                    <button
+                        type='button'
                         disabled={!canSubmit || submitting}
                         onClick={handleConfirmPublish}
-                        className='flex-1 cursor-pointer whitespace-nowrap rounded-lg px-3 py-1.5 text-center text-xs font-bold uppercase tracking-wider text-[#F2F5FA] transition-opacity disabled:cursor-not-allowed disabled:opacity-40'
-                        style={{
-                            backgroundColor: FRAME_BG,
-                            border: `3px solid ${PUBLISH_TUBE_COLOR}`,
-                            boxShadow: [
-                                `inset 0 0 0 1px ${PUBLISH_FILAMENT}`,
-                                `inset 0 0 12px ${PUBLISH_BLOOM_NEAR}`,
-                                `inset 0 0 28px ${PUBLISH_BLOOM_FAR}`,
-                            ].join(', '),
-                        }}
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-bold uppercase tracking-wide transition-colors ${!canSubmit || submitting
+                                ? 'cursor-not-allowed bg-zinc-800 text-zinc-500'
+                                : 'cursor-pointer bg-emerald-500 text-emerald-950 hover:bg-emerald-400'
+                            }`}
                     >
                         {submitting ? '...' : 'Publier'}
                     </button>
@@ -2633,7 +2616,7 @@ function SlotEditor({
                 boxShadow: FRAME_GLOW,
             }}
         >
-            {canRemove && (
+            {canRemove && slot.offeringPlayerId != null && (
                 <button
                     type='button'
                     aria-label={`Retirer le joueur ${index + 1}`}
@@ -10217,16 +10200,14 @@ function DirectOfferCard({
                                             setAnalyseSubView('stats')
                                         }
                                         className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${analyseSubView === 'stats'
-                                                ? 'bg-white text-[#1D1B61]'
-                                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
+                                            ? 'bg-white text-[#1D1B61]'
+                                            : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                             }`}
                                         style={
                                             analyseSubView === 'stats'
                                                 ? {
                                                     boxShadow:
                                                         '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                                    textShadow:
-                                                        '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                                 }
                                                 : undefined
                                         }
@@ -10240,16 +10221,14 @@ function DirectOfferCard({
                                             setAnalyseSubView('contracts')
                                         }
                                         className={`flex-1 cursor-pointer whitespace-nowrap rounded-full px-1.5 py-0.5 text-[0.85rem] font-bold transition-all duration-200 sm:px-3 sm:text-base ${analyseSubView === 'contracts'
-                                                ? 'bg-white text-[#1D1B61]'
-                                                : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
+                                            ? 'bg-white text-[#1D1B61]'
+                                            : 'bg-transparent text-[#F2F5FA] hover:bg-[#00A8FF]/15 hover:text-white'
                                             }`}
                                         style={
                                             analyseSubView === 'contracts'
                                                 ? {
                                                     boxShadow:
                                                         '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                                    textShadow:
-                                                        '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                                 }
                                                 : undefined
                                         }

@@ -2039,7 +2039,23 @@ export interface MarketplaceNotificationCount {
     /** Gold: responses the user sent that have been accepted. */
     unseenAcceptedSentResponses: number;
 
-    /** Combined count. This is what the navbar badge renders. */
+    /**
+     * Total rows the Reçues panel renders: Pending + Accepted
+     * responses on the user's own still-active offers. Persistent
+     * — not reduced when the user marks responses as seen. Drives
+     * the "Reçues" segmented button label.
+     */
+    totalReceivedResponses: number;
+
+    /**
+     * Total rows the Envoyées panel renders: Pending + Accepted
+     * responses the user's team sent to still-active offers. Same
+     * persistence rule as totalReceivedResponses. Drives the
+     * "Envoyées" segmented button label.
+     */
+    totalSentResponses: number;
+
+    /** Combined unseen count. This is what the navbar badge renders. */
     total: number;
 }
 

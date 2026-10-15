@@ -1195,8 +1195,6 @@ export default function MonEquipePage() {
                                     ? {
                                         boxShadow:
                                             '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                        textShadow:
-                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                     }
                                     : undefined
                             }
@@ -1216,8 +1214,6 @@ export default function MonEquipePage() {
                                     ? {
                                         boxShadow:
                                             '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                        textShadow:
-                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                     }
                                     : undefined
                             }
@@ -1237,8 +1233,6 @@ export default function MonEquipePage() {
                                     ? {
                                         boxShadow:
                                             '0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(0, 168, 255, 0.75), 0 0 28px rgba(0, 168, 255, 0.45), 0 0 44px rgba(0, 168, 255, 0.2), inset 0 0 4px rgba(0, 168, 255, 0.35)',
-                                        textShadow:
-                                            '0 0 3px rgba(0, 168, 255, 0.9), 0 0 6px rgba(0, 168, 255, 0.5)',
                                     }
                                     : undefined
                             }

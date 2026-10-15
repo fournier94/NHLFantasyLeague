@@ -96,7 +96,38 @@
         public int UnseenAcceptedSentResponses { get; set; }
 
         /// <summary>
-        /// Combined count. This is what the navbar badge renders.
+        /// Persistent count for the "Reçues" segmented button label.
+        ///
+        /// Total number of rows the Reçues panel renders for the
+        /// user: every Pending or Accepted response on one of his
+        /// own still-active offers. This is the same set that
+        /// ListReceivedResponsesAsync returns, so the label always
+        /// matches what the user would see if he opened the tab.
+        ///
+        /// Unlike UnseenResponses, this count is NOT reduced when
+        /// the user marks responses as seen. The navbar badge still
+        /// drops on visit (it reads the unseen fields); the button
+        /// label stays at the true section count.
+        /// </summary>
+        public int TotalReceivedResponses { get; set; }
+
+        /// <summary>
+        /// Persistent count for the "Envoyées" segmented button
+        /// label.
+        ///
+        /// Total number of rows the Envoyées panel renders for the
+        /// user: every Pending or Accepted response his team has
+        /// sent to someone else's still-active offer. Symmetric to
+        /// TotalReceivedResponses: same persistence rule, same
+        /// "matches what the panel shows" definition.
+        /// </summary>
+        public int TotalSentResponses { get; set; }
+
+        /// <summary>
+        /// Combined unseen count. This is what the navbar badge
+        /// renders. Deliberately does NOT include the two totals
+        /// above: those are section-scoped persistent counters,
+        /// not "new for you" signals.
         /// </summary>
         public int Total { get; set; }
     }

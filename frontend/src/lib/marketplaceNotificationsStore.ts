@@ -25,6 +25,22 @@
  *
  * Errors are swallowed: a transient network failure leaves the
  * last known state on screen and the next tick retries.
+ *
+ * NOTE ON THE FIVE FIELDS. Three of the fields are "unseen"
+ * counters that drop to 0 when the user visits a section:
+ *
+ *   unseenOffers               -> "Marché" button + navbar badge
+ *   unseenResponses            -> navbar badge only
+ *   unseenAcceptedSentResponses -> navbar badge only
+ *
+ * The other two are persistent per-section totals that are NOT
+ * affected by mark-seen calls:
+ *
+ *   totalReceivedResponses     -> "Reçues" button label
+ *   totalSentResponses         -> "Envoyées" button label
+ *
+ * The change-detection check below includes every field, so a
+ * response that only changes a total still triggers a re-render.
  */
 
 import {
@@ -42,6 +58,9 @@ const POLL_INTERVAL_MS = 60_000;
 const ZERO: MarketplaceNotificationCount = {
     unseenOffers: 0,
     unseenResponses: 0,
+    unseenAcceptedSentResponses: 0,
+    totalReceivedResponses: 0,
+    totalSentResponses: 0,
     total: 0,
 };
 
@@ -81,7 +100,12 @@ async function fetchCount(): Promise<void> {
         const changed =
             data.total !== state.total ||
             data.unseenOffers !== state.unseenOffers ||
-            data.unseenResponses !== state.unseenResponses;
+            data.unseenResponses !== state.unseenResponses ||
+            data.unseenAcceptedSentResponses !==
+            state.unseenAcceptedSentResponses ||
+            data.totalReceivedResponses !==
+            state.totalReceivedResponses ||
+            data.totalSentResponses !== state.totalSentResponses;
 
         if (changed) {
             state = data;
@@ -196,6 +220,10 @@ export function refreshMarketplaceNotificationsNow(): void {
  *
  * Idempotent: a no-op when the count is already 0, so it is safe
  * to call from an effect that may fire more than once.
+ *
+ * Deliberately does NOT touch totalReceivedResponses or
+ * totalSentResponses: those are persistent per-section totals and
+ * must not be optimistically zeroed on tab visit.
  */
 export function clearOffersCountLocally(): void {
     if (state.unseenOffers === 0) return;
@@ -210,6 +238,10 @@ export function clearOffersCountLocally(): void {
 
 /**
  * Same as clearOffersCountLocally, for the "Reçues" count.
+ *
+ * NOTE: only the unseen counter is zeroed. totalReceivedResponses
+ * stays as-is, because the "Reçues" button label is meant to keep
+ * showing the true section count after the user opens the tab.
  */
 export function clearReceivedResponsesCountLocally(): void {
     if (state.unseenResponses === 0) return;
