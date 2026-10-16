@@ -3564,7 +3564,10 @@ function StatLinesTable({
                 line.losses,
                 line.overtimeLosses,
                 line.shutouts,
-                line.fantasyPoints,
+                // FP is NHL-only. Null means "no NHL games this
+                // season" (the row is a fallback-league display),
+                // and renders as a dash rather than a misleading 0.
+                line.fantasyPoints ?? '—',
             ]
             : [
                 line.gamesPlayed,
@@ -3575,7 +3578,8 @@ function StatLinesTable({
                 // ATOI for older seasons; in that case we show a
                 // dash rather than a misleading "0".
                 line.timeOnIce ?? '—',
-                line.fantasyPoints,
+                // Same FP rule as the goalie branch above.
+                line.fantasyPoints ?? '—',
             ];
     }
 
