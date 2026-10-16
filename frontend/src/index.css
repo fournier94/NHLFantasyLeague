@@ -279,3 +279,92 @@
         font-size: 0.65rem;
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Grille du lineup Mon équipe sous 400px                              */
+/*                                                                     */
+/* Sur les écrans étroits, la grille par défaut laissait la colonne    */
+/* du nom trop serrée. On réduit légèrement les colonnes de stats et   */
+/* de gaps pour rendre ~26px à la colonne du nom (qui est en 1fr et    */
+/* absorbe donc tout le gain).                                         */
+/*                                                                     */
+/* Différences vs la grille >= 400px :                                 */
+/*   GP    22 -> 20  (-2)                                              */
+/*   G     18 -> 16  (-2)                                              */
+/*   A     18 -> 16  (-2)                                              */
+/*   PTS   22 -> 20  (-2)                                              */
+/*   3B    18 -> 16  (-2)                                              */
+/*   ATOI  40 -> 34  (-6)  "MM:SS" tient toujours à 0.65rem           */
+/*   HIER  26 -> 22  (-4)                                              */
+/*   AJD   26 -> 22  (-4)                                              */
+/*   FP    28 -> 26  (-2)  "16" + glyph tient toujours                 */
+/*                                                                     */
+/* Logo (22) et gaps (2px) inchangés.                                  */
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Grille du lineup Mon équipe sous 400px                              */
+/*                                                                     */
+/* Même logique que la version >= 400px définie dans MonEquipePage,    */
+/* mais avec une version un peu plus resserrée : ATOI à 36px au lieu   */
+/* de 38, HIER et AJD à 24px au lieu de 26, FP à 28px au lieu de 30.   */
+/* La colonne 3B/SO a été retirée dans les deux cas.                   */
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Grille du lineup Mon équipe sous 400px                              */
+/*                                                                     */
+/* Même logique que la version >= 400px définie dans MonEquipePage,    */
+/* mais avec des colonnes de stats légèrement plus étroites. FP est    */
+/* élargi de 22px (28 -> 50) pour rétrécir le nom / contrat du même    */
+/* montant, ce qui correspond à la largeur de GP en mobile.            */
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Grille du lineup Mon équipe sous 400px                              */
+/*                                                                     */
+/* FP passe de 50px à 32px, ce qui supprime l'espace vide qui          */
+/* apparaissait à droite de la valeur sur mobile étroit et rend         */
+/* ~18px à la colonne du nom (minmax(0, 1fr)) qui absorbe le gain.     */
+/* Les autres colonnes restent identiques au pixel près.               */
+/* ------------------------------------------------------------------ */
+@media (max-width: 399px) {
+    :root {
+        --lineup-grid-columns: 22px minmax(0, 1fr) 22px 22px 22px 24px 40px 25px 25px 20px;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Grille du tableau "Meilleurs pointeurs" sur >= 400px               */
+/*                                                                     */
+/* Sur les écrans >= 400px, les colonnes de stats sont légèrement      */
+/* élargies. Le nom / contrat étant en 1fr, il absorbe la perte de     */
+/* ~18px et devient donc plus étroit. En dessous de 400px, aucune      */
+/* règle n'écrit la variable, donc le fallback du var() côté React     */
+/* s'applique (version d'origine, inchangée).                          */
+/*                                                                     */
+/* Différences vs la grille de base :                                  */
+/*   GP    22 -> 24  (+2)                                              */
+/*   G     18 -> 20  (+2)                                              */
+/*   A     18 -> 20  (+2)                                              */
+/*   PTS   22 -> 24  (+2)                                              */
+/*   3B    18 -> 20  (+2)                                              */
+/*   ATOI  40 -> 44  (+4)                                              */
+/*   FP    28 -> 32  (+4)                                              */
+/* ------------------------------------------------------------------ */
+@media (min-width: 400px) {
+    :root {
+        --stats-grid-columns: 18px 22px minmax(0, 1fr) 24px 24px 24px 24px 24px 42px 28px;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Logo scale Mon équipe                                               */
+/*                                                                     */
+/* Sur les écrans ≥ 400px, le logo est légèrement réduit (~8%) pour    */
+/* mieux respirer dans la hauteur de ligne augmentée. En dessous de    */
+/* 400px, aucune règle n'écrit la variable, donc le fallback 1.25      */
+/* du var() côté React s'applique (valeur actuelle inchangée).         */
+/* ------------------------------------------------------------------ */
+@media (min-width: 400px) {
+    :root {
+        --lineup-logo-scale: 1.15;
+    }
+}

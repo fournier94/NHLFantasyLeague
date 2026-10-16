@@ -932,6 +932,72 @@ export function getStandings(seasonId?: number): Promise<StandingsRow[]> {
 }
 
 // ---------------------------------------------------------------------
+// Statistiques — Meilleurs pointeurs
+//
+// Une ligne par patineur appartenant à une équipe fantasy de la
+// ligue, avec les mêmes valeurs que sur MonEquipePage. Les
+// gardiens sont exclus côté serveur.
+//
+// Un seul appel remplace les 13 appels à getLeagueTeams +
+// getTeamRoster qui étaient faits côté client, et le serveur met
+// le résultat en cache 30 secondes. Côté client on cache aussi
+// 30 secondes, cohérent avec la TTL serveur.
+// ---------------------------------------------------------------------
+
+export interface TopScorerRow {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    nhlTeamAbbreviation: string;
+
+    /**
+     * Id de l'équipe fantasy qui détient le joueur. Utilisé
+     * pour construire le lien /mon-equipe?teamId={id} sur le
+     * nom de l'équipe.
+     */
+    fantasyTeamId: number;
+
+    fantasyTeamName: string | null;
+
+    gamesPlayed: number;
+    goals: number;
+    assists: number;
+    points: number;
+    hatTricks: number;
+
+    /**
+     * Temps de jeu moyen (ATOI) pour la saison en cours,
+     * formaté "MM:SS", ou null si aucune donnée n'est
+     * disponible. Moyenne pondérée par les matchs joués.
+     */
+    timeOnIce: string | null;
+
+    /**
+     * Contrat couvrant la saison en cours, ou null. Même
+     * résolution que sur les cartes de MonEquipePage.
+     */
+    currentContract: PlayerContractLine | null;
+
+    /**
+     * Second contrat (deal futur), ou null. Même règle que
+     * sur MonEquipePage.
+     */
+    secondContract: PlayerContractLine | null;
+
+    /** FP total de la saison en cours. null = aucun match NHL. */
+    fantasyPoints: number | null;
+}
+
+export function getTopScorers(): Promise<TopScorerRow[]> {
+    return apiGet<TopScorerRow[]>(
+        '/Statistiques/top-scorers',
+        { cacheTtlMs: 30_000 },
+    );
+}
+
+// ---------------------------------------------------------------------
 // Draft picks
 //
 // Read-only. Each pick is a single round pick in a single draft.

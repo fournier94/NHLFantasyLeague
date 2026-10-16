@@ -2228,6 +2228,7 @@ namespace NhlFantasyLeague.api.Services
             _cache.Invalidate("standings:");
             _cache.Invalidate("player-detail:");
             _cache.Invalidate("player-career:");
+            _cache.Invalidate("top-scorers:");
 
             // Ownership changes on any roster mutation, so the
             // "ownership:" cache must be dropped at the same time.

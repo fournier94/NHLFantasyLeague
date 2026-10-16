@@ -6,6 +6,7 @@ import {
     getTeamRoster,
     type DraftPick,
     type FantasyTeam,
+    type PlayerContractLine,
     type RosterEntry,
     type TeamRoster,
 } from '@/api/client';
@@ -20,31 +21,6 @@ import {
 } from '@/lib/auraConfig';
 import { consumePendingRestore } from '@/lib/scrollRestoration';
 import { useAuth } from '@/lib/AuthContext';
-
-/**
- * Small trending-up glyph shown to the right of every FP value.
- * Copied from ClassementPage so both tables use the exact same
- * icon at the same size and color.
- */
-function TrendGlyph({ color = '#FFC72C' }: { color?: string }) {
-    return (
-        <svg
-            viewBox='0 0 24 24'
-            width={12}
-            height={12}
-            fill='none'
-            stroke={color}
-            strokeWidth={2}
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            aria-hidden='true'
-            style={{ filter: `drop-shadow(0 0 2px ${color})` }}
-        >
-            <path d='M3 17 L9 11 L13 15 L21 6' />
-            <path d='M15 6 L21 6 L21 12' />
-        </svg>
-    );
-}
 
 function isActive(entry: RosterEntry): boolean {
     return entry.rosterStatus === 'Active';
@@ -66,6 +42,84 @@ function compactMillions(value: number): string {
     const millions = value / 1_000_000;
     const rounded = millions.toFixed(2).replace(/\.?0+$/, '');
     return `${rounded}M`;
+}
+
+/**
+ * Formate un salaire de contrat : 10000000 -> "10M",
+ * 9150000 -> "9.15M". Même format que PlayerPage et
+ * StatistiquesPage.
+ */
+function compactSalary(salary: number): string {
+    const millions = salary / 1_000_000;
+    const rounded = millions.toFixed(2).replace(/\.?0+$/, '');
+    return `${rounded}M`;
+}
+
+/**
+ * Formate la durée d'un contrat : "1an" ou "Nans".
+ */
+function contractYears(yearsRemaining: number): string {
+    return yearsRemaining > 1
+        ? `${yearsRemaining}ans`
+        : '1an';
+}
+
+/**
+ * Formate une ligne de contrat en mode compact :
+ * "9.15M·7ans" ou "10M·1an" — point médian sans espaces.
+ *
+ * Utilisé uniquement dans le cas à 2 contrats, où la place
+ * horizontale est comptée.
+ */
+function compactContract(contract: PlayerContractLine): string {
+    return `${compactSalary(contract.salary)}·${contractYears(
+        contract.yearsRemaining,
+    )}`;
+}
+
+/**
+ * Formate une ligne de contrat en mode espacé :
+ * "9.15M · 7ans" ou "10M · 1an" — point médian avec un espace
+ * de chaque côté.
+ *
+ * Utilisé dans le cas à 1 seul contrat, qui est le cas par défaut
+ * et qui a la place de respirer.
+ */
+function spacedContract(contract: PlayerContractLine): string {
+    return `${compactSalary(contract.salary)} · ${contractYears(
+        contract.yearsRemaining,
+    )}`;
+}
+
+/**
+ * Construit le contenu de la cellule contrat.
+ *
+ * Deux formats selon le nombre de contrats :
+ *   - 1 contrat  : "9.15M · 7ans"      (point espacé)
+ *   - 2 contrats : "9.15M·7ans | 10M·5ans"
+ *                  (point compact, séparateur "|" gras)
+ *
+ * Retourne null s'il n'y a rien à afficher.
+ *
+ * Le caller (LineupRow) connaît déjà le nombre de contrats via
+ * `entry.secondContract` et choisit la taille de police en
+ * conséquence, donc aucun objet wrapper n'est nécessaire ici.
+ */
+function contractText(
+    current: PlayerContractLine | null,
+    second: PlayerContractLine | null,
+): React.ReactNode | null {
+    if (!current) return null;
+
+    if (!second) return spacedContract(current);
+
+    return (
+        <>
+            {compactContract(current)}
+            <span className='font-bold'> | </span>
+            {compactContract(second)}
+        </>
+    );
 }
 
 // =====================================================================
@@ -196,8 +250,54 @@ function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
 // each stat column by 1px hands the name column 8px more room,
 // which is enough to fit longer names without touching the row
 // height.
+/**
+ * Colonnes du tableau d'alignement.
+ *
+ * La valeur par défaut (fallback du var) est utilisée sur les
+ * écrans >= 400px. Sous 400px, `index.css` redéfinit la variable
+ * `--lineup-grid-columns` avec une version légèrement plus
+ * resserrée.
+ *
+ * Sur les écrans >= 400px :
+ *   - GP / G / A / PTS ont été élargis de +2px chacun (par
+ *     rapport à la toute première version), pour éloigner un peu
+ *     leurs valeurs les unes des autres.
+ *   - ATOI / HIER / AJD / FP ont été resserrés de -2px chacun,
+ *     ce qui rapproche leurs contenus de 2px entre voisins
+ *     (1px de chaque côté de chaque colonne, sans toucher au
+ *     gap global). Les 8px libérés vont à la colonne du nom.
+ *
+ *   logo  22    (inchangé)
+ *   nom   minmax(0, 1fr)   (absorbe les variations)
+ *   GP    24    (était 22 dans la version d'origine)
+ *   G     20    (était 18)
+ *   A     20    (était 18)
+ *   PTS   24    (était 22)
+ *   ATOI  38 -> 36  (-2)
+ *   HIER  26 -> 24  (-2)
+ *   AJD   26 -> 24  (-2)
+ *   FP    30 -> 28  (-2)
+ */
+/**
+ * Colonnes du tableau d'alignement.
+ *
+ * Le nom / contrat est en minmax(0, 1fr) : il absorbe tout l'espace
+ * restant.
+ *
+ * Sur >= 400px, FP passe de 42px à 32px. La valeur FP la plus
+ * longue possible ("99") tient sur ~22px à la taille de police
+ * utilisée, donc 32px laisse juste ce qu'il faut de marge de
+ * chaque côté et supprime l'espace vide à droite de la valeur.
+ * Les 10px libérés vont à la colonne du nom.
+ *
+ * Toutes les autres colonnes restent identiques au pixel près.
+ * Sous 400px, la version du media query d'index.css reste utilisée.
+ *
+ * Sur >= 400px :
+ *   FP  42 -> 32  (-10)  ==> nom  +10px
+ */
 const LINEUP_GRID_COLUMNS =
-    'minmax(0, 1fr) 22px 27px 23px 23px 27px 23px 31px 31px 35px';
+    'var(--lineup-grid-columns, 22px minmax(0, 1fr) 24px 22px 22px 27px 38px 24px 24px 21px)';
 
 // Cyan separator glow, matching the segmented button accent
 // (#00E5FF). Applied to the bottom border of the last row of a
@@ -226,25 +326,11 @@ const LineupHeader = memo(function LineupHeader({
 }) {
     return (
         <div
-            className={`grid w-full items-center gap-x-0.5 py-2 pl-1 pr-2 text-[0.7rem] font-bold uppercase tracking-wider sm:text-[0.8rem] ${isGoalie ? '' : ''
+            className={`grid w-full items-center gap-x-0.5 py-2 pl-1 pr-2 text-[0.6rem] font-bold uppercase tracking-wider sm:text-[0.7rem] min-[400px]:gap-x-1 ${isGoalie ? '' : ''
                 }`}
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
                 borderLeft: '2px solid transparent',
-                // Two different header treatments:
-                //
-                //   Skater header (top of each table): blue gradient
-                //   band, no position bar, no bottom border. The
-                //   first data row starts flush against the header,
-                //   with no cyan line in between.
-                //
-                //   Goalie header (mid-table, above the goalie rows):
-                //   no background band, the green position bar drawn
-                //   on the left border so it visually continues from
-                //   the last defenseman row's blue bar down into the
-                //   goalie rows below, and a cyan bottom border so
-                //   the goalie section stays clearly separated from
-                //   the skaters above it.
                 ...(isGoalie
                     ? {
                         borderBottom:
@@ -255,21 +341,6 @@ const LineupHeader = memo(function LineupHeader({
                         backgroundColor: 'transparent',
                     }
                     : {
-                        // Two stacked background layers:
-                        //
-                        //   1. The 1px cyan connector on the very
-                        //      left edge of the header. Drawn from
-                        //      0px to 1px of the header's border
-                        //      box, which is exactly where the first
-                        //      data row's position bar starts.
-                        //
-                        //   2. The header's blue gradient band.
-                        //
-                        // The first layer is drawn on top of the
-                        // second. backgroundOrigin / backgroundClip
-                        // are single values that apply to both
-                        // layers, so both are measured from the
-                        // border box of the header.
                         background: [
                             'linear-gradient(to right, #33BBFF 0px 1px, transparent 1px)',
                             'linear-gradient(180deg, rgba(0, 136, 255, 0.18), rgba(0, 136, 255, 0.02))',
@@ -280,21 +351,6 @@ const LineupHeader = memo(function LineupHeader({
                     }),
             }}
         >
-            {/* The "Joueur" header spans both the name column and the
-                logo column. The label is centered within that whole
-                span, then nudged 2px left via pr-1 (4px right
-                padding) so its midpoint lands on the midpoint
-                between the table's left edge and the GP column's
-                left edge.
-
-                No separate logo-column cell is needed here: the
-                col-span-2 already occupies both the name and the
-                logo columns. Adding a second empty cell would push
-                the header to 11 grid cells worth of content in a
-                10-column grid, and FP would wrap onto a second row.
-
-                The player names in the data rows stay left-aligned
-                in the name column and are unaffected. */}
             <div className='col-span-2 pr-1 text-center text-white'>
                 Joueur
             </div>
@@ -314,36 +370,37 @@ const LineupHeader = memo(function LineupHeader({
                     <div className='text-center' style={{ color: '#7DD3FC' }}>
                         OTL
                     </div>
-                    <div className='text-center' style={{ color: '#7DD3FC' }}>
-                        SO
-                    </div>
                 </>
             ) : (
                 <>
-                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                    <div className='text-center' style={{ color: '#FFFFFF' }}>
                         G
                     </div>
-                    <div className='text-center' style={{ color: '#7DD3FC' }}>
+                    <div className='text-center' style={{ color: '#FFFFFF' }}>
                         A
                     </div>
                     <div className='text-center' style={{ color: '#00F0FF' }}>
                         PTS
                     </div>
-                    <div className='text-center' style={{ color: '#7DD3FC' }}>
-                        3B
-                    </div>
                 </>
             )}
 
             <div
+                className='text-center text-[0.55rem] sm:text-[0.65rem]'
+                style={{ color: '#FFFFFF' }}
+            >
+                ATOI
+            </div>
+
+            <div
                 className='text-center text-[0.6rem] sm:text-[0.7rem]'
-                style={{ color: '#7DD3FC' }}
+                style={{ color: '#FFFFFF' }}
             >
                 HIER
             </div>
             <div
                 className='text-center text-[0.6rem] sm:text-[0.7rem]'
-                style={{ color: '#7DD3FC' }}
+                style={{ color: '#FFFFFF' }}
             >
                 AJD
             </div>
@@ -365,19 +422,26 @@ const LineupRow = memo(function LineupRow({
     const isGoalie = group === 'G';
     const s = entry.currentSeason;
 
-    // GP / G / A / PTS / W / L / OTL / SO / 3B may carry fallback-
-    // league numbers when the player has no NHL games this season.
-    // That is fine for the stat columns: the manager wants to see
-    // how the player is doing elsewhere.
+    // GP / G / A / PTS / W / L / OTL may carry fallback-league
+    // numbers when the player has no NHL games this season. That is
+    // fine for the stat columns: the manager wants to see how the
+    // player is doing elsewhere.
+    //
+    // Le compteur de 3B (hat tricks) est retiré de l'affichage mais
+    // son bonus (+3 points par 3B) reste comptabilisé dans le FP
+    // envoyé par le backend. Idem pour le SO des gardiens (+3).
     const gp = s?.gamesPlayed ?? 0;
     const g = s?.goals ?? 0;
     const a = s?.assists ?? 0;
     const pts = s?.points ?? 0;
-    const ht = s?.hatTricks ?? 0;
     const w = s?.wins ?? 0;
     const l = s?.losses ?? 0;
     const otl = s?.overtimeLosses ?? 0;
-    const so = s?.shutouts ?? 0;
+
+    // ATOI = temps de jeu moyen pour la saison en cours, format
+    // "MM:SS". Null quand le joueur n'a pas de match NHL cette
+    // saison, auquel cas on affiche un tiret cadratin.
+    const atoi = s?.timeOnIce ?? null;
 
     // FP is NHL-only. The backend sends null when the displayed
     // row is a non-NHL fallback (player has no NHL games this
@@ -389,6 +453,14 @@ const LineupRow = memo(function LineupRow({
     const shortName = initial
         ? `${initial}. ${entry.lastName}`
         : entry.lastName;
+
+    // Ligne de contrat, même format que "Meilleurs pointeurs".
+    const contracts = contractText(
+        entry.currentContract,
+        entry.secondContract,
+    );
+
+    const hasTwoContracts = entry.secondContract != null;
 
     // Row background tint, chosen from the player's current status.
     // Priority (top wins):
@@ -410,20 +482,19 @@ const LineupRow = memo(function LineupRow({
     return (
         <Link
             to={`/joueurs/${entry.nhlPlayerId}`}
-            className='grid w-full items-center gap-x-0.5 border-b py-0.5 pl-1 pr-2 text-base tabular-nums transition-[filter] duration-150 hover:brightness-110'
+            // Même gap que le header (voir LineupHeader ci-dessus) :
+            // obligatoire pour que les colonnes des lignes restent
+            // alignées verticalement avec les headers au-dessus.
+            //
+            // min-h-[40px] sur les écrans >= 400px, min-h-[38px] en
+            // dessous.
+            className='grid min-h-[40px] max-[399px]:min-h-[38px] w-full items-center gap-x-0.5 border-b py-1 pl-1 pr-2 text-[0.9rem] tabular-nums transition-[filter] duration-150 hover:brightness-110 min-[400px]:gap-x-1'
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
-                // Position bar, drawn as a background image under the
-                // row's transparent 6px left border. Same tube shape
-                // as the Classement rank bars.
                 borderLeft: '6px solid transparent',
                 backgroundImage: positionBarGradient(group),
                 backgroundOrigin: 'border-box',
                 backgroundClip: 'border-box',
-                // The status tint (injured / AHL / off-roster) layers
-                // under the bar. The bar's gradient ends at 6px with
-                // transparent, so the tint shows through the rest of
-                // the row.
                 backgroundColor: rowTint,
                 borderBottomColor: isLastOfSection
                     ? 'rgba(0, 229, 255, 0.6)'
@@ -433,24 +504,7 @@ const LineupRow = memo(function LineupRow({
                     : undefined,
             }}
         >
-            <div className='truncate pl-0.5 text-left text-foreground'>
-                {shortName}
-            </div>
-
-            {/* Logo cell. `self-stretch` overrides the grid's
-                items-center for this cell only, so the cell takes
-                the full row height. The logo then fills that
-                height with `fillHeight`, and its width follows
-                from the preserved 1:1 aspect ratio. Net effect:
-                the logo is always as big as the row allows,
-                regardless of font-size tweaks. The `8C` suffix on
-                the aura color is ~55% alpha on the 6-digit hex. */}
             <div className='flex self-stretch items-center justify-center'>
-                {/* Logo wrapper: keeps the row height unchanged and
-                    enlarges the logo visually via transform. The
-                    transform scales around the wrapper's center and
-                    never affects layout, so the 22px logo grid column
-                    and the row track height stay the same. */}
                 <div
                     style={{
                         display: 'flex',
@@ -459,7 +513,8 @@ const LineupRow = memo(function LineupRow({
                         height: '100%',
                         aspectRatio: '1 / 1',
                         flexShrink: 0,
-                        transform: 'scale(1.35)',
+                        transform:
+                            'scale(var(--lineup-logo-scale, 1.25))',
                         transformOrigin: 'center',
                     }}
                 >
@@ -470,42 +525,81 @@ const LineupRow = memo(function LineupRow({
                 </div>
             </div>
 
-            <div className='text-center text-[#7DD3FC]'>{gp}</div>
+            {/* Nom + contrats.
+                - Le nom reçoit maintenant `translate-y-1` (4px) comme
+                  le contrat, ce qui décale l'ensemble de la cellule
+                  de 4px vers le bas sans changer l'espacement entre
+                  le nom et le contrat.
+                - Les deux translate sont purement visuels : le
+                  layout de la cellule et la hauteur de la rangée
+                  restent identiques.
+                - Polices et leadings inchangés. */}
+            <div className='min-w-0 pl-1 text-left'>
+                <div className='truncate text-[0.90rem] leading-[1.18] text-foreground min-[400px]:text-[1rem] min-[400px]:leading-[1.19] translate-y-1'>
+                    {shortName}
+                </div>
+                {contracts && (
+                    <div
+                        className={`truncate leading-tight text-[#22C55E] translate-y-1 ${hasTwoContracts
+                                ? 'text-[0.60rem] max-sm:text-[0.55rem] max-[399px]:text-[0.50rem]'
+                                : 'text-[0.60rem] max-[399px]:text-[0.55rem]'
+                            }`}
+                    >
+                        {contracts}
+                    </div>
+                )}
+            </div>
+
+            {/* Stats à droite du nom. Polices augmentées d'environ
+                +0.1rem par rapport à la version précédente, en
+                profit des 16px libérés par le retrait de 3B. */}
+            <div className='text-center text-[0.9rem] text-[#7DD3FC] min-[400px]:text-[1rem]'>
+                {gp}
+            </div>
 
             {isGoalie ? (
                 <>
-                    <div className='text-center text-[#00F0FF]'>{w}</div>
-                    <div className='text-center'>{l}</div>
-                    <div className='text-center'>{otl}</div>
-                    <div className='text-center'>{so}</div>
+                    <div className='text-center text-[0.9rem] text-[#00F0FF] min-[400px]:text-[1rem]'>
+                        {w}
+                    </div>
+                    <div className='text-center text-[0.9rem] min-[400px]:text-[1rem]'>
+                        {l}
+                    </div>
+                    <div className='text-center text-[0.9rem] min-[400px]:text-[1rem]'>
+                        {otl}
+                    </div>
                 </>
             ) : (
                 <>
-                        <>
-                            <div className='text-center text-[0.9rem]'>{g}</div>
-                            <div className='text-center text-[0.9rem]'>{a}</div>
-                            <div className='text-center text-[#00F0FF]'>{pts}</div>
-                            <div className='text-center'>{ht}</div>
-                        </>
+                    <div className='text-center text-[0.9rem] min-[400px]:text-[1rem]'>
+                        {g}
+                    </div>
+                    <div className='text-center text-[0.9rem] min-[400px]:text-[1rem]'>
+                        {a}
+                    </div>
+                    <div className='text-center text-[0.95rem] text-[#00F0FF] min-[400px]:text-[1.05rem]'>
+                        {pts}
+                    </div>
                 </>
             )}
 
-            <div className='text-center'>
+            <div className='text-center text-[0.65rem] text-white min-[400px]:text-[0.75rem]'>
+                {atoi ?? '—'}
+            </div>
+
+            {/* HIER et AJD : réduits de 0.95rem à 0.9rem sur ≥ 400px. */}
+            <div className='text-center text-[0.85rem] min-[400px]:text-[0.9rem]'>
                 {renderDailyPoints(entry.yesterdayFantasyPoints)}
             </div>
-            <div className='text-center'>
+            <div className='text-center text-[0.85rem] min-[400px]:text-[0.9rem]'>
                 {renderDailyPoints(entry.todayFantasyPoints)}
             </div>
 
-            <div className='flex items-center justify-center gap-0.5 font-bold text-[#FFC72C]'>
-                {fp == null ? (
-                    <span>—</span>
-                ) : (
-                    <>
-                        <span>{fp}</span>
-                        <TrendGlyph color='#FFC72C' />
-                    </>
-                )}
+            {/* FP seul, sans glyphe de tendance. Le flex/gap
+                deviennent inutiles puisqu'il ne reste qu'un seul
+                enfant, donc on simplifie aussi le className. */}
+            <div className='text-center text-[0.9rem] font-bold text-[#FFC72C] min-[400px]:text-[1rem]'>
+                {fp == null ? '—' : fp}
             </div>
         </Link>
     );

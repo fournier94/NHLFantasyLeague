@@ -80,9 +80,9 @@ const MOBILE_NAV_ITEMS = [
 /** Colors used for the mobile shortcut icons. */
 const GOLD = '#FFC72C';
 const GAMEDAY_CYAN = '#00E5FF';
-const INJURY_RED = '#EF4444';
 const SEARCH_WHITE = '#FFFFFF';
 const MARKETPLACE_VIOLET = '#A855F7';
+const STATS_ORANGE = '#F97316';
 
 /**
  * Green used for the marketplace badge when only "Voir les offres"
@@ -104,9 +104,9 @@ const GAMEDAY_AURA = [
     `drop-shadow(0 0 14px rgba(0, 229, 255, 0.4))`,
 ].join(' ');
 
-const INJURY_AURA = [
-    `drop-shadow(0 0 6px rgba(239, 68, 68, 0.85))`,
-    `drop-shadow(0 0 14px rgba(239, 68, 68, 0.4))`,
+const STATS_AURA = [
+    `drop-shadow(0 0 6px rgba(249, 115, 22, 0.85))`,
+    `drop-shadow(0 0 14px rgba(249, 115, 22, 0.4))`,
 ].join(' ');
 
 /**
@@ -197,20 +197,22 @@ function GameDayIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
 }
 
 /**
- * Red cross used on the mobile nav for the Blessures page.
+ * Bar chart icon used on the mobile nav for the Statistiques page.
+ *
+ * Three vertical bars of increasing height, stroked in the same
+ * cyan as the Game Day shortcut, with the same two-layer aura.
+ * Matches the visual weight of the other mobile shortcut icons
+ * (line weight 1.9, rounded joins, same drop-shadow pattern).
  */
-function InjuryIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
+function StatsIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     return (
-        <svg
-            viewBox='1.5 1.5 21 21'
+        <img
+            src='/images/league/stats-icon.svg'
+            alt=''
             className={className}
-            xmlns='http://www.w3.org/2000/svg'
-            style={{ filter: INJURY_AURA }}
+            style={{ filter: STATS_AURA }}
             aria-hidden='true'
-        >
-            <rect x='9' y='3' width='6' height='18' fill={INJURY_RED} />
-            <rect x='3' y='9' width='18' height='6' fill={INJURY_RED} />
-        </svg>
+        />
     );
 }
 
@@ -623,16 +625,16 @@ export function TopBar() {
                  * 375px phone while still having breathing room.
                  */}
                 <div className='ml-auto flex items-center gap-3 md:gap-5'>
-                    {/* Blessures shortcut — mobile only. */}
+                    {/* Statistiques shortcut — mobile only. */}
                     <Link
-                        to='/blessures'
-                        aria-label='Blessures'
-                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/blessures'
+                        to='/statistiques'
+                        aria-label='Statistiques'
+                        className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/statistiques'
                             ? 'text-primary'
                             : 'text-foreground'
                             }`}
                     >
-                        <InjuryIcon className={NAV_ICON_CLASS} />
+                        <StatsIcon className={NAV_ICON_CLASS} />
                     </Link>
 
                     {/* Marketplace shortcut — mobile only.

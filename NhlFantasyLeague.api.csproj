@@ -25,6 +25,7 @@
     <None Remove="frontend\src\lib\auraContext.tsx" />
     <None Remove="frontend\src\lib\AuthContext.tsx" />
     <None Remove="frontend\src\lib\directOfferState.ts" />
+    <None Remove="frontend\src\lib\fantasyTeamColors.ts" />
     <None Remove="frontend\src\lib\gameDayRestoration.ts" />
     <None Remove="frontend\src\lib\marketplaceCounterOfferState.ts" />
     <None Remove="frontend\src\lib\marketplaceExtraResponderSlots.ts" />
@@ -50,6 +51,7 @@
     <None Remove="frontend\src\pages\InscriptionPage.tsx" />
     <None Remove="frontend\src\pages\MarketplacePage.tsx" />
     <None Remove="frontend\src\pages\PlayerPage.tsx" />
+    <None Remove="frontend\src\pages\StatistiquesPage.tsx" />
   </ItemGroup>
 
   <ItemGroup>
@@ -74,6 +76,7 @@
     <TypeScriptCompile Include="frontend\src\lib\auraContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\AuthContext.tsx" />
     <TypeScriptCompile Include="frontend\src\lib\directOfferState.ts" />
+    <TypeScriptCompile Include="frontend\src\lib\fantasyTeamColors.ts" />
     <TypeScriptCompile Include="frontend\src\lib\gameDayRestoration.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceCounterOfferState.ts" />
     <TypeScriptCompile Include="frontend\src\lib\marketplaceExtraResponderSlots.ts" />
@@ -99,6 +102,7 @@
     <TypeScriptCompile Include="frontend\src\pages\InscriptionPage.tsx" />
     <TypeScriptCompile Include="frontend\src\pages\MarketplacePage.tsx" />
     <TypeScriptCompile Include="frontend\src\pages\PlayerPage.tsx" />
+    <TypeScriptCompile Include="frontend\src\pages\StatistiquesPage.tsx" />
   </ItemGroup>
 
 </Project>

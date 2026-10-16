@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
     AlertCircle,
@@ -20,7 +20,6 @@ import { useAuth } from '@/lib/AuthContext';
 // Constants
 // ---------------------------------------------------------------------
 
-// Shared frame style, matching the Classement / Game Day pages.
 const FRAME_BG = '#080D1A';
 const FRAME_BORDER = 'rgba(0, 168, 255, 0.6)';
 const FRAME_GLOW =
@@ -40,9 +39,7 @@ type OwnerFilter = 'all' | 'mine' | 'freeAgents';
 
 function shortName(firstName: string, lastName: string): string {
     const initial = firstName.trim().charAt(0);
-    return initial
-        ? `${initial}. ${lastName}`
-        : lastName;
+    return initial ? `${initial}. ${lastName}` : lastName;
 }
 
 function kindLabel(kind: string): string {
@@ -99,7 +96,11 @@ function statusColorClass(status: string | null): string {
 // Injury card
 // ---------------------------------------------------------------------
 
-function InjuryCard({ row }: { row: InjuryRow }) {
+const InjuryCard = memo(function InjuryCard({
+    row,
+}: {
+    row: InjuryRow;
+}) {
     const [imageFailed, setImageFailed] = useState(false);
 
     const showImage = Boolean(row.headshotUrl) && !imageFailed;
@@ -115,7 +116,6 @@ function InjuryCard({ row }: { row: InjuryRow }) {
     const returnLabel = formattedReturnDate(row.injuryReturnDate);
     const updatedLabel = relativeTimeLabel(row.injuryUpdatedAt);
 
-    // Compose the descriptive line: "Lower Body (Left) — Surgery"
     const detailParts: string[] = [];
 
     if (row.injuryType && row.injuryType !== 'Not Specified') {
@@ -136,9 +136,37 @@ function InjuryCard({ row }: { row: InjuryRow }) {
                 backgroundColor: FRAME_BG,
                 boxShadow: `0 0 14px ${accentGlow}, inset 0 0 12px rgba(0, 168, 255, 0.06)`,
                 borderLeft: `3px solid ${accentColor}`,
-            }}
+
+                /*
+                 * content-visibility: auto
+                 *
+                 * Le navigateur ignore la mise en page du contenu
+                 * de cette carte tant qu'elle n'est pas dans le
+                 * viewport. Sur une liste d'environ 100 cartes,
+                 * cela évite de calculer le layout des 100 cartes
+                 * en même temps quand l'onglet Blessures devient
+                 * visible. Seules les ~5 cartes réellement
+                 * affichées sont mises en page immédiatement ; les
+                 * autres le sont au fur et à mesure du défilement.
+                 *
+                 * C'est la cause du freeze qu'on observait au clic
+                 * sur "Blessures" (et au retour sur "Meilleurs
+                 * pointeurs") : la bascule display:none -> block
+                 * forçait le navigateur à layout 100 cartes d'un
+                 * coup, ce qui bloquait le thread principal
+                 * pendant assez longtemps pour que le texte des
+                 * segmented buttons paraisse disparaître.
+                 *
+                 * contain-intrinsic-size : hauteur placeholder
+                 * utilisée tant que le contenu n'est pas rendu.
+                 * Doit être proche de la vraie hauteur pour que la
+                 * barre de défilement ne saute pas trop quand les
+                 * cartes entrent dans le viewport.
+                 */
+                contentVisibility: 'auto',
+                containIntrinsicSize: '130px',
+            } as React.CSSProperties}
         >
-            {/* ---- Header bar: kind + status + updated ---- */}
             <div
                 className='flex items-center justify-between gap-2 border-b px-3 py-1.5'
                 style={{
@@ -181,9 +209,7 @@ function InjuryCard({ row }: { row: InjuryRow }) {
                 )}
             </div>
 
-            {/* ---- Body ---- */}
             <div className='flex items-start gap-3 px-3 py-2.5'>
-                {/* Headshot / initials */}
                 <Link
                     to={`/joueurs/${row.nhlPlayerId}`}
                     className='flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00E5FF]/60'
@@ -196,7 +222,8 @@ function InjuryCard({ row }: { row: InjuryRow }) {
                             src={row.headshotUrl ?? undefined}
                             alt={displayName}
                             className='h-full w-full object-cover'
-                            loading='lazy'
+                            loading='eager'
+                            fetchPriority='low'
                             onError={() => setImageFailed(true)}
                         />
                     ) : (
@@ -206,7 +233,6 @@ function InjuryCard({ row }: { row: InjuryRow }) {
                     )}
                 </Link>
 
-                {/* Middle: name, position, details */}
                 <div className='min-w-0 flex-1'>
                     <div className='flex items-center gap-1.5'>
                         <Link
@@ -255,7 +281,6 @@ function InjuryCard({ row }: { row: InjuryRow }) {
                     )}
                 </div>
 
-                {/* Right: fantasy team ownership */}
                 {row.fantasyTeamName && (
                     <div className='shrink-0 self-center text-right'>
                         <div
@@ -286,13 +311,17 @@ function InjuryCard({ row }: { row: InjuryRow }) {
             </div>
         </article>
     );
-}
+});
 
 // ---------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------
 
-export default function InjuriesPage() {
+const InjuriesPage = memo(function InjuriesPage({
+    hideTitle = false,
+}: {
+    hideTitle?: boolean;
+} = {}) {
     const { user } = useAuth();
 
     const [rows, setRows] = useState<InjuryRow[]>([]);
@@ -314,7 +343,6 @@ export default function InjuriesPage() {
         };
     }, []);
 
-    // Debounce the search input: 300 ms after the user stops typing.
     useEffect(() => {
         const timer = window.setTimeout(() => {
             setDebouncedSearch(searchText.trim());
@@ -323,7 +351,6 @@ export default function InjuriesPage() {
         return () => window.clearTimeout(timer);
     }, [searchText]);
 
-    // Fetch whenever any filter changes.
     useEffect(() => {
         let cancelled = false;
 
@@ -342,10 +369,6 @@ export default function InjuriesPage() {
             .then((data) => {
                 if (cancelled || !isMountedRef.current) return;
 
-                // Owner filter that isn't `mine`: we filter client-side
-                // because the API's fantasyTeamId filter is inclusive
-                // (returns only that team), and free-agents is the
-                // inverse.
                 const visible =
                     ownerFilter === 'freeAgents'
                         ? data.filter((r) => r.fantasyTeamId == null)
@@ -378,8 +401,6 @@ export default function InjuriesPage() {
         user?.fantasyTeamId,
     ]);
 
-    // Distinct NHL teams present in the current rows, for the team
-    // dropdown. Uses the fetched rows, not a separate endpoint.
     const nhlTeams = useMemo(() => {
         const set = new Set<string>();
 
@@ -390,12 +411,6 @@ export default function InjuriesPage() {
         return Array.from(set).sort();
     }, [rows]);
 
-    /**
-     * Players who belong to a fantasy team are shown first, then the
-     * rest. Within each group, the API's original order (alphabetical
-     * by last name) is preserved, so this is a stable partition rather
-     * than a full re-sort.
-     */
     const sortedRows = useMemo(() => {
         const onTeam: InjuryRow[] = [];
         const freeAgents: InjuryRow[] = [];
@@ -430,11 +445,12 @@ export default function InjuriesPage() {
 
     return (
         <section className='-mt-4 w-full space-y-4 sm:-mt-6'>
-            <h2 className='mt-2 text-center'>
-                <NeonTitle keepPulseOnMobile>Blessures</NeonTitle>
-            </h2>
+            {!hideTitle && (
+                <h2 className='mt-2 text-center'>
+                    <NeonTitle keepPulseOnMobile>Blessures</NeonTitle>
+                </h2>
+            )}
 
-            {/* ---- Filters panel ---- */}
             <div
                 className='overflow-hidden rounded-lg border'
                 style={{
@@ -443,7 +459,6 @@ export default function InjuriesPage() {
                     boxShadow: FRAME_GLOW,
                 }}
             >
-                {/* Header bar */}
                 <div
                     className='flex items-center gap-2 border-b px-3 py-2'
                     style={{
@@ -485,7 +500,6 @@ export default function InjuriesPage() {
                     )}
                 </div>
 
-                {/* Filter selects */}
                 <div className='grid grid-cols-2 gap-2 px-3 py-2.5 md:grid-cols-3'>
                     <select
                         value={kindFilter}
@@ -578,4 +592,6 @@ export default function InjuriesPage() {
             )}
         </section>
     );
-}
+});
+
+export default InjuriesPage;
