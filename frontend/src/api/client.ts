@@ -410,8 +410,16 @@ export interface SeasonStatLine {
     hatTricks: number;
     /** Shutouts recorded this season (goalies). */
     shutouts: number;
-    /** Total fantasy points scored this season. */
-    fantasyPoints: number;
+    /**
+     * Total fantasy points scored this season.
+     *
+     * Always from NHL stats: FP is only amassed in the NHL by
+     * league rule. Null when this row is a non-NHL fallback (a
+     * player with no NHL games this season whose stat columns come
+     * from whatever league he actually plays in) or when no season
+     * row exists at all. The UI renders null as "—".
+     */
+    fantasyPoints: number | null;
     /**
      * Average time on ice for the season, formatted "MM:SS", or
      * null when the archive does not carry it. Sourced on the

@@ -60,6 +60,11 @@ namespace NhlFantasyLeague.api.Services.Cache
         /// wins. That is acceptable: the queries are idempotent and
         /// the cost of a duplicate DB read is negligible compared to
         /// the cost of serializing all requests behind a lock.
+        ///
+        /// Null results from the factory are NOT cached. This matters
+        /// for endpoints whose factory can transiently return null
+        /// (e.g. an NHL API fetch that failed): caching a null would
+        /// lock the caller out of the endpoint for the full TTL.
         /// </summary>
         public async Task<T> GetOrCreateAsync<T>(
             string key,
@@ -76,6 +81,13 @@ namespace NhlFantasyLeague.api.Services.Cache
 
             var value = await factory();
 
+            // Do not cache nulls. A transient failure should not lock
+            // the caller out of the endpoint for the TTL duration.
+            if (value == null)
+            {
+                return null!;
+            }
+
             _entries[key] = new CacheEntry
             {
                 Value = value,
@@ -83,6 +95,48 @@ namespace NhlFantasyLeague.api.Services.Cache
             };
 
             return value;
+        }
+
+        /// <summary>
+        /// Returns the cached value for the key if it exists and has
+        /// not expired, otherwise null. Non-generic callers use this
+        /// when they want to make their own caching decision (e.g.
+        /// only cache FINAL games, not LIVE ones).
+        /// </summary>
+        public T? TryGet<T>(string key)
+            where T : class
+        {
+            if (_entries.TryGetValue(key, out var existing) &&
+                DateTime.UtcNow < existing.ExpiresAtUtc &&
+                existing.Value is T cached)
+            {
+                return cached;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Stores the value for the key with the given TTL. Used by
+        /// endpoints whose caching policy depends on the payload
+        /// (e.g. only cache FINAL boxscores, skip LIVE ones), where a
+        /// single GetOrCreateAsync call cannot express the rule.
+        ///
+        /// Null values are silently ignored.
+        /// </summary>
+        public void Set<T>(string key, T value, TimeSpan ttl)
+            where T : class
+        {
+            if (value == null)
+            {
+                return;
+            }
+
+            _entries[key] = new CacheEntry
+            {
+                Value = value,
+                ExpiresAtUtc = DateTime.UtcNow + ttl,
+            };
         }
 
         /// <summary>

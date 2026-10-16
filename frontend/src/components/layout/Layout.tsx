@@ -7,6 +7,10 @@ import {
     isPlayerPath,
     setLastNonPlayerLocation,
 } from '@/lib/playerNavigation';
+import {
+    clearGameDaySnapshot,
+    peekGameDaySnapshot,
+} from '@/lib/gameDayRestoration';
 
 /**
  * Shell shared by every page: horizontal top navigation and the current
@@ -21,9 +25,14 @@ import {
  * route changes, so navigating from a scrolled page (e.g. Mon équipe)
  * to a new page (e.g. a player detail page) always starts at the top.
  *
- * Finally, it records the last non-player location the user visited, so
+ * It records the last non-player location the user visited, so
  * PlayerPage's Fermer button can jump past a chain of player pages and
  * land back on it (see lib/playerNavigation.ts).
+ *
+ * It also clears the GameDayPage state snapshot whenever the user
+ * lands on a page that is neither GameDay nor a player page. That
+ * makes the snapshot only survive a direct PlayerPage -> GameDayPage
+ * round-trip; any other page in between resets it.
  */
 export function Layout() {
     const headerRef = useRef<HTMLElement>(null);
@@ -35,22 +44,30 @@ export function Layout() {
     // browser keeps the previous page's scroll position, so opening a
     // player page from a scrolled-down Mon équipe lands mid-page.
     //
-    // The only exception: when we are landing on Mon équipe AND a
-    // scroll restore is pending, we skip the top-scroll and let
-    // MonEquipePage restore its own position instead.
+    // Two exceptions skip the top-scroll, because the destination
+    // page is going to restore its own scroll position:
     //
-    // Note: a pending restore that was set on the way TO the player
-    // page must NOT suppress the top-scroll here — that restore is for
-    // the trip back to Mon équipe, not for the player page itself.
+    //   1. Landing on Mon équipe with a pending Mon équipe scroll
+    //      restore (from the scrollRestoration store).
     //
-    // The scroll is deferred to the next animation frame so it runs
-    // after the browser has painted the new page. On the same tick, the
-    // new page may still be shorter than the old one and the browser
-    // would clamp the scroll, which reads as "the scroll did nothing".
+    //   2. Landing on GameDay with a pending GameDay snapshot. The
+    //      GameDayPage restore effect runs in the same commit and
+    //      schedules its own scroll-to-card; if we scrolled to top
+    //      here, our rAF would run after theirs and cancel their
+    //      smooth scroll, leaving the page at the top.
+    //
+    // Both exceptions use the "peek" pattern: the destination page
+    // has not yet consumed the restore by the time this effect
+    // fires, so a peek returns the pending state.
     useEffect(() => {
         const isMonEquipe = location.pathname === '/mon-equipe';
+        const isGameDay = location.pathname === '/game-day';
 
         if (isMonEquipe && hasPendingRestore()) {
+            return;
+        }
+
+        if (isGameDay && peekGameDaySnapshot() !== null) {
             return;
         }
 
@@ -80,6 +97,27 @@ export function Layout() {
             hash: location.hash,
         });
     }, [location.pathname, location.search, location.hash]);
+
+    // Clear the GameDay state snapshot whenever the user lands on a
+    // page that is neither GameDay nor a player page.
+    //
+    // This is what makes the snapshot survive only a direct
+    // PlayerPage -> GameDayPage transition:
+    //
+    //   GameDay -> Player -> GameDay                : no clear, restore applied
+    //   GameDay -> Player -> Classement -> GameDay  : clear on Classement, no restore
+    //   GameDay -> Classement -> GameDay            : clear on Classement, no restore
+    //
+    // Player pages themselves do not clear: that is precisely the
+    // path we want to survive.
+    useEffect(() => {
+        const path = location.pathname;
+        const isGameDay = path === '/game-day';
+
+        if (!isGameDay && !isPlayerPath(path)) {
+            clearGameDaySnapshot();
+        }
+    }, [location.pathname]);
 
     useEffect(() => {
         if (!headerRef.current) {

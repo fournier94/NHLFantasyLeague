@@ -13,6 +13,11 @@ import {
     type NhlTeamPlayerStats,
     type PlayerOwnership,
 } from '@/api/client';
+import {
+    clearGameDaySnapshot,
+    peekGameDaySnapshot,
+    saveGameDaySnapshot,
+} from '@/lib/gameDayRestoration';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import {
     getNhlTeamAuraColor,
@@ -135,6 +140,10 @@ function isLive(game: GameDayGameSummary): boolean {
 
 function isScheduled(game: GameDayGameSummary): boolean {
     return game.gameState === 'FUT' || game.gameState === 'PRE';
+}
+
+function isFinished(game: GameDayGameSummary): boolean {
+    return game.gameState === 'FINAL' || game.gameState === 'OFF';
 }
 
 function startTimeLabel(iso: string): string {
@@ -271,10 +280,24 @@ function SkaterRow({
             </div>
 
             <div className='flex shrink-0 gap-1.5 tabular-nums'>
-                <span className='w-6 text-center text-muted-foreground'>
+                <span
+                    className={cn(
+                        'w-6 text-center',
+                        skater.goals > 0
+                            ? 'text-white'
+                            : 'text-muted-foreground',
+                    )}
+                >
                     {skater.goals}
                 </span>
-                <span className='w-6 text-center text-muted-foreground'>
+                <span
+                    className={cn(
+                        'w-6 text-center',
+                        skater.assists > 0
+                            ? 'text-white'
+                            : 'text-muted-foreground',
+                    )}
+                >
                     {skater.assists}
                 </span>
                 <span
@@ -285,7 +308,7 @@ function SkaterRow({
                 >
                     {skater.points}
                 </span>
-                <span className='w-8 text-center text-muted-foreground'>
+                <span className='w-8 text-center text-white'>
                     {skater.shots}
                 </span>
                 <span className='w-11 text-center text-white'>
@@ -350,7 +373,7 @@ function GoalieRow({
                 >
                     {decision || '—'}
                 </span>
-                <span className='w-14 text-center text-muted-foreground'>
+                <span className='w-14 text-center text-white'>
                     {goalie.saves}/{goalie.shotsAgainst}
                 </span>
             </div>
@@ -717,55 +740,12 @@ function TeamSide({
     );
 }
 
-/**
- * Short day label under the header, matching the date the game
- * belongs to. Live games always read "EN DIRECT" regardless of
- * which side of midnight they started on.
- */
-function dayLabel(
-    gameDate: string,
-    currentFantasyDate: string,
-): string {
-    if (gameDate === currentFantasyDate) {
-        return "AUJOURD'HUI";
-    }
-
-    // Subtract one calendar day from the fantasy date, purely as
-    // string arithmetic on the ISO parts, so DST can never shift
-    // the result.
-    const parts = currentFantasyDate.split('-');
-    if (parts.length === 3) {
-        const y = Number(parts[0]);
-        const m = Number(parts[1]);
-        const d = Number(parts[2]);
-        if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
-            const prev = new Date(Date.UTC(y, m - 1, d));
-            prev.setUTCDate(prev.getUTCDate() - 1);
-            const yyyy = prev.getUTCFullYear();
-            const mm = String(prev.getUTCMonth() + 1).padStart(2, '0');
-            const dd = String(prev.getUTCDate()).padStart(2, '0');
-            if (gameDate === `${yyyy}-${mm}-${dd}`) {
-                return 'HIER';
-            }
-        }
-    }
-
-    // Any older date: render as "JJ MMM" using the same formatter
-    // as the date picker's past entries.
-    const parsed = new Date(`${gameDate}T12:00:00Z`);
-    if (Number.isNaN(parsed.getTime())) {
-        return '';
-    }
-    return SHORT_DATE_FORMATTER.format(parsed).toUpperCase();
-}
-
 // ---------------------------------------------------------------------
 // Game card
 // ---------------------------------------------------------------------
 
 function GameCard({
     game,
-    currentFantasyDate,
     expanded,
     expandedSide,
     boxscore,
@@ -774,7 +754,6 @@ function GameCard({
     onToggle,
 }: {
     game: GameDayGameSummary;
-    currentFantasyDate: string;
     expanded: boolean;
     expandedSide: 'away' | 'home' | null;
     boxscore: NhlBoxscoreResponse | null;
@@ -828,6 +807,26 @@ function GameCard({
 
     const awayScore = game.awayScore ?? 0;
     const homeScore = game.homeScore ?? 0;
+
+    // Score colors for a finished game.
+    //
+    //   - winner's score : green
+    //   - loser's score  : white
+    //   - tie            : both white
+    //
+    // Live and scheduled games always render both scores in white.
+    // Live: the leader can still change. Scheduled: no score yet.
+    const finished = isFinished(game);
+
+    const awayScoreColor =
+        finished && awayScore > homeScore
+            ? '#22C55E'
+            : '#FFFFFF';
+
+    const homeScoreColor =
+        finished && homeScore > awayScore
+            ? '#22C55E'
+            : '#FFFFFF';
 
     // Determine which half of the card was clicked and forward
     // that side to the parent. The card is divided by an
@@ -1110,7 +1109,16 @@ function GameCard({
 
                 {/* Center column. Neutral navy with only the cyan
                     ambience, so it visually separates the two solid
-                    team-colored sides. */}
+                    team-colored sides.
+
+                    The date label that used to sit at the top of
+                    this column has been removed. The header label
+                    ("TERMINÉ" / "2e · 10:32" / "MATCH À VENIR") is
+                    now the topmost element, and the spacer at the
+                    bottom of the column shifts the flex group up
+                    so the header label sits roughly midway between
+                    where it used to be (under the date) and where
+                    the date used to be (top-3 of this column). */}
                 <div
                     className='relative flex min-w-0 flex-col items-center justify-center px-3 py-3 text-center'
                     style={{
@@ -1119,37 +1127,23 @@ function GameCard({
                             'radial-gradient(ellipse at 50% 42%, rgba(0, 168, 255, 0.10) 0%, rgba(0, 168, 255, 0.03) 40%, transparent 75%)',
                     }}
                 >
-                    {/* Day label pinned to the very top of the
-                        middle square. Absolute positioning lifts
-                        it out of the centered flex flow, so the
-                        period label and score/shots block below
-                        stay exactly where they were. */}
-                    <div className='absolute left-0 right-0 top-3 flex items-center justify-center gap-2 px-3'>
-                        <span
-                            aria-hidden='true'
-                            className='h-px flex-1'
-                            style={{
-                                maxWidth: 24,
-                                background: awayStripColor,
-                            }}
-                        />
-                        <span className='whitespace-nowrap text-[0.7rem] font-bold uppercase tracking-wider text-white'>
-                            {dayLabel(game.gameDate, currentFantasyDate)}
-                        </span>
-                        <span
-                            aria-hidden='true'
-                            className='h-px flex-1'
-                            style={{
-                                maxWidth: 24,
-                                background: homeStripColor,
-                            }}
-                        />
-                    </div>
-
-                    {/* Period label under the day: "2e · 10:32" for
-                        live games, "MATCH À VENIR" for scheduled,
-                        "TERMINÉ" for final. */}
-                    <div className='mt-1 text-[0.55rem] font-bold uppercase tracking-widest text-[#7DD3FC]'>
+                    {/* Period label: "2e · 10:32" for live games,
+                        "MATCH À VENIR" for scheduled, "TERMINÉ" for
+                        final.
+                        
+                        The label stays in the flex flow so the score
+                        and shots below keep exactly the same centered
+                        position they had before the date was removed.
+                        Only the label is visually translated upward,
+                        by 16 px, so it lands roughly midway between
+                        where it used to sit (below the old date) and
+                        where the old date label was (top-3). */}
+                    <div
+                        className='mt-1 -translate-y-4 text-[0.55rem] font-bold uppercase tracking-widest'
+                        style={{
+                            color: finished ? '#FFFFFF' : '#7DD3FC',
+                        }}
+                    >
                         {headerLabel}
                     </div>
 
@@ -1162,19 +1156,25 @@ function GameCard({
                             {/* Score row. Two fixed-width columns
                                 (w-8) center the two digits, with the
                                 dash auto-sized between them. */}
-                            <div className='flex items-center justify-center gap-2'>
-                                <span className='w-8 text-center text-[1.35rem] font-bold leading-tight text-white'>
-                                    {awayScore}
-                                </span>
-                                <span className='text-[1.35rem] font-bold leading-tight text-white'>
-                                    -
-                                </span>
-                                <span className='w-8 text-center text-[1.35rem] font-bold leading-tight text-white'>
-                                    {homeScore}
-                                </span>
-                            </div>
+                                <div className='flex items-center justify-center gap-2'>
+                                    <span
+                                        className='w-8 text-center text-[1.35rem] font-bold leading-tight'
+                                        style={{ color: awayScoreColor }}
+                                    >
+                                        {awayScore}
+                                    </span>
+                                    <span className='text-[1.35rem] font-bold leading-tight text-white'>
+                                        -
+                                    </span>
+                                    <span
+                                        className='w-8 text-center text-[1.35rem] font-bold leading-tight'
+                                        style={{ color: homeScoreColor }}
+                                    >
+                                        {homeScore}
+                                    </span>
+                                </div>
 
-                                {/* Shots row. Laid out as two fixed-width
+                            {/* Shots row. Laid out as two fixed-width
                                 columns flanking a "-", mirroring the
                                 score row's structure. Because both
                                 outer columns share the same width
@@ -1196,7 +1196,7 @@ function GameCard({
                                 it reads as secondary information
                                 under the score. */}
                                 {showShots && (
-                                    <div className='flex items-center justify-center gap-1 text-[0.7rem] font-semibold text-muted-foreground'>
+                                    <div className='mt-0.5 flex items-center justify-center gap-1 text-[0.7rem] font-semibold text-white'>
                                         <span className='w-14 text-right'>
                                             {game.awayShots}
                                         </span>
@@ -1209,11 +1209,6 @@ function GameCard({
                         </div>
                     )}
 
-                    {/* The old small caption that showed the period
-                        under the score has been removed. The period
-                        and time now live in the header label above,
-                        and the shots row sits directly under the
-                        score with nothing in between. */}
                 </div>
 
                 {/* Home side. Owns its solid team-color background. */}
@@ -1301,6 +1296,17 @@ export default function GameDayPage() {
     const boxscoreRequestIdRef = useRef(0);
 
     /**
+     * Mirror of `selectedDate`, kept in a ref so that async callbacks
+     * (notably the mount fetch inside fetchTodayGames) can read the
+     * current value without needing it in their useCallback deps.
+     *
+     * Used to decide whether fetchTodayGames is allowed to write
+     * `data`. See the guard inside that function for the full
+     * rationale.
+     */
+    const selectedDateRef = useRef<string | null>(null);
+
+    /**
      * Game id the page is currently trying to scroll into view.
      *
      * Set on click; cleared by the scroll effect below after the
@@ -1325,6 +1331,13 @@ export default function GameDayPage() {
             isMountedRef.current = false;
         };
     }, []);
+
+    // Keep selectedDateRef in sync with selectedDate so that
+    // async callbacks can read the latest value without needing
+    // it as a dependency.
+    useEffect(() => {
+        selectedDateRef.current = selectedDate;
+    }, [selectedDate]);
 
     // --- Neon label strings (mirror MonEquipePage) --------------------
     const neonRest = useMemo(
@@ -1451,7 +1464,28 @@ export default function GameDayPage() {
     }, [isDatePickerOpen]);
 
     // --- Reset expanded boxscore when the date changes ----------------
+    //
+    // The FIRST transition of selectedDate (from null to the
+    // initial date) must not reset the expanded state, because on
+    // the restore path we have just populated it in the restore
+    // effect below. Only subsequent changes — the user actually
+    // picking a different date — should collapse the current card.
+    //
+    // prevSelectedDateRef tracks the previous value so we can tell
+    // the two apart.
+    const prevSelectedDateRef = useRef<string | null>(null);
+
     useEffect(() => {
+        const prev = prevSelectedDateRef.current;
+        prevSelectedDateRef.current = selectedDate;
+
+        if (prev == null) {
+            // First real value, either from the initial mount or
+            // from a restore on the way back from a player page.
+            // Nothing to reset.
+            return;
+        }
+
         pendingScrollToGameIdRef.current = null;
         boxscoreRequestIdRef.current += 1;
         setExpandedGameId(null);
@@ -1467,7 +1501,35 @@ export default function GameDayPage() {
             try {
                 const result = await getTodayGames(force);
                 if (!isMountedRef.current) return null;
-                setData(result);
+
+                // GUARD: only write `data` when the user is
+                // actually looking at today's date.
+                //
+                // On the restore path (GameDay -> Player -> GameDay),
+                // the restore effect sets selectedDate to a past
+                // date before this fetch resolves. If we let it
+                // write `data`, the games list would become today's
+                // games, and the expanded game (which is on the
+                // restored date) would have no card to render in —
+                // the boxscore would sit in memory but never appear.
+                //
+                // A null selectedDate means "no date picked yet"
+                // (fresh mount), so we still write data in that
+                // case.
+                //
+                // The polling effect is what populates `data` for a
+                // past selectedDate; it fires as soon as both
+                // selectedDate and currentFantasyDate are set, which
+                // happens on the same tick as this fetch resolves.
+                const selectedNow = selectedDateRef.current;
+
+                if (
+                    selectedNow === null ||
+                    selectedNow === result.currentFantasyDate
+                ) {
+                    setData(result);
+                }
+
                 // Refresh the fantasy date on every fetch so a 3 AM
                 // rollover is picked up without a page reload.
                 // React bails out if the value is unchanged, so this
@@ -1622,52 +1684,21 @@ export default function GameDayPage() {
         fetchGamesForDate,
     ]);
 
-    // --- Boxscore expand handler --------------------------------------
+    // --- Boxscore fetch helper ----------------------------------------
     //
-    // This handler only updates state. The scroll to the expanded
-    // card is handled by a dedicated effect below, which waits for
-    // the boxscore panel to finish loading before it dispatches.
-    const handleToggleExpand = async (
+    // Fetches the boxscore + ownership for one game and stores them
+    // in state. Used by both the click handler (handleToggleExpand)
+    // and the restore effect that runs on mount when the user is
+    // coming back from a player page.
+    //
+    // The request id guards against stale responses: if a second
+    // fetch starts before the first completes (e.g. the user clicks
+    // a different game while the first is still loading), only the
+    // second result is applied.
+    const openBoxscore = async (
         gameId: number,
         side: 'away' | 'home',
     ) => {
-        // Same game, same side → collapse.
-        if (expandedGameId === gameId && expandedSide === side) {
-            pendingScrollToGameIdRef.current = null;
-            boxscoreRequestIdRef.current += 1;
-            setExpandedGameId(null);
-            setExpandedSide(null);
-            setBoxscore(null);
-            setOwnershipByPlayerId(new Map());
-            return;
-        }
-
-        // Same game, other side → swap sides without re-fetching.
-        // The boxscore and ownership map are already loaded for
-        // this game, so reuse them and just flip which team's
-        // panel is shown.
-        //
-        // No scroll here on purpose. The card is already positioned
-        // where it needs to be — a side-switch only replaces the
-        // panel content below it, it does not move the card.
-        // Triggering the smooth-scroll effect from this branch was
-        // the cause of the "second click needed after a swipe" bug:
-        // the browser treats a tap during an in-flight smooth scroll
-        // as a command to stop the scroll, so the user's next tap
-        // got swallowed instead of firing a click. With no scroll,
-        // the next tap lands on a settled page and goes through on
-        // the first try.
-        if (
-            expandedGameId === gameId &&
-            expandedSide !== side &&
-            boxscore
-        ) {
-            setExpandedSide(side);
-            return;
-        }
-
-        // Different game (or switching back to a game whose boxscore
-        // was cleared) → fetch fresh.
         const requestId = ++boxscoreRequestIdRef.current;
 
         pendingScrollToGameIdRef.current = gameId;
@@ -1720,6 +1751,153 @@ export default function GameDayPage() {
         }
     };
 
+    // --- Boxscore expand handler --------------------------------------
+    //
+    // This handler only updates state. The scroll to the expanded
+    // card is handled by a dedicated effect below, which waits for
+    // the boxscore panel to finish loading before it dispatches.
+    const handleToggleExpand = async (
+        gameId: number,
+        side: 'away' | 'home',
+    ) => {
+        // Same game, same side → collapse.
+        if (expandedGameId === gameId && expandedSide === side) {
+            pendingScrollToGameIdRef.current = null;
+            boxscoreRequestIdRef.current += 1;
+            setExpandedGameId(null);
+            setExpandedSide(null);
+            setBoxscore(null);
+            setOwnershipByPlayerId(new Map());
+            return;
+        }
+
+        // Same game, other side → swap sides without re-fetching.
+        // The boxscore and ownership map are already loaded for
+        // this game, so reuse them and just flip which team's
+        // panel is shown.
+        //
+        // No scroll here on purpose. The card is already positioned
+        // where it needs to be — a side-switch only replaces the
+        // panel content below it, it does not move the card.
+        // Triggering the smooth-scroll effect from this branch was
+        // the cause of the "second click needed after a swipe" bug:
+        // the browser treats a tap during an in-flight smooth scroll
+        // as a command to stop the scroll, so the user's next tap
+        // got swallowed instead of firing a click. With no scroll,
+        // the next tap lands on a settled page and goes through on
+        // the first try.
+        if (
+            expandedGameId === gameId &&
+            expandedSide !== side &&
+            boxscore
+        ) {
+            setExpandedSide(side);
+            return;
+        }
+
+        // Different game (or switching back to a game whose boxscore
+        // was cleared) → fetch fresh.
+        await openBoxscore(gameId, side);
+    };
+
+    // --- Save GameDay state on every change ---------------------------
+    //
+    // Writes the three fields we want to restore (selected date,
+    // expanded game, expanded side) into the module-level store.
+    // The store is cleared by Layout.tsx whenever the user lands on
+    // a page that is neither GameDay nor a player page, so it only
+    // survives a direct GameDay -> Player -> GameDay round-trip.
+    useEffect(() => {
+        if (!selectedDate) return;
+
+        saveGameDaySnapshot({
+            selectedDate,
+            expandedGameId,
+            expandedSide,
+        });
+    }, [selectedDate, expandedGameId, expandedSide]);
+
+    // --- Restore GameDay state on mount -------------------------------
+    //
+    // The snapshot only exists when the previous route was a
+    // player page (Layout cleared it otherwise), so no additional
+    // check is needed here.
+    //
+    // The restore effect runs on mount, applies the snapshot, and
+    // — if a game was expanded — reopens it so the boxscore panel
+    // comes back.
+    //
+    // FETCH THE GAMES LIST IMMEDIATELY
+    //
+    // The polling effect refuses to run until BOTH selectedDate and
+    // currentFantasyDate are set, and currentFantasyDate only
+    // arrives when the mount fetch (getTodayGames) resolves. On the
+    // restore path, that would gate the games list behind:
+    //
+    //     getTodayGames  ->  polling effect  ->  getGamesByDate
+    //
+    // Three sequential round trips before the card renders, and the
+    // shared NHL rate limiter makes each one potentially slow when
+    // another job is running. The card — and therefore the boxscore
+    // inside it — appears several seconds late.
+    //
+    // Fix: fire fetchGamesForDate(snapshot.selectedDate) directly
+    // from here, in parallel with the mount fetch. The card renders
+    // as soon as the games list and the boxscore are both in.
+    //
+    // The subsequent polling effect run (after currentFantasyDate
+    // arrives) fetches the same URL, which the client-side response
+    // cache (5 min TTL on getGamesByDate) short-circuits, so there
+    // is no duplicate network call.
+    //
+    // PEEK + DEFERRED CLEAR (not consume)
+    //
+    // The clear is deferred by one tick so that Layout's own
+    // scroll-to-top effect (which fires in the same commit, after
+    // ours, due to child-first effect ordering) can still see the
+    // snapshot via peekGameDaySnapshot() and skip its scroll-to-
+    // top. If we cleared synchronously, Layout would find the
+    // snapshot gone and would scroll the page to (0, 0) — which
+    // would cancel the scroll-to-card that the GameDay scroll
+    // effect schedules moments later.
+    //
+    // The empty deps array is deliberate: this must run exactly once
+    // per mount, not on every render. openBoxscore and
+    // fetchGamesForDate use only refs and stable state setters, so
+    // the first-render closures are safe to keep for the lifetime
+    // of the mount.
+    useEffect(() => {
+        const snapshot = peekGameDaySnapshot();
+        if (snapshot == null) return;
+
+        setSelectedDate(snapshot.selectedDate);
+        setExpandedGameId(snapshot.expandedGameId);
+        setExpandedSide(snapshot.expandedSide);
+
+        // Fire both network calls in parallel. The games list and
+        // the boxscore are independent; racing them halves the
+        // time to first paint of the expanded card.
+        void fetchGamesForDate(snapshot.selectedDate);
+
+        if (
+            snapshot.expandedGameId != null &&
+            snapshot.expandedSide != null
+        ) {
+            void openBoxscore(
+                snapshot.expandedGameId,
+                snapshot.expandedSide,
+            );
+        }
+
+        // Defer the clear so Layout's effect can peek first.
+        const timer = window.setTimeout(() => {
+            clearGameDaySnapshot();
+        }, 0);
+
+        return () => window.clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // --- Scroll the expanded game card to the top of the viewport ---
     //
     // Fires whenever the expanded game, the expanded side, or the
@@ -1738,81 +1916,120 @@ export default function GameDayPage() {
     // the final layout height. scroll-mt-[...] on the card pushes it
     // down by the sticky header's height, so it lands below the
     // header rather than behind it.
+    // --- Scroll the expanded game card to the top of the viewport ---
+    //
+    // REF VS STATE
+    //
+    // pendingScrollToGameIdRef is set synchronously by openBoxscore.
+    // expandedGameId is state, applied on the next render. On the
+    // restore path (GameDay -> Player -> GameDay), the restore
+    // effect calls openBoxscore during the same commit as this
+    // effect, so this effect's closure sees expandedGameId = null
+    // even though the ref is already set. The mismatch branch below
+    // waits for the next render in that case; it must NOT clear the
+    // ref, because the ref holds exactly the value the next render
+    // will match.
+    //
+    // The previous version of this effect cleared the ref on
+    // mismatch, which wiped it out on the very first commit of the
+    // restore path and is why the card never scrolled into view.
+    //
+    // RETRY
+    //
+    // Even when the state matches, the card may not be in the DOM
+    // yet (the games list may still be loading). tryScroll retries
+    // every 100 ms up to 10 s, so a late-arriving card still gets
+    // scrolled into view once the list renders.
     useEffect(() => {
         const targetGameId = pendingScrollToGameIdRef.current;
 
-        // Nothing pending, or the user moved on to a different game.
+        // Nothing pending.
         if (targetGameId === null) return;
 
-        if (expandedGameId !== targetGameId) {
-            pendingScrollToGameIdRef.current = null;
-            return;
-        }
+        // State has not caught up to the ref yet. Wait for the next
+        // render; this effect will re-fire because expandedGameId is
+        // in the deps. Do NOT clear the ref.
+        if (expandedGameId !== targetGameId) return;
 
         // Wait for the panel to finish loading so we measure the
         // final layout height.
         if (boxscoreLoading) return;
 
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                const el = document.getElementById(
-                    `game-card-${targetGameId}`,
-                );
+        let cancelled = false;
+        let attempts = 0;
 
-                if (!el) {
+        // 100 * 100 ms = 10 s total. Wide enough that a boxscore
+        // queued behind a live-refresh burst still gets its card
+        // scrolled into view once it loads. On a normal click the
+        // card is found on the first attempt, so this window is
+        // never consumed in practice.
+        const maxAttempts = 100;
+        const retryDelayMs = 100;
+
+        const tryScroll = () => {
+            if (cancelled) return;
+
+            const el = document.getElementById(
+                `game-card-${targetGameId}`,
+            );
+
+            if (!el) {
+                attempts++;
+
+                if (attempts < maxAttempts) {
+                    window.setTimeout(tryScroll, retryDelayMs);
+                } else {
                     pendingScrollToGameIdRef.current = null;
-                    return;
                 }
 
-                // Read the sticky-header height from the CSS
-                // variable published by Layout.tsx. Fall back to 64
-                // if it is not set (e.g. during the very first
-                // render), so the card never lands behind the header.
-                const headerHeight =
-                    parseFloat(
-                        getComputedStyle(document.documentElement)
-                            .getPropertyValue('--header-height'),
-                    ) || 64;
+                return;
+            }
 
-                // Absolute Y of the card in the document.
-                const cardTop =
-                    window.scrollY + el.getBoundingClientRect().top;
+            const headerHeight =
+                parseFloat(
+                    getComputedStyle(document.documentElement)
+                        .getPropertyValue('--header-height'),
+                ) || 64;
 
-                // Where we'd like to be: card's top just below the
-                // header.
-                const desiredScroll = Math.max(
-                    0,
-                    cardTop - headerHeight - 8,
-                );
+            const cardTop =
+                window.scrollY + el.getBoundingClientRect().top;
 
-                // The maximum scroll the document actually allows.
-                // This is where the min-h-dvh phantom height would
-                // otherwise let the browser over-scroll into blank
-                // space: clamp the target here and the card simply
-                // stops partway up instead of creating an empty tail.
-                const maxScroll = Math.max(
-                    0,
-                    document.documentElement.scrollHeight -
-                    window.innerHeight,
-                );
+            const desiredScroll = Math.max(
+                0,
+                cardTop - headerHeight - 8,
+            );
 
-                const targetScroll = Math.min(
-                    desiredScroll,
-                    maxScroll,
-                );
+            const maxScroll = Math.max(
+                0,
+                document.documentElement.scrollHeight -
+                window.innerHeight,
+            );
 
-                window.scrollTo({
-                    top: targetScroll,
-                    behavior: 'smooth',
-                });
+            const targetScroll = Math.min(desiredScroll, maxScroll);
 
-                // Clear only after the scroll has been dispatched,
-                // so the effect does not re-fire on unrelated
-                // re-renders.
-                pendingScrollToGameIdRef.current = null;
+            window.scrollTo({
+                top: targetScroll,
+                behavior: 'smooth',
             });
+
+            pendingScrollToGameIdRef.current = null;
+        };
+
+        const raf1 = window.requestAnimationFrame(() => {
+            tryScroll();
         });
-    }, [expandedGameId, expandedSide, boxscoreLoading, boxscore]);
+
+        return () => {
+            cancelled = true;
+            window.cancelAnimationFrame(raf1);
+        };
+    }, [
+        expandedGameId,
+        expandedSide,
+        boxscoreLoading,
+        boxscore,
+        data?.games.length,
+    ]);
 
     // --- Games list ---------------------------------------------------
     //
@@ -1988,7 +2205,6 @@ export default function GameDayPage() {
                         <GameCard
                             key={game.gameId}
                             game={game}
-                            currentFantasyDate={currentFantasyDate}
                             expanded={
                                 expandedGameId === game.gameId
                             }

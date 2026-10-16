@@ -31,13 +31,15 @@ builder.Services.AddScoped<SystemEventLogService>();
 // NHL API rate limiting
 // ---------------------------------------------------------------------
 //
-// Process-wide rate limiter for every NHL API call. The limiter
-// is a singleton so that all HTTP clients that talk to the NHL
-// share the same meter. See NhlApiRateLimiter for the algorithm.
+// Process-wide rate limiter for every NHL API call made by a
+// SCHEDULED JOB. User-initiated HTTP requests bypass the limiter;
+// see NhlRateLimitHandler and NhlRequestContext for the mechanism.
+//
+// The limiter is a singleton so that all HTTP clients that talk to
+// the NHL share the same meter.
 //
 // Registered explicitly as a singleton so a future refactor cannot
-// accidentally change its lifetime; the sharing only works if
-// there is exactly one instance.
+// accidentally change its lifetime.
 
 builder.Services.AddSingleton<NhlApiRateLimiter>();
 
@@ -70,10 +72,9 @@ builder.Services.AddTransient<HttpErrorLoggingHandler>();
 //      slow DB write can never hold the NHL API gate.
 //
 //   2. NhlRateLimitHandler (innermost)
-//      Holds the semaphore across the actual HTTP call. Being
-//      closest to the network means the semaphore is only held
-//      during the real request, and released before any
-//      downstream handler sees the result.
+//      Holds the semaphore across the actual HTTP call, unless the
+//      current request is user-initiated (in which case it passes
+//      through unchanged).
 //
 // Reversing this order would put the DB write inside the
 // semaphore, which is the failure mode we designed the limiter
@@ -276,6 +277,31 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseResponseCompression();
+
+// Set the user-request flag for the duration of every HTTP request.
+//
+// The NHL API rate limiter reads this flag to decide whether to
+// throttle a given request. When the flag is true (i.e. the call
+// originates from an HTTP request), the limiter is bypassed; when
+// it is false (background job, scheduled task, startup), the
+// limiter applies.
+//
+// AsyncLocal flows through every async call made from this request,
+// including any HttpClient call reached through the controller and
+// its services. The finally block resets the flag at the end of the
+// request, so no state leaks between requests.
+app.Use(async (context, next) =>
+{
+    NhlRequestContext.IsUserRequest = true;
+    try
+    {
+        await next();
+    }
+    finally
+    {
+        NhlRequestContext.IsUserRequest = false;
+    }
+});
 
 app.UseAuthentication();
 app.UseAuthorization();

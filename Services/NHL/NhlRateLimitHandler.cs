@@ -15,31 +15,32 @@ namespace NhlFantasyLeague.api.Services.NHL
     /// lscluster.hockeytech.com, etc.) pass straight through, so
     /// their own rate limits and timeouts are unaffected.
     ///
+    /// USER-REQUEST BYPASS
+    ///
+    /// When the current HTTP call is being made on behalf of a user
+    /// action, the limiter is skipped. The flag is read from
+    /// NhlRequestContext.IsUserRequest, which the middleware in
+    /// Program.cs sets to true for the duration of every HTTP
+    /// request. Scheduled jobs run on BackgroundService threads
+    /// with no HTTP context, so the flag is false for them and
+    /// their calls are throttled.
+    ///
     /// HANDLER POSITION IN THE PIPELINE
     ///
     /// This handler is registered as the INNERMOST handler on every
-    /// HttpClient. That means it sits between the network and every
-    /// other handler (HttpErrorLoggingHandler, any retry handlers
-    /// added later). The semaphore is therefore held only for the
-    /// duration of the actual HTTP call, and released before any
-    /// downstream handler sees the response.
-    ///
-    /// Placing this handler OUTERMOST would hold the semaphore while
-    /// HttpErrorLoggingHandler writes to the database, which would
-    /// let a slow DB stall the entire NHL pipeline. Program.cs
-    /// registers HttpErrorLoggingHandler first (outermost) and this
-    /// handler second (innermost) to guarantee the correct order.
+    /// HttpClient. It sits between the network and every other
+    /// handler. Program.cs registers HttpErrorLoggingHandler first
+    /// (outermost) and this handler second (innermost) to guarantee
+    /// that the rate limiter's semaphore is held only across the
+    /// actual HTTP call, not across the error logger's DB write.
     ///
     /// BODY STREAMING
     ///
     /// All calls in this app use HttpCompletionOption.ResponseContentRead
     /// (the default for GetAsync, GetFromJsonAsync, etc.), which
-    /// buffers the entire response body before returning. That means
-    /// the semaphore covers headers + body. If a future call switches
-    /// to ResponseHeadersRead, the caller must consume the body
-    /// inside the operation passed to ExecuteAsync, otherwise the
-    /// semaphore would release while the body is still streaming and
-    /// the concurrency guarantee would be broken.
+    /// buffers the entire response body before returning. If a
+    /// future call switches to ResponseHeadersRead, the semaphore
+    /// could release before the body is fully read.
     /// </summary>
     public class NhlRateLimitHandler : DelegatingHandler
     {
@@ -55,6 +56,27 @@ namespace NhlFantasyLeague.api.Services.NHL
             CancellationToken cancellationToken)
         {
             if (!IsNhlHost(request.RequestUri))
+            {
+                return await base.SendAsync(request, cancellationToken);
+            }
+
+            // User-initiated requests bypass the limiter entirely.
+            //
+            // The limiter exists to keep scheduled jobs from
+            // exceeding the NHL's 2 req/s ceiling when they overlap.
+            // A user expanding one game card makes one or two calls,
+            // and there is no reason to slow him down. The user may
+            // still trip a 429 in pathological cases, but that is
+            // not the rate limiter's concern: the user is not
+            // making enough calls to matter, and the response is
+            // surfaced normally.
+            //
+            // The flag is set to true by the middleware in Program.cs
+            // for every HTTP request, and is explicitly cleared
+            // inside BackgroundJobService.Start so that background
+            // jobs started from a controller still go through the
+            // limiter.
+            if (NhlRequestContext.IsUserRequest)
             {
                 return await base.SendAsync(request, cancellationToken);
             }

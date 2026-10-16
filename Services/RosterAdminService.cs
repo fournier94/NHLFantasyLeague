@@ -2332,15 +2332,55 @@ PlayerSeasonStat? seasonStat = null)
             var hatTricks = seasonStat?.HatTricks ?? line.HatTricks;
             var shutouts = seasonStat?.Shutouts ?? line.Shutouts;
 
-            var fantasyPoints =
-                seasonStat?.FantasyPoints
-                ?? (
+            // FP IS NHL-ONLY.
+            //
+            // Fantasy points are amassed only in the NHL by league
+            // rule. A player who did not dress for a single NHL game
+            // this season has no FP, no matter what he did in the
+            // AHL / SHL / Liiga / etc.
+            //
+            // The stat columns (GP, G, A, PTS, W, L, OTL, SO, 3B)
+            // may still carry the fallback-league numbers so the
+            // manager can see how the player is doing elsewhere.
+            // Only the FP column is blank.
+            //
+            // Three cases:
+            //   1. A PlayerSeasonStat row exists. It is NHL by
+            //      construction (the table has no league column), so
+            //      we use its FP value directly. This covers every
+            //      player who has dressed for at least one NHL game
+            //      this season, including a live-tracked row with
+            //      GP = 0 from an Active roster slot.
+            //   2. No PlayerSeasonStat row, but the archive line is
+            //      from the NHL. Compute FP from the counting stats,
+            //      matching the historical-season formula used
+            //      everywhere else.
+            //   3. No PlayerSeasonStat row and the archive line is
+            //      from a non-NHL league. FP is null. This is the
+            //      fallback-display case: stats are shown, FP is
+            //      blank.
+            int? fantasyPoints;
+
+            if (seasonStat != null)
+            {
+                fantasyPoints = seasonStat.FantasyPoints;
+            }
+            else if (string.Equals(
+                         line.LeagueAbbreviation,
+                         "NHL",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                fantasyPoints =
                     line.Points +
                     hatTricks * 3 +
                     line.Wins * 2 +
                     line.OvertimeLosses +
-                    shutouts * 3
-                );
+                    shutouts * 3;
+            }
+            else
+            {
+                fantasyPoints = null;
+            }
 
             return new SeasonStatLineDto
             {
@@ -2360,9 +2400,6 @@ PlayerSeasonStat? seasonStat = null)
                 Shutouts = shutouts,
                 FantasyPoints = fantasyPoints,
 
-                // Weighted average ATOI from the archive. Null when
-                // no row in the group carried a usable value; the
-                // frontend renders "—" then.
                 TimeOnIce = line.TimeOnIce,
             };
         }

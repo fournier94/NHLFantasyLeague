@@ -266,12 +266,20 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public int Shutouts { get; set; }
 
         /// <summary>
-        /// Total fantasy points scored this season, sourced from
-        /// PlayerSeasonStat for the current season and derived from
-        /// the counting stats for historical seasons. Zero when the
-        /// season row is missing.
+        /// Total fantasy points scored this season.
+        ///
+        /// Always from NHL stats. Fantasy points are amassed only in
+        /// the NHL by league rule, so a player who did not dress for
+        /// a single NHL game this season has no FP regardless of
+        /// what he did in the AHL / SHL / Liiga / etc.
+        ///
+        /// Null when this row is a non-NHL fallback (the player has
+        /// no NHL games this season and the stat columns are being
+        /// filled from whatever league he actually plays in) or when
+        /// no season row exists at all. The frontend renders null as
+        /// "—".
         /// </summary>
-        public int FantasyPoints { get; set; }
+        public int? FantasyPoints { get; set; }
 
         /// <summary>
         /// Average time on ice for the season, formatted "MM:SS", or

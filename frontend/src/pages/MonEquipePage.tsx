@@ -365,6 +365,10 @@ const LineupRow = memo(function LineupRow({
     const isGoalie = group === 'G';
     const s = entry.currentSeason;
 
+    // GP / G / A / PTS / W / L / OTL / SO / 3B may carry fallback-
+    // league numbers when the player has no NHL games this season.
+    // That is fine for the stat columns: the manager wants to see
+    // how the player is doing elsewhere.
     const gp = s?.gamesPlayed ?? 0;
     const g = s?.goals ?? 0;
     const a = s?.assists ?? 0;
@@ -374,7 +378,12 @@ const LineupRow = memo(function LineupRow({
     const l = s?.losses ?? 0;
     const otl = s?.overtimeLosses ?? 0;
     const so = s?.shutouts ?? 0;
-    const fp = s?.fantasyPoints ?? 0;
+
+    // FP is NHL-only. The backend sends null when the displayed
+    // row is a non-NHL fallback (player has no NHL games this
+    // season), and we render null as "—" so it is visually
+    // distinct from a real zero (played, scored nothing).
+    const fp: number | null = s?.fantasyPoints ?? null;
 
     const initial = entry.firstName.trim().charAt(0).toUpperCase();
     const shortName = initial
@@ -489,8 +498,14 @@ const LineupRow = memo(function LineupRow({
             </div>
 
             <div className='flex items-center justify-center gap-0.5 font-bold text-[#FFC72C]'>
-                <span>{fp}</span>
-                <TrendGlyph color='#FFC72C' />
+                {fp == null ? (
+                    <span>—</span>
+                ) : (
+                    <>
+                        <span>{fp}</span>
+                        <TrendGlyph color='#FFC72C' />
+                    </>
+                )}
             </div>
         </Link>
     );

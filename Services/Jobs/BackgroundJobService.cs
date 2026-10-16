@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Services.Jobs
 {
@@ -68,6 +69,19 @@ namespace NhlFantasyLeague.api.Services.Jobs
 
             _ = Task.Run(async () =>
             {
+                // Clear the user-request flag that Task.Run inherited
+                // from the caller's HTTP context.
+                //
+                // Task.Run inherits AsyncLocal values from its caller,
+                // and this method is normally called from a controller
+                // (an HTTP request), where the middleware in
+                // Program.cs has set NhlRequestContext.IsUserRequest
+                // to true. This job is a background operation, so its
+                // NHL API calls must go through the shared rate
+                // limiter, exactly like the scheduler's jobs. The
+                // explicit clear here is what makes that true.
+                NhlRequestContext.IsUserRequest = false;
+
                 try
                 {
                     using var scope = _scopeFactory.CreateScope();
