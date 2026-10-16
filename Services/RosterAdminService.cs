@@ -2113,6 +2113,18 @@ namespace NhlFantasyLeague.api.Services
         /// Caps the input at 200 ids defensively; a single NHL
         /// boxscore has at most ~40 players.
         /// </summary>
+        /// <summary>
+        /// TTL for the ownership lookup cache. Ownership changes
+        /// only on a roster mutation, and every mutation path in
+        /// this service calls OnRosterChanged, which invalidates
+        /// the "ownership:" prefix. The TTL is a backstop for any
+        /// future code path that bypasses that invalidation; in
+        /// normal operation the entry is dropped the moment it
+        /// becomes stale.
+        /// </summary>
+        private static readonly TimeSpan OwnershipCacheTtl =
+            TimeSpan.FromMinutes(2);
+
         public async Task<List<PlayerOwnershipRowDto>> GetPlayerOwnershipAsync(
             IReadOnlyList<int> nhlPlayerIds,
             CancellationToken ct = default)
@@ -2122,6 +2134,29 @@ namespace NhlFantasyLeague.api.Services
                 return new List<PlayerOwnershipRowDto>();
             }
 
+            // Sorted ids make the cache key stable across callers
+            // that pass the same set in different orders, so a
+            // boxscore's ownership lookup hits the cache on every
+            // repeat view of the same game.
+            var ids = nhlPlayerIds
+                .Distinct()
+                .OrderBy(x => x)
+                .Take(200)
+                .ToList();
+
+            var cacheKey = "ownership:" + string.Join(",", ids);
+
+            return await _cache.GetOrCreateAsync(
+                cacheKey,
+                OwnershipCacheTtl,
+                () => BuildPlayerOwnershipAsync(ids, ct));
+        }
+
+        private async Task<List<PlayerOwnershipRowDto>>
+            BuildPlayerOwnershipAsync(
+                List<int> ids,
+                CancellationToken ct)
+        {
             // Current season is looked up by season code, not by
             // "latest StartDate" — see the note in
             // GetRosterGameStatsForDateAsync.
@@ -2132,11 +2167,6 @@ namespace NhlFantasyLeague.api.Services
             {
                 return new List<PlayerOwnershipRowDto>();
             }
-
-            var ids = nhlPlayerIds
-                .Distinct()
-                .Take(200)
-                .ToList();
 
             return await _dbContext.RosterEntries
                 .AsNoTracking()
@@ -2198,6 +2228,10 @@ namespace NhlFantasyLeague.api.Services
             _cache.Invalidate("standings:");
             _cache.Invalidate("player-detail:");
             _cache.Invalidate("player-career:");
+
+            // Ownership changes on any roster mutation, so the
+            // "ownership:" cache must be dropped at the same time.
+            _cache.Invalidate("ownership:");
         }
 
         private static RosterActionResultDto Failure(string message)

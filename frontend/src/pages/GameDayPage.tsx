@@ -1686,10 +1686,29 @@ export default function GameDayPage() {
 
     // --- Boxscore fetch helper ----------------------------------------
     //
-    // Fetches the boxscore + ownership for one game and stores them
-    // in state. Used by both the click handler (handleToggleExpand)
-    // and the restore effect that runs on mount when the user is
-    // coming back from a player page.
+    // Fetches the boxscore and stores it in state, then fetches the
+    // fantasy team ownership for the players in it. Used by both the
+    // click handler (handleToggleExpand) and the restore effect that
+    // runs on mount when the user is coming back from a player page.
+    //
+    // TWO SEQUENTIAL FETCHES, BUT THE PANEL RENDERS AFTER THE FIRST
+    //
+    // The boxscore fetch and the ownership fetch hit different
+    // endpoints and are sequential by nature: the ownership call
+    // needs the player ids that come out of the boxscore. What we
+    // do NOT do is block the panel on the ownership fetch. As soon
+    // as the boxscore arrives, the panel renders with the full
+    // roster of players; the ownership chips (fantasy team names)
+    // populate a moment later, without any loading placeholder.
+    //
+    // CLIENT-SIDE CACHE FOR FINAL/OFF
+    //
+    // A finished game's boxscore never changes, so the second click
+    // on the same card is served from the client-side response
+    // cache (see apiGet in client.ts). LIVE/CRIT boxscores change
+    // by the second and stay uncached. The decision is made by the
+    // caller, which knows the game's state from the summary it
+    // received from /Games/today or /Games/by-date.
     //
     // The request id guards against stale responses: if a second
     // fetch starts before the first completes (e.g. the user clicks
@@ -1698,6 +1717,7 @@ export default function GameDayPage() {
     const openBoxscore = async (
         gameId: number,
         side: 'away' | 'home',
+        isFinishedGame: boolean = false,
     ) => {
         const requestId = ++boxscoreRequestIdRef.current;
 
@@ -1709,7 +1729,9 @@ export default function GameDayPage() {
         setBoxscoreLoading(true);
 
         try {
-            const result = await getGameBoxscore(gameId);
+            const result = await getGameBoxscore(gameId, {
+                cacheTtlMs: isFinishedGame ? 5 * 60_000 : 0,
+            });
 
             if (
                 !isMountedRef.current ||
@@ -1720,28 +1742,36 @@ export default function GameDayPage() {
 
             setBoxscore(result);
 
-            // Fetch the fantasy team ownership for every player in
-            // this boxscore. One batch call, not one per player.
+            // Panel renders NOW. Ownership is a progressive
+            // enhancement — the fantasy team chip next to each
+            // player — so it runs in the background and does not
+            // gate the initial paint. If the call fails or never
+            // lands, the boxscore simply renders without chips,
+            // which is the same visual the panel had before
+            // ownership was added.
+            setBoxscoreLoading(false);
+
             const playerIds = collectBoxscorePlayerIds(result);
 
-            const ownershipRows =
-                await getPlayerOwnership(playerIds);
+            void getPlayerOwnership(playerIds)
+                .then((ownershipRows) => {
+                    if (
+                        !isMountedRef.current ||
+                        requestId !== boxscoreRequestIdRef.current
+                    ) {
+                        return;
+                    }
 
-            if (
-                !isMountedRef.current ||
-                requestId !== boxscoreRequestIdRef.current
-            ) {
-                return;
-            }
-
-            const map = new Map<number, PlayerOwnership>();
-            for (const row of ownershipRows) {
-                map.set(row.nhlPlayerId, row);
-            }
-            setOwnershipByPlayerId(map);
+                    const map = new Map<number, PlayerOwnership>();
+                    for (const row of ownershipRows) {
+                        map.set(row.nhlPlayerId, row);
+                    }
+                    setOwnershipByPlayerId(map);
+                })
+                .catch(() => {
+                    // Non-fatal: chips simply stay hidden.
+                });
         } catch {
-            // Non-fatal: the panel shows nothing.
-        } finally {
             if (
                 isMountedRef.current &&
                 requestId === boxscoreRequestIdRef.current
@@ -1797,7 +1827,15 @@ export default function GameDayPage() {
 
         // Different game (or switching back to a game whose boxscore
         // was cleared) → fetch fresh.
-        await openBoxscore(gameId, side);
+        //
+        // Pass the game's current state so openBoxscore can decide
+        // whether the boxscore is cacheable client-side. A game
+        // that is FINAL or OFF will not change; a LIVE or CRIT game
+        // must always be refetched.
+        const game = games.find((g) => g.gameId === gameId);
+        const isFinishedGame = game != null && isFinished(game);
+
+        await openBoxscore(gameId, side, isFinishedGame);
     };
 
     // --- Save GameDay state on every change ---------------------------

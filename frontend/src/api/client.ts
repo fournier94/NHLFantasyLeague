@@ -1688,10 +1688,11 @@ export function getTodayGames(
  */
 export function getGameBoxscore(
     gameId: number,
+    options?: { cacheTtlMs?: number },
 ): Promise<NhlBoxscoreResponse> {
     return apiGet<NhlBoxscoreResponse>(
         `/Games/${gameId}/boxscore`,
-        { cacheTtlMs: 0 },
+        { cacheTtlMs: options?.cacheTtlMs ?? 0 },
     );
 }
 
