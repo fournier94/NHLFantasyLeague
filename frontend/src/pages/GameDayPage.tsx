@@ -1139,7 +1139,7 @@ function GameCard({
                         where it used to sit (below the old date) and
                         where the old date label was (top-3). */}
                     <div
-                        className='mt-1 -translate-y-4 text-[0.55rem] font-bold uppercase tracking-widest'
+                        className='mt-1 -translate-y-4 text-[0.8rem] font-bold uppercase tracking-widest'
                         style={{
                             color: finished ? '#FFFFFF' : '#7DD3FC',
                         }}
