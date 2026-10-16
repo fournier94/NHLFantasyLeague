@@ -188,8 +188,23 @@ function shortTeamName(name: string): string {
  * un listener de resize et garantit que le header et les lignes
  * partagent la même grille à tout instant.
  */
+/**
+ * Colonnes du tableau "Meilleurs pointeurs".
+ *
+ * Colonne 3B retirée, colonne Team ajoutée juste après le rang.
+ * La valeur par défaut (fallback du var) est utilisée sur les
+ * écrans < 400px. Sur les écrans >= 400px, `index.css` redéfinit
+ * `--stats-grid-columns` avec une version légèrement élargie.
+ *
+ * Layout (10 colonnes) :
+ *   #    rank
+ *   Team nom d'équipe fantasy (shortTeamName)
+ *   logo équipe LNH
+ *   nom  joueur (flexible)
+ *   GP / G / A / PTS / ATOI / FP
+ */
 const GRID_COLUMNS =
-    'var(--stats-grid-columns, 18px 22px minmax(0, 1fr) 23px 24px 24px 24px 22px 42px 24px)';
+    'var(--stats-grid-columns, 18px 28px 22px minmax(0, 1fr) 22px 22px 22px 24px 40px 28px)';
 
 const ESTIMATED_ROW_HEIGHT = 42;
 
@@ -318,74 +333,36 @@ const TopScorersHeader = memo(function TopScorersHeader({
                 backgroundColor: '#050A16',
             }}
         >
-            <StaticHeader label='#' color='#7DD3FC' />
-
-            <StaticHeader label='Joueur' color='#FFFFFF' colSpan={2} />
-
-            <SortableHeader
-                label='GP'
-                sortKey='gamesPlayed'
-                activeSortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={onSort}
-                color='#33BBFF'
-            />
-
-            <SortableHeader
-                label='G'
-                sortKey='goals'
-                activeSortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={onSort}
-                color='#FFFFFF'
-            />
-
-            <SortableHeader
-                label='A'
-                sortKey='assists'
-                activeSortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={onSort}
-                color='#FFFFFF'
-            />
-
-            <SortableHeader
-                label='PTS'
-                sortKey='points'
-                activeSortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={onSort}
-                color='#00F0FF'
-            />
-
-            <SortableHeader
-                label='3B'
-                sortKey='hatTricks'
-                activeSortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={onSort}
-                color='#FFFFFF'
-            />
-
-            <SortableHeader
-                label='ATOI'
-                sortKey='timeOnIce'
-                activeSortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={onSort}
-                color='#FFFFFF'
-                compact
-            />
-
-            <SortableHeader
-                label='FP'
-                sortKey='fp'
-                activeSortKey={sortKey}
-                sortDirection={sortDirection}
-                onSort={onSort}
-                color='#FFC72C'
-                activeColor='#FFC72C'
-            />
+            <div className='text-center' style={{ color: '#7DD3FC' }}>
+                #
+            </div>
+            {/* Team — nom d'équipe fantasy, à droite du rang.
+                Non triable, comme le rang et le nom. */}
+            <div className='text-center text-white'>Team</div>
+            <div className='col-span-2 pr-1 text-center text-white'>
+                Joueur
+            </div>
+            <div className='text-center' style={{ color: '#33BBFF' }}>
+                GP
+            </div>
+            <div className='text-center' style={{ color: '#FFFFFF' }}>
+                G
+            </div>
+            <div className='text-center' style={{ color: '#FFFFFF' }}>
+                A
+            </div>
+            <div className='text-center' style={{ color: '#00F0FF' }}>
+                PTS
+            </div>
+            <div
+                className='text-center text-[0.55rem] sm:text-[0.65rem]'
+                style={{ color: '#FFFFFF' }}
+            >
+                ATOI
+            </div>
+            <div className='text-center' style={{ color: '#FFC72C' }}>
+                FP
+            </div>
         </div>
     );
 });
@@ -404,6 +381,10 @@ const TopScorersRow = memo(function TopScorersRow({
     const group = toPositionGroup(row.position);
 
     const teamColor = getFantasyTeamColor(row.fantasyTeamId);
+
+    const teamLabel = row.fantasyTeamName
+        ? shortTeamName(row.fantasyTeamName)
+        : null;
 
     function handleTeamClick(e: React.SyntheticEvent) {
         e.preventDefault();
@@ -431,6 +412,33 @@ const TopScorersRow = memo(function TopScorersRow({
                 {rank}
             </div>
 
+            {/* Team — nom d'équipe fantasy, dans sa propre colonne
+                à droite du rang. Cliquable pour naviguer vers la
+                page Mon équipe de cette équipe, comme partout
+                ailleurs. */}
+            <div className='flex min-w-0 items-center justify-center'>
+                {teamLabel && (
+                    <span
+                        role='button'
+                        tabIndex={0}
+                        onClick={handleTeamClick}
+                        onKeyDown={(e) => {
+                            if (
+                                e.key === 'Enter' ||
+                                e.key === ' '
+                            ) {
+                                handleTeamClick(e);
+                            }
+                        }}
+                        aria-label={`Voir l'équipe ${row.fantasyTeamName}`}
+                        className='cursor-pointer truncate text-[0.65rem] font-semibold hover:underline focus:outline-none focus-visible:underline'
+                        style={{ color: teamColor }}
+                    >
+                        {teamLabel}
+                    </span>
+                )}
+            </div>
+
             <div className='flex self-stretch items-center justify-center'>
                 <div
                     style={{
@@ -451,41 +459,11 @@ const TopScorersRow = memo(function TopScorersRow({
                 </div>
             </div>
 
-            {(() => {
-                const teamLabel = row.fantasyTeamName
-                    ? shortTeamName(row.fantasyTeamName)
-                    : null;
-
-                return (
-                    <div className='min-w-0 pl-[6px] text-left'>
-                        <div className='truncate text-[0.95rem] max-[399px]:leading-[1.17rem] text-foreground translate-y-[3px] min-[400px]:text-[1.05rem] min-[400px]:leading-[1.30rem]'>
-                            {shortName(row.firstName, row.lastName)}
-                        </div>
-                        {teamLabel && (
-                            <div className='flex items-center gap-1 leading-tight translate-y-[3px]'>
-                                <span
-                                    role='button'
-                                    tabIndex={0}
-                                    onClick={handleTeamClick}
-                                    onKeyDown={(e) => {
-                                        if (
-                                            e.key === 'Enter' ||
-                                            e.key === ' '
-                                        ) {
-                                            handleTeamClick(e);
-                                        }
-                                    }}
-                                    aria-label={`Voir l'équipe ${row.fantasyTeamName}`}
-                                    className='shrink-0 cursor-pointer text-[0.45rem] font-semibold hover:underline focus:outline-none focus-visible:underline'
-                                    style={{ color: teamColor }}
-                                >
-                                    {teamLabel}
-                                </span>
-                            </div>
-                        )}
-                    </div>
-                );
-            })()}
+            <div className='min-w-0 pl-1 text-left'>
+                <div className='truncate text-[0.90rem] max-[399px]:leading-[1.17rem] text-foreground translate-y-[3px] min-[400px]:text-[1rem] min-[400px]:leading-[1.30rem]'>
+                    {shortName(row.firstName, row.lastName)}
+                </div>
+            </div>
 
             <div className='text-center text-[0.9rem] text-[#7DD3FC] min-[400px]:text-[0.95rem]'>
                 {row.gamesPlayed}
@@ -498,9 +476,6 @@ const TopScorersRow = memo(function TopScorersRow({
             </div>
             <div className='text-center text-[0.95rem] text-[#00F0FF] min-[400px]:text-[1rem]'>
                 {row.points}
-            </div>
-            <div className='text-center text-[0.9rem] text-white min-[400px]:text-[0.95rem]'>
-                {row.hatTricks}
             </div>
             <div className='text-center text-[0.65rem] text-white min-[400px]:text-[0.75rem]'>
                 {row.timeOnIce ?? '—'}

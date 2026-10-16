@@ -334,24 +334,25 @@
 /* ------------------------------------------------------------------ */
 /* Grille du tableau "Meilleurs pointeurs" sur >= 400px               */
 /*                                                                     */
-/* Sur les écrans >= 400px, les colonnes de stats sont légèrement      */
-/* élargies. Le nom / contrat étant en 1fr, il absorbe la perte de     */
-/* ~18px et devient donc plus étroit. En dessous de 400px, aucune      */
-/* règle n'écrit la variable, donc le fallback du var() côté React     */
-/* s'applique (version d'origine, inchangée).                          */
+/* Nouvelle structure : colonne 3B retirée, colonne Team ajoutée      */
+/* juste après le rang. Les colonnes de stats sont légèrement         */
+/* élargies par rapport à la version mobile.                          */
 /*                                                                     */
-/* Différences vs la grille de base :                                  */
+/* Sur les écrans >= 400px, le nom du joueur (en 1fr) absorbe la      */
+/* différence entre cette version et le fallback du var().            */
+/*                                                                     */
+/* Différences vs le fallback mobile :                                */
+/*   Team  28 -> 30  (+2)                                              */
 /*   GP    22 -> 24  (+2)                                              */
 /*   G     18 -> 20  (+2)                                              */
 /*   A     18 -> 20  (+2)                                              */
 /*   PTS   22 -> 24  (+2)                                              */
-/*   3B    18 -> 20  (+2)                                              */
 /*   ATOI  40 -> 44  (+4)                                              */
 /*   FP    28 -> 32  (+4)                                              */
 /* ------------------------------------------------------------------ */
 @media (min-width: 400px) {
     :root {
-        --stats-grid-columns: 18px 22px minmax(0, 1fr) 24px 24px 24px 24px 24px 42px 28px;
+        --stats-grid-columns: 18px 30px 22px minmax(0, 1fr) 25px 22px 22px 26px 44px 32px;
     }
 }
 

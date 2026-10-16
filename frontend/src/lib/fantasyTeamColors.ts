@@ -61,8 +61,8 @@ export const FANTASY_TEAM_COLORS: Record<number, string> = {
     // 1  Mathieu — or vif. Teinte 48°, luminosité haute.
     1: '#FFD93D',
 
-    // 2  Antho — cyan électrique. Teinte 187°, très clair.
-    2: '#00E5FF',
+    // 2  Antho — orange vif (couleur échangée avec Farn).
+    2: '#FB923C',
 
     // 3  Mig — violet vif. Teinte 262°.
     3: '#A855F7',
@@ -70,8 +70,8 @@ export const FANTASY_TEAM_COLORS: Record<number, string> = {
     // 4  Olivier — vert clair. Teinte 142°.
     4: '#4ADE80',
 
-    // 5  Farn — orange vif. Teinte 15°, chaud, saturé.
-    5: '#FF6B35',
+    // 5  Farn — cyan électrique (couleur échangée avec Antho).
+    5: '#00E5FF',
 
     // 6  Melis — rose clair. Teinte 330°.
     6: '#F472B6',
@@ -90,7 +90,7 @@ export const FANTASY_TEAM_COLORS: Record<number, string> = {
     10: '#D946EF',
 
     // 11 Max — sarcelle. Teinte 173°, plus sombre que le cyan
-    //          de Antho (teinte 187°), donc même si les deux sont
+    //          de Farn (teinte 187°), donc même si les deux sont
     //          proches en teinte, la luminosité les sépare.
     11: '#14B8A6',
 
