@@ -19,6 +19,11 @@
         public string NhlTeamAbbreviation { get; set; } = string.Empty;
 
         /// <summary>
+        /// Player age in years, or null when unknown.
+        /// </summary>
+        public int? Age { get; set; }
+
+        /// <summary>
         /// Id de l'équipe fantasy qui détient le joueur. Utilisé
         /// par le frontend pour construire un lien vers
         /// /mon-equipe?teamId={FantasyTeamId}, comme sur la

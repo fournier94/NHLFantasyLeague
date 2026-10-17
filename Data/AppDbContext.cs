@@ -175,6 +175,15 @@ namespace NhlFantasyLeague.api.Data
       .Property(u => u.PlayerPageStyle)
       .HasConversion<string>();
 
+            // Default both contract checkboxes to true for all users.
+            modelBuilder.Entity<ApplicationUser>()
+                .Property(u => u.ShowContractsStats)
+                .HasDefaultValue(true);
+
+            modelBuilder.Entity<ApplicationUser>()
+                .Property(u => u.ShowContractsRoster)
+                .HasDefaultValue(true);
+
             // -----------------------------------------------------------------
             // Existing model configuration, unchanged below.
             // -----------------------------------------------------------------

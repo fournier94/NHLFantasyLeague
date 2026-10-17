@@ -288,6 +288,8 @@ export interface AuthUser {
     fantasyTeamName: string | null;
     isCommissioner: boolean;
     playerPageStyle: PlayerPageStyle;
+    showContractsStats: boolean;
+    showContractsRoster: boolean;
 }
 
 export interface LoginRequest {
@@ -343,6 +345,9 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
 
 export const setPlayerPageStyle = (style: PlayerPageStyle) =>
     apiPost<AuthUser>('/Auth/player-page-style', { style });
+
+export const updatePreferences = (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean }) =>
+    apiPost<AuthUser>('/Auth/preferences', prefs);
 
 // ---------------------------------------------------------------------
 // Users (commissioner only)
@@ -951,6 +956,7 @@ export interface TopScorerRow {
     lastName: string;
     position: string;
     nhlTeamAbbreviation: string;
+    age: number | null;
 
     /**
      * Id de l'équipe fantasy qui détient le joueur. Utilisé
@@ -2689,6 +2695,17 @@ export function startRefreshAllGameLogs(
 
     return apiPost<StartJobResponse>(
         `/Jobs/refresh-all/start?${params.toString()}`,
+        {},
+    );
+}
+
+/**
+ * Starts the "refresh CapFreeze contracts" background job.
+ * Updates contracts, statuses, and names for every player.
+ */
+export function startCapFreezeContractsJob(): Promise<StartJobResponse> {
+    return apiPost<StartJobResponse>(
+        '/Jobs/capfreeze-contracts/start',
         {},
     );
 }

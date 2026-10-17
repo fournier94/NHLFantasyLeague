@@ -37,6 +37,7 @@ import {
     getAcceptedTrades,
     deleteAcceptedTrade,
     getRosterShapeViolations,
+    startCapFreezeContractsJob,
     type DraftPick,
     type RosterStatusHistoryRow,
     type ProtectedSalaryRow,
@@ -486,6 +487,12 @@ export default function AdminPage() {
         null,
     );
 
+    // --- CapFreeze contracts job state ---
+    const [capFreezeJobId, setCapFreezeJobId] = useState<string | null>(null);
+    const [capFreezeJob, setCapFreezeJob] = useState<BackgroundJobStatus | null>(null);
+    const [capFreezeStarting, setCapFreezeStarting] = useState(false);
+    const [capFreezeError, setCapFreezeError] = useState<string | null>(null);
+
     // --- Draft pick transfer section state ---
     const [draftTransferFromTeamId, setDraftTransferFromTeamId] =
         useState('');
@@ -610,6 +617,37 @@ export default function AdminPage() {
         };
     }, [refreshAllJobId]);
 
+    // Poll the CapFreeze job while it runs.
+    useEffect(() => {
+        if (!capFreezeJobId) return;
+
+        let cancelled = false;
+        let timeoutId: number | null = null;
+
+        const poll = async () => {
+            try {
+                const status = await getJobStatus(capFreezeJobId);
+
+                if (cancelled) return;
+
+                setCapFreezeJob(status);
+
+                if (status.status === 'Running') {
+                    timeoutId = window.setTimeout(poll, 3000);
+                }
+            } catch {
+                // Stop polling on error.
+            }
+        };
+
+        void poll();
+
+        return () => {
+            cancelled = true;
+            if (timeoutId != null) window.clearTimeout(timeoutId);
+        };
+    }, [capFreezeJobId]);
+
     async function handleStartRefreshAll() {
         if (
             !window.confirm(
@@ -636,6 +674,35 @@ export default function AdminPage() {
             );
         } finally {
             setRefreshAllStarting(false);
+        }
+    }
+
+    async function handleStartCapFreezeContracts() {
+        if (
+            !window.confirm(
+                'Lancer le rafraîchissement des contrats CapFreeze ? ' +
+                'Cela va mettre à jour les salaires, les saisons et les statuts pour tous les joueurs. ' +
+                'Cela peut prendre plusieurs minutes.',
+            )
+        ) {
+            return;
+        }
+
+        setCapFreezeStarting(true);
+        setCapFreezeError(null);
+
+        try {
+            const result = await startCapFreezeContractsJob();
+            setCapFreezeJobId(result.jobId);
+            setCapFreezeJob(null);
+        } catch (err) {
+            setCapFreezeError(
+                err instanceof Error
+                    ? err.message
+                    : 'Erreur inconnue.',
+            );
+        } finally {
+            setCapFreezeStarting(false);
         }
     }
 
@@ -2587,6 +2654,425 @@ export default function AdminPage() {
 
     return (
         <section className='space-y-6'>
+            {/* ============================================================
+                Utilisateurs
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Utilisateurs
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Liste des comptes enregistrés. Assignez une équipe,
+                    gérez les rôles de commissaire, ou réinitialisez un
+                    mot de passe.
+                </p>
+
+                {usersError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {usersError}
+                    </p>
+                )}
+
+                {usersSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {usersSuccess}
+                    </p>
+                )}
+
+                {usersLoading && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {!usersLoading && adminUsers.length === 0 && (
+                    <p className='text-sm text-muted-foreground'>
+                        Aucun utilisateur enregistré.
+                    </p>
+                )}
+
+                {!usersLoading && adminUsers.length > 0 && (
+                    <div className='overflow-x-auto rounded-lg border border-border bg-card'>
+                        <table className='w-full min-w-[720px] text-sm'>
+                            <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
+                                <tr>
+                                    <th className='px-2 py-2 text-left font-medium'>Utilisateur</th>
+                                    <th className='px-2 py-2 text-left font-medium'>Équipe</th>
+                                    <th className='px-2 py-2 text-center font-medium'>Commissaire</th>
+                                    <th className='px-2 py-2 text-left font-medium'>
+                                        Dernière activité
+                                    </th>
+                                    <th className='px-2 py-2 text-center font-medium'>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className='text-foreground'>
+                                {adminUsers.map((u, index) => (
+                                    <tr
+                                        key={u.id}
+                                        className={
+                                            index % 2 === 0
+                                                ? 'bg-transparent'
+                                                : 'bg-secondary/20'
+                                        }
+                                    >
+                                        <td className='px-2 py-2 align-top'>
+                                            <div className='font-medium'>
+                                                {u.userName}
+                                            </div>
+                                        </td>
+                                        <td className='px-2 py-2 align-top'>
+                                            {u.fantasyTeamName ?? '—'}
+                                        </td>
+                                        <td className='px-2 py-2 text-center align-top'>
+                                            {u.isCommissioner ? '✓' : ''}
+                                        </td>
+                                        <td className='px-2 py-2 text-left align-top text-muted-foreground'>
+                                            {formatLastActive(u.lastActiveAt)}
+                                        </td>
+                                        <td className='px-2 py-2 text-center align-top'>
+                                            <div className='flex flex-wrap items-center justify-center gap-2'>
+                                                {/* Promote / demote.
+                                                    Demote is hidden for
+                                                    protected commissioners
+                                                    and for our own row; the
+                                                    backend refuses both
+                                                    anyway, this just avoids
+                                                    a dead button. */}
+                                                {u.isCommissioner ? (
+                                                    u.isProtected ? (
+                                                        <span
+                                                            className='cursor-default rounded border border-border bg-secondary/40 px-2 py-0.5 text-xs italic text-muted-foreground'
+                                                            title='Commissaire protégé : ne peut pas être rétrogradé'
+                                                        >
+                                                            🔒 Protégé
+                                                        </span>
+                                                    ) : authUser?.id === u.id ? (
+                                                        <span
+                                                            className='cursor-default rounded border border-border bg-secondary/40 px-2 py-0.5 text-xs italic text-muted-foreground'
+                                                            title='Vous ne pouvez pas retirer votre propre rôle'
+                                                        >
+                                                            Vous-même
+                                                        </span>
+                                                    ) : (
+                                                        <button
+                                                            type='button'
+                                                            onClick={() => void handleDemote(u.id)}
+                                                            disabled={usersBusyId === u.id}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            Retirer commissaire
+                                                        </button>
+                                                    )
+                                                ) : (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => void handlePromote(u.id)}
+                                                        disabled={usersBusyId === u.id}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                    >
+                                                        Promouvoir
+                                                    </button>
+                                                )}
+
+                                                {/* Team assign / unassign */}
+                                                {u.fantasyTeamId == null ? (
+                                                    <>
+                                                        {assignTeamFor === u.id ? (
+                                                            <>
+                                                                <select
+                                                                    value={assignTeamValue}
+                                                                    onChange={(event) =>
+                                                                        setAssignTeamValue(event.target.value)
+                                                                    }
+                                                                    className='rounded border border-border bg-background px-2 py-0.5 text-xs'
+                                                                >
+                                                                    <option value=''>— équipe —</option>
+                                                                    {teams
+                                                                        .filter((t) =>
+                                                                            adminUsers.every(
+                                                                                (other) =>
+                                                                                    other.fantasyTeamId !== t.id,
+                                                                            ),
+                                                                        )
+                                                                        .map((t) => (
+                                                                            <option key={t.id} value={t.id}>
+                                                                                {t.name}
+                                                                            </option>
+                                                                        ))}
+                                                                </select>
+                                                                <button
+                                                                    type='button'
+                                                                    onClick={() => void handleAssignTeam(u.id)}
+                                                                    disabled={usersBusyId === u.id}
+                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                                >
+                                                                    OK
+                                                                </button>
+                                                                <button
+                                                                    type='button'
+                                                                    onClick={() => {
+                                                                        setAssignTeamFor(null);
+                                                                        setAssignTeamValue('');
+                                                                    }}
+                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                                >
+                                                                    Annuler
+                                                                </button>
+                                                            </>
+                                                        ) : (
+                                                            <button
+                                                                type='button'
+                                                                onClick={() => {
+                                                                    setAssignTeamFor(u.id);
+                                                                    setAssignTeamValue('');
+                                                                }}
+                                                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                            >
+                                                                Assigner équipe
+                                                            </button>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => void handleUnassignTeam(u.id)}
+                                                        disabled={usersBusyId === u.id}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                    >
+                                                        Désassigner équipe
+                                                    </button>
+                                                )}
+
+                                                {/* Reset password */}
+                                                {resetPasswordFor === u.id ? (
+                                                    <>
+                                                        <input
+                                                            type='text'
+                                                            value={resetPasswordValue}
+                                                            onChange={(event) =>
+                                                                setResetPasswordValue(event.target.value)
+                                                            }
+                                                            placeholder='Nouveau mot de passe'
+                                                            className='rounded border border-border bg-background px-2 py-0.5 text-xs'
+                                                        />
+                                                        <button
+                                                            type='button'
+                                                            onClick={() => void handleResetPassword(u.id)}
+                                                            disabled={usersBusyId === u.id}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                                        >
+                                                            OK
+                                                        </button>
+                                                        <button
+                                                            type='button'
+                                                            onClick={() => {
+                                                                setResetPasswordFor(null);
+                                                                setResetPasswordValue('');
+                                                            }}
+                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                        >
+                                                            Annuler
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            setResetPasswordFor(u.id);
+                                                            setResetPasswordValue('');
+                                                        }}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                    >
+                                                        Réinitialiser mot de passe
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+
+
+            {/* ============================================================
+                Journaux d'événements (erreurs et avertissements)
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Journaux d'événements
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Erreurs et avertissements capturés automatiquement :
+                    échecs HTTP (429, 5xx), pannes des jobs planifiés.
+                    Les événements identiques dans une fenêtre de 60
+                    secondes sont regroupés.
+                </p>
+
+                {eventLogsError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {eventLogsError}
+                    </p>
+                )}
+
+                <div className='flex flex-wrap items-end gap-2'>
+                    <div>
+                        <label className='text-xs font-medium text-muted-foreground'>
+                            Sévérité
+                        </label>
+                        <select
+                            value={eventLogsSeverityFilter}
+                            onChange={(e) =>
+                                setEventLogsSeverityFilter(
+                                    e.target.value as '' | 'Warning' | 'Error',
+                                )
+                            }
+                            className='mt-0.5 block rounded-lg border border-border bg-card px-2 py-1.5 text-sm text-foreground'
+                        >
+                            <option value=''>Tout</option>
+                            <option value='Warning'>Avertissements</option>
+                            <option value='Error'>Erreurs</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className='text-xs font-medium text-muted-foreground'>
+                            Source (préfixe)
+                        </label>
+                        <input
+                            type='text'
+                            value={eventLogsSourceFilter}
+                            onChange={(e) =>
+                                setEventLogsSourceFilter(e.target.value)
+                            }
+                            placeholder='ex: NhlApi, ScheduledJob:'
+                            className='mt-0.5 block rounded-lg border border-border bg-card px-2 py-1.5 text-sm text-foreground'
+                        />
+                    </div>
+
+                    <button
+                        type='button'
+                        onClick={() => void loadEventLogs()}
+                        disabled={eventLogsLoading}
+                        className={secondaryButtonClass}
+                    >
+                        {eventLogsLoading ? 'Chargement...' : 'Rafraîchir'}
+                    </button>
+
+                    <button
+                        type='button'
+                        onClick={() => void handleClearEventLogs()}
+                        disabled={eventLogsClearing || eventLogs.length === 0}
+                        className={dangerButtonClass}
+                    >
+                        {eventLogsClearing ? 'Effacement...' : 'Tout effacer'}
+                    </button>
+                </div>
+
+                {!eventLogsLoading && eventLogs.length === 0 && !eventLogsError && (
+                    <p className='rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground'>
+                        Aucun événement enregistré. Bonne nouvelle.
+                    </p>
+                )}
+
+                {eventLogs.length > 0 && (
+                    <div className='space-y-1'>
+                        {eventLogs.map((log) => {
+                            const isExpanded = eventLogsExpandedId === log.id;
+
+                            return (
+                                <div
+                                    key={log.id}
+                                    className='rounded-lg border border-border bg-card'
+                                >
+                                    <button
+                                        type='button'
+                                        onClick={() =>
+                                            setEventLogsExpandedId(
+                                                isExpanded ? null : log.id,
+                                            )
+                                        }
+                                        className='flex w-full cursor-pointer items-start gap-2 px-3 py-2 text-left text-sm hover:bg-secondary/50'
+                                    >
+                                        <span
+                                            className={`mt-0.5 inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${severityBadgeClass(
+                                                log.severity,
+                                            )}`}
+                                        >
+                                            {log.severity}
+                                        </span>
+
+                                        <div className='min-w-0 flex-1'>
+                                            <div className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
+                                                <span className='font-mono text-xs text-muted-foreground'>
+                                                    {formatLogTimestamp(
+                                                        log.lastSeenUtc,
+                                                    )}
+                                                </span>
+
+                                                <span className='font-mono text-xs text-foreground'>
+                                                    {log.source}
+                                                </span>
+
+                                                <span className='font-mono text-xs text-muted-foreground'>
+                                                    · {log.category}
+                                                </span>
+
+                                                {log.count > 1 && (
+                                                    <span className='rounded bg-secondary px-1.5 py-0.5 text-[0.65rem] font-semibold text-foreground'>
+                                                        ×{log.count}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            <p className='mt-0.5 truncate text-foreground'>
+                                                {log.message}
+                                            </p>
+                                        </div>
+
+                                        <span className='mt-0.5 shrink-0 text-xs text-muted-foreground'>
+                                            {isExpanded ? '▲' : '▼'}
+                                        </span>
+                                    </button>
+
+                                    {isExpanded && (
+                                        <div className='border-t border-border px-3 py-2 text-xs'>
+                                            <p className='text-muted-foreground'>
+                                                <span className='font-semibold'>
+                                                    Première occurrence :
+                                                </span>{' '}
+                                                {formatLogTimestamp(
+                                                    log.timestampUtc,
+                                                )}
+                                            </p>
+
+                                            <p className='mt-1 text-muted-foreground'>
+                                                <span className='font-semibold'>
+                                                    Dernière occurrence :
+                                                </span>{' '}
+                                                {formatLogTimestamp(
+                                                    log.lastSeenUtc,
+                                                )}
+                                            </p>
+
+                                            {log.details && (
+                                                <pre className='mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 p-2 text-[0.7rem] text-muted-foreground'>
+                                                    {log.details}
+                                                </pre>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+
             <div>
                 <h2 className='text-2xl font-semibold text-foreground'>
                     Gestion des joueurs
@@ -4214,425 +4700,6 @@ export default function AdminPage() {
             </div>
 
             {/* ============================================================
-                Utilisateurs
-                ============================================================ */}
-            <div className='max-w-4xl space-y-3'>
-                <h3 className='text-lg font-semibold text-foreground'>
-                    Utilisateurs
-                </h3>
-
-                <p className='text-sm text-muted-foreground'>
-                    Liste des comptes enregistrés. Assignez une équipe,
-                    gérez les rôles de commissaire, ou réinitialisez un
-                    mot de passe.
-                </p>
-
-                {usersError && (
-                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
-                        {usersError}
-                    </p>
-                )}
-
-                {usersSuccess && (
-                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
-                        {usersSuccess}
-                    </p>
-                )}
-
-                {usersLoading && (
-                    <p className='text-sm text-muted-foreground'>
-                        Chargement...
-                    </p>
-                )}
-
-                {!usersLoading && adminUsers.length === 0 && (
-                    <p className='text-sm text-muted-foreground'>
-                        Aucun utilisateur enregistré.
-                    </p>
-                )}
-
-                {!usersLoading && adminUsers.length > 0 && (
-                    <div className='overflow-x-auto rounded-lg border border-border bg-card'>
-                        <table className='w-full min-w-[720px] text-sm'>
-                            <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
-                                <tr>
-                                    <th className='px-2 py-2 text-left font-medium'>Utilisateur</th>
-                                    <th className='px-2 py-2 text-left font-medium'>Équipe</th>
-                                    <th className='px-2 py-2 text-center font-medium'>Commissaire</th>
-                                    <th className='px-2 py-2 text-left font-medium'>
-                                        Dernière activité
-                                    </th>
-                                    <th className='px-2 py-2 text-center font-medium'>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className='text-foreground'>
-                                {adminUsers.map((u, index) => (
-                                    <tr
-                                        key={u.id}
-                                        className={
-                                            index % 2 === 0
-                                                ? 'bg-transparent'
-                                                : 'bg-secondary/20'
-                                        }
-                                    >
-                                        <td className='px-2 py-2 align-top'>
-                                            <div className='font-medium'>
-                                                {u.userName}
-                                            </div>
-                                        </td>
-                                        <td className='px-2 py-2 align-top'>
-                                            {u.fantasyTeamName ?? '—'}
-                                        </td>
-                                        <td className='px-2 py-2 text-center align-top'>
-                                            {u.isCommissioner ? '✓' : ''}
-                                        </td>
-                                        <td className='px-2 py-2 text-left align-top text-muted-foreground'>
-                                            {formatLastActive(u.lastActiveAt)}
-                                        </td>
-                                        <td className='px-2 py-2 text-center align-top'>
-                                            <div className='flex flex-wrap items-center justify-center gap-2'>
-                                                {/* Promote / demote.
-                                                    Demote is hidden for
-                                                    protected commissioners
-                                                    and for our own row; the
-                                                    backend refuses both
-                                                    anyway, this just avoids
-                                                    a dead button. */}
-                                                {u.isCommissioner ? (
-                                                    u.isProtected ? (
-                                                        <span
-                                                            className='cursor-default rounded border border-border bg-secondary/40 px-2 py-0.5 text-xs italic text-muted-foreground'
-                                                            title='Commissaire protégé : ne peut pas être rétrogradé'
-                                                        >
-                                                            🔒 Protégé
-                                                        </span>
-                                                    ) : authUser?.id === u.id ? (
-                                                        <span
-                                                            className='cursor-default rounded border border-border bg-secondary/40 px-2 py-0.5 text-xs italic text-muted-foreground'
-                                                            title='Vous ne pouvez pas retirer votre propre rôle'
-                                                        >
-                                                            Vous-même
-                                                        </span>
-                                                    ) : (
-                                                        <button
-                                                            type='button'
-                                                            onClick={() => void handleDemote(u.id)}
-                                                            disabled={usersBusyId === u.id}
-                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
-                                                        >
-                                                            Retirer commissaire
-                                                        </button>
-                                                    )
-                                                ) : (
-                                                    <button
-                                                        type='button'
-                                                        onClick={() => void handlePromote(u.id)}
-                                                        disabled={usersBusyId === u.id}
-                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
-                                                    >
-                                                        Promouvoir
-                                                    </button>
-                                                )}
-
-                                                {/* Team assign / unassign */}
-                                                {u.fantasyTeamId == null ? (
-                                                    <>
-                                                        {assignTeamFor === u.id ? (
-                                                            <>
-                                                                <select
-                                                                    value={assignTeamValue}
-                                                                    onChange={(event) =>
-                                                                        setAssignTeamValue(event.target.value)
-                                                                    }
-                                                                    className='rounded border border-border bg-background px-2 py-0.5 text-xs'
-                                                                >
-                                                                    <option value=''>— équipe —</option>
-                                                                    {teams
-                                                                        .filter((t) =>
-                                                                            adminUsers.every(
-                                                                                (other) =>
-                                                                                    other.fantasyTeamId !== t.id,
-                                                                            ),
-                                                                        )
-                                                                        .map((t) => (
-                                                                            <option key={t.id} value={t.id}>
-                                                                                {t.name}
-                                                                            </option>
-                                                                        ))}
-                                                                </select>
-                                                                <button
-                                                                    type='button'
-                                                                    onClick={() => void handleAssignTeam(u.id)}
-                                                                    disabled={usersBusyId === u.id}
-                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
-                                                                >
-                                                                    OK
-                                                                </button>
-                                                                <button
-                                                                    type='button'
-                                                                    onClick={() => {
-                                                                        setAssignTeamFor(null);
-                                                                        setAssignTeamValue('');
-                                                                    }}
-                                                                    className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
-                                                                >
-                                                                    Annuler
-                                                                </button>
-                                                            </>
-                                                        ) : (
-                                                            <button
-                                                                type='button'
-                                                                onClick={() => {
-                                                                    setAssignTeamFor(u.id);
-                                                                    setAssignTeamValue('');
-                                                                }}
-                                                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
-                                                            >
-                                                                Assigner équipe
-                                                            </button>
-                                                        )}
-                                                    </>
-                                                ) : (
-                                                    <button
-                                                        type='button'
-                                                        onClick={() => void handleUnassignTeam(u.id)}
-                                                        disabled={usersBusyId === u.id}
-                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
-                                                    >
-                                                        Désassigner équipe
-                                                    </button>
-                                                )}
-
-                                                {/* Reset password */}
-                                                {resetPasswordFor === u.id ? (
-                                                    <>
-                                                        <input
-                                                            type='text'
-                                                            value={resetPasswordValue}
-                                                            onChange={(event) =>
-                                                                setResetPasswordValue(event.target.value)
-                                                            }
-                                                            placeholder='Nouveau mot de passe'
-                                                            className='rounded border border-border bg-background px-2 py-0.5 text-xs'
-                                                        />
-                                                        <button
-                                                            type='button'
-                                                            onClick={() => void handleResetPassword(u.id)}
-                                                            disabled={usersBusyId === u.id}
-                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
-                                                        >
-                                                            OK
-                                                        </button>
-                                                        <button
-                                                            type='button'
-                                                            onClick={() => {
-                                                                setResetPasswordFor(null);
-                                                                setResetPasswordValue('');
-                                                            }}
-                                                            className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
-                                                        >
-                                                            Annuler
-                                                        </button>
-                                                    </>
-                                                ) : (
-                                                    <button
-                                                        type='button'
-                                                        onClick={() => {
-                                                            setResetPasswordFor(u.id);
-                                                            setResetPasswordValue('');
-                                                        }}
-                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
-                                                    >
-                                                        Réinitialiser mot de passe
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-
-
-            {/* ============================================================
-                Journaux d'événements (erreurs + avertissements)
-                ============================================================ */}
-            <div className='max-w-4xl space-y-3'>
-                <h3 className='text-lg font-semibold text-foreground'>
-                    Journaux d'événements
-                </h3>
-
-                <p className='text-sm text-muted-foreground'>
-                    Erreurs et avertissements capturés automatiquement :
-                    échecs HTTP (429, 5xx), pannes des jobs planifiés.
-                    Les événements identiques dans une fenêtre de 60
-                    secondes sont regroupés.
-                </p>
-
-                {eventLogsError && (
-                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
-                        {eventLogsError}
-                    </p>
-                )}
-
-                <div className='flex flex-wrap items-end gap-2'>
-                    <div>
-                        <label className='text-xs font-medium text-muted-foreground'>
-                            Sévérité
-                        </label>
-                        <select
-                            value={eventLogsSeverityFilter}
-                            onChange={(e) =>
-                                setEventLogsSeverityFilter(
-                                    e.target.value as '' | 'Warning' | 'Error',
-                                )
-                            }
-                            className='mt-0.5 block rounded-lg border border-border bg-card px-2 py-1.5 text-sm text-foreground'
-                        >
-                            <option value=''>Tout</option>
-                            <option value='Warning'>Avertissements</option>
-                            <option value='Error'>Erreurs</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className='text-xs font-medium text-muted-foreground'>
-                            Source (préfixe)
-                        </label>
-                        <input
-                            type='text'
-                            value={eventLogsSourceFilter}
-                            onChange={(e) =>
-                                setEventLogsSourceFilter(e.target.value)
-                            }
-                            placeholder='ex: NhlApi, ScheduledJob:'
-                            className='mt-0.5 block rounded-lg border border-border bg-card px-2 py-1.5 text-sm text-foreground'
-                        />
-                    </div>
-
-                    <button
-                        type='button'
-                        onClick={() => void loadEventLogs()}
-                        disabled={eventLogsLoading}
-                        className={secondaryButtonClass}
-                    >
-                        {eventLogsLoading ? 'Chargement...' : 'Rafraîchir'}
-                    </button>
-
-                    <button
-                        type='button'
-                        onClick={() => void handleClearEventLogs()}
-                        disabled={eventLogsClearing || eventLogs.length === 0}
-                        className={dangerButtonClass}
-                    >
-                        {eventLogsClearing ? 'Effacement...' : 'Tout effacer'}
-                    </button>
-                </div>
-
-                {!eventLogsLoading && eventLogs.length === 0 && !eventLogsError && (
-                    <p className='rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground'>
-                        Aucun événement enregistré. Bonne nouvelle.
-                    </p>
-                )}
-
-                {eventLogs.length > 0 && (
-                    <div className='space-y-1'>
-                        {eventLogs.map((log) => {
-                            const isExpanded = eventLogsExpandedId === log.id;
-
-                            return (
-                                <div
-                                    key={log.id}
-                                    className='rounded-lg border border-border bg-card'
-                                >
-                                    <button
-                                        type='button'
-                                        onClick={() =>
-                                            setEventLogsExpandedId(
-                                                isExpanded ? null : log.id,
-                                            )
-                                        }
-                                        className='flex w-full cursor-pointer items-start gap-2 px-3 py-2 text-left text-sm hover:bg-secondary/50'
-                                    >
-                                        <span
-                                            className={`mt-0.5 inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide ${severityBadgeClass(
-                                                log.severity,
-                                            )}`}
-                                        >
-                                            {log.severity}
-                                        </span>
-
-                                        <div className='min-w-0 flex-1'>
-                                            <div className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
-                                                <span className='font-mono text-xs text-muted-foreground'>
-                                                    {formatLogTimestamp(
-                                                        log.lastSeenUtc,
-                                                    )}
-                                                </span>
-
-                                                <span className='font-mono text-xs text-foreground'>
-                                                    {log.source}
-                                                </span>
-
-                                                <span className='font-mono text-xs text-muted-foreground'>
-                                                    · {log.category}
-                                                </span>
-
-                                                {log.count > 1 && (
-                                                    <span className='rounded bg-secondary px-1.5 py-0.5 text-[0.65rem] font-semibold text-foreground'>
-                                                        ×{log.count}
-                                                    </span>
-                                                )}
-                                            </div>
-
-                                            <p className='mt-0.5 truncate text-foreground'>
-                                                {log.message}
-                                            </p>
-                                        </div>
-
-                                        <span className='mt-0.5 shrink-0 text-xs text-muted-foreground'>
-                                            {isExpanded ? '▲' : '▼'}
-                                        </span>
-                                    </button>
-
-                                    {isExpanded && (
-                                        <div className='border-t border-border px-3 py-2 text-xs'>
-                                            <p className='text-muted-foreground'>
-                                                <span className='font-semibold'>
-                                                    Première occurrence :
-                                                </span>{' '}
-                                                {formatLogTimestamp(
-                                                    log.timestampUtc,
-                                                )}
-                                            </p>
-
-                                            <p className='mt-1 text-muted-foreground'>
-                                                <span className='font-semibold'>
-                                                    Dernière occurrence :
-                                                </span>{' '}
-                                                {formatLogTimestamp(
-                                                    log.lastSeenUtc,
-                                                )}
-                                            </p>
-
-                                            {log.details && (
-                                                <pre className='mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 p-2 text-[0.7rem] text-muted-foreground'>
-                                                    {log.details}
-                                                </pre>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
-
-            {/* ============================================================
                 Outils de maintenance
                 ============================================================ */}
             <div className='max-w-2xl space-y-3'>
@@ -4645,6 +4712,59 @@ export default function AdminPage() {
                     données. Ces opérations s'exécutent en arrière-plan
                     et peuvent prendre plusieurs minutes.
                 </p>
+
+                {capFreezeError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {capFreezeError}
+                    </p>
+                )}
+
+                <button
+                    type='button'
+                    onClick={() => void handleStartCapFreezeContracts()}
+                    disabled={
+                        capFreezeStarting ||
+                        capFreezeJob?.status === 'Running'
+                    }
+                    className={secondaryButtonClass}
+                >
+                    {capFreezeStarting
+                        ? 'Démarrage...'
+                        : capFreezeJob?.status === 'Running'
+                            ? 'En cours...'
+                            : 'Rafraîchir les contrats (CapFreeze)'}
+                </button>
+
+                <p className='text-xs text-muted-foreground'>
+                    Met à jour les contrats, les années et les statuts de tous
+                    les joueurs depuis CapFreeze. Ignore les joueurs en
+                    contrats manuels.
+                </p>
+
+                {capFreezeJob && (
+                    <div className='rounded-lg border border-border bg-card px-3 py-2 text-sm'>
+                        <p className='text-foreground'>
+                            <span className='font-semibold'>Statut :</span>{' '}
+                            {capFreezeJob.status}
+                        </p>
+
+                        {capFreezeJob.message && (
+                            <p className='text-muted-foreground'>
+                                {capFreezeJob.message}
+                            </p>
+                        )}
+
+                        {capFreezeJob.error && (
+                            <p className='text-destructive'>
+                                {capFreezeJob.error}
+                            </p>
+                        )}
+
+                        {capFreezeJob.status === 'Completed' && (
+                            <p className='text-emerald-400'>Terminé.</p>
+                        )}
+                    </div>
+                )}
 
                 {refreshAllError && (
                     <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>

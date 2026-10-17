@@ -5,6 +5,7 @@ using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.Jobs;
 using NhlFantasyLeague.api.Services.NHL;
 using NhlFantasyLeague.api.Services.Health;
+using NhlFantasyLeague.api.Services.CapFreeze;
 
 namespace NhlFantasyLeague.api.Controllers
 {
@@ -64,6 +65,28 @@ namespace NhlFantasyLeague.api.Controllers
                 var result = await svc.RefreshAsync(
                     ctx,
                     CancellationToken.None);
+
+                ctx.Result = result;
+            });
+
+            return Ok(new
+            {
+                jobId = job.Id,
+                name = job.Name,
+                startedAt = job.StartedAt,
+                message = "Job started. Poll GET /api/Jobs/{jobId} for progress."
+            });
+        }
+
+        [HttpPost("capfreeze-contracts/start")]
+        public IActionResult StartCapFreezeContracts()
+        {
+            var job = _jobs.Start("capfreeze-contracts", async (ctx, sp) =>
+            {
+                var svc = sp.GetRequiredService<CapFreezeSyncService>();
+                ctx.Message = "Refreshing contracts from CapFreeze for all teams...";
+
+                var result = await svc.SyncAllCapFreezeTeamsAsync();
 
                 ctx.Result = result;
             });

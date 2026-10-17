@@ -16,6 +16,7 @@ import {
     onUnauthorized,
     register as apiRegister,
     setPlayerPageStyle as apiSetPlayerPageStyle,
+    updatePreferences as apiUpdatePreferences,
     type AuthUser,
     type LoginRequest,
     type PlayerPageStyle,
@@ -31,14 +32,10 @@ interface AuthContextValue {
     isAuthenticated: boolean;
     isCommissioner: boolean;
 
-    /**
-     * PlayerPage visual style for the current user. Defaults to
-     * 'Classic' when logged out or before the user has chosen one.
-     */
     playerPageStyle: PlayerPageStyle;
 
-    /** Updates the style, persists it, and refreshes the cached user. */
     updatePlayerPageStyle: (style: PlayerPageStyle) => Promise<void>;
+    updatePreferences: (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean }) => Promise<void>;
 
     login: (request: LoginRequest) => Promise<AuthUser>;
     register: (request: RegisterRequest) => Promise<AuthUser>;
@@ -48,16 +45,6 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-/**
- * Wraps the app and keeps the current user in memory. On mount it
- * calls GET /api/Auth/me; if the auth cookie is present and valid,
- * the user loads. If it 401s, we treat that as "logged out".
- *
- * Logout always redirects to /connexion. The redirect is fired
- * BEFORE clearing the user so that any auth-aware wrapper
- * (AdminRoute, etc.) cannot race the navigation and land the user
- * somewhere else.
- */
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<AuthUser | null>(null);
     const [loading, setLoading] = useState(true);
@@ -104,45 +91,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
-    /**
-     * Reset every user-scoped module-level store when the current
-     * user identity changes.
-     *
-     * WHY THIS EXISTS
-     *
-     * The marketplace stores (direct-offer draft, pick selections,
-     * popup restoration) are module-level singletons that survive
-     * unmounts on purpose, so a PlayerPage round-trip does not lose
-     * an in-progress form. But they are not aware of WHO the user
-     * is: when a user logs out and a different user logs in inside
-     * the same browser tab, the store still holds the previous
-     * user's selection. That is how the "Créer" tab can end up
-     * pre-populated with a target team that is the current user's
-     * own team (the previous user had picked it, and it happens to
-     * belong to the current user).
-     *
-     * The effect fires on every change of user?.id:
-     *   - from undefined to a value (initial /Auth/me resolved),
-     *   - from a value to a different value (login as another account),
-     *   - from a value to undefined (logout or 401).
-     *
-     * Every reset function is a no-op when the store is already in
-     * its default state, so the mount-time run costs nothing.
-     */
     useEffect(() => {
         resetDirectOfferDraft();
         clearDirectPicks();
         clearMarketplacePopupRestore();
     }, [user?.id]);
 
-    // Toggle a class on <html> based on the user's PlayerPage style.
-    //
-    //   Neon    -> <html class="aura-neon">
-    //   Classic -> no class (also the default when logged out)
-    //
-    // The mobile-only rule in index.css that disables aura pulse
-    // animations is scoped with html:not(.aura-neon), so when this
-    // class is present, every aura keeps pulsing on phones.
     useEffect(() => {
         const style = user?.playerPageStyle ?? 'Classic';
         const root = document.documentElement;
@@ -156,7 +110,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const login = useCallback(async (request: LoginRequest) => {
         const me = await apiLogin(request);
-        // Fresh session: drop any cached responses from before login.
         clearApiCache();
         setUser(me);
         return me;
@@ -176,13 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // Ignore network errors on logout.
         }
 
-        // Wipe all cached API responses so the next session starts clean.
         clearApiCache();
-
-        // Redirect first, then clear the user. Doing it in this
-        // order prevents auth-aware wrappers (like AdminRoute) from
-        // reacting to the null user and redirecting to a fallback
-        // route before we get to /connexion.
         navigate('/connexion', { replace: true });
         setUser(null);
     }, [navigate]);
@@ -190,6 +137,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const updatePlayerPageStyle = useCallback(
         async (style: PlayerPageStyle) => {
             const me = await apiSetPlayerPageStyle(style);
+            setUser(me);
+        },
+        [],
+    );
+
+    const updatePreferences = useCallback(
+        async (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean }) => {
+            const me = await apiUpdatePreferences(prefs);
             setUser(me);
         },
         [],
@@ -203,6 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             isCommissioner: user?.isCommissioner ?? false,
             playerPageStyle: user?.playerPageStyle ?? 'Classic',
             updatePlayerPageStyle,
+            updatePreferences,
             login,
             register,
             logout,
@@ -212,6 +168,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             user,
             loading,
             updatePlayerPageStyle,
+            updatePreferences,
             login,
             register,
             logout,
@@ -222,7 +179,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-/** Reads the auth context. Must be used inside <AuthProvider>. */
 export function useAuth(): AuthContextValue {
     const ctx = useContext(AuthContext);
 

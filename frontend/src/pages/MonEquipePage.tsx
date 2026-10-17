@@ -60,9 +60,18 @@ function compactSalary(salary: number): string {
  */
 function contractYears(yearsRemaining: number): string {
     return yearsRemaining > 1
-        ? `${yearsRemaining}ans`
-        : '1an';
+        ? `${yearsRemaining} ans`
+        : '1 an';
 }
+
+/**
+ * Couleur utilisée pour un contrat qui n'a plus qu'une seule
+ * année restante. Jaune vif, distinct du vert utilisé pour les
+ * contrats "sains" et du or (#FFC72C) réservé au FP et au
+ * classement, pour que le manager repère immédiatement les
+ * joueurs à re-signer à la fin de la saison.
+ */
+const EXPIRING_CONTRACT_COLOR = '#FACC15';
 
 /**
  * Formate une ligne de contrat en mode compact :
@@ -70,11 +79,29 @@ function contractYears(yearsRemaining: number): string {
  *
  * Utilisé uniquement dans le cas à 2 contrats, où la place
  * horizontale est comptée.
+ *
+ * Un contrat qui n'a plus qu'une seule année restante est rendu
+ * entièrement en jaune (salaire + durée), pour signaler au
+ * manager que le joueur sera à re-signer à la fin de la saison.
+ * L'arrow "→" qui sépare deux contrats reste verte : elle
+ * n'appartient à aucun des deux contrats.
  */
-function compactContract(contract: PlayerContractLine): string {
-    return `${compactSalary(contract.salary)}·${contractYears(
-        contract.yearsRemaining,
-    )}`;
+function compactContract(contract: PlayerContractLine): React.ReactNode {
+    const content = (
+        <>
+            {compactSalary(contract.salary)}
+            <span className='mx-0.5 font-bold'>·</span>
+            {contractYears(contract.yearsRemaining)}
+        </>
+    );
+
+    return contract.yearsRemaining === 1 ? (
+        <span style={{ color: EXPIRING_CONTRACT_COLOR }}>
+            {content}
+        </span>
+    ) : (
+        content
+    );
 }
 
 /**
@@ -84,11 +111,26 @@ function compactContract(contract: PlayerContractLine): string {
  *
  * Utilisé dans le cas à 1 seul contrat, qui est le cas par défaut
  * et qui a la place de respirer.
+ *
+ * Même règle que compactContract : un contrat à 1 an est rendu
+ * entièrement en jaune.
  */
-function spacedContract(contract: PlayerContractLine): string {
-    return `${compactSalary(contract.salary)} · ${contractYears(
-        contract.yearsRemaining,
-    )}`;
+function spacedContract(contract: PlayerContractLine): React.ReactNode {
+    const content = (
+        <>
+            {compactSalary(contract.salary)}
+            <span className='mx-1 font-bold'>·</span>
+            {contractYears(contract.yearsRemaining)}
+        </>
+    );
+
+    return contract.yearsRemaining === 1 ? (
+        <span style={{ color: EXPIRING_CONTRACT_COLOR }}>
+            {content}
+        </span>
+    ) : (
+        content
+    );
 }
 
 /**
@@ -116,7 +158,7 @@ function contractText(
     return (
         <>
             {compactContract(current)}
-            <span className='font-bold'> | </span>
+            <span className='inline-block mx-0.5 text-[0.7rem] text-[#22C55E] opacity-80 scale-x-[0.75]'>→</span>
             {compactContract(second)}
         </>
     );
@@ -297,7 +339,7 @@ function sortByFantasyPoints(entries: RosterEntry[]): RosterEntry[] {
  *   FP  42 -> 32  (-10)  ==> nom  +10px
  */
 const LINEUP_GRID_COLUMNS =
-    'var(--lineup-grid-columns, 22px minmax(0, 1fr) 24px 22px 22px 27px 38px 24px 24px 21px)';
+    'var(--lineup-grid-columns, 22px minmax(0, 1fr) 22px 22px 22px 22px 44px 25px 25px 23px)';
 
 // Cyan separator glow, matching the segmented button accent
 // (#00E5FF). Applied to the bottom border of the last row of a
@@ -385,11 +427,21 @@ const LineupHeader = memo(function LineupHeader({
                 </>
             )}
 
+            {/* ATOI for skaters, shutouts for goalies. The label
+                swaps with the position, matching what the row cell
+                renders below. Goalie SO uses the default size (same
+                as W / L / OTL) because a 2-character label reads
+                badly at ATOI's reduced size; skater ATOI keeps the
+                smaller size it needs to fit "ATOI" in the column. */}
             <div
-                className='text-center text-[0.55rem] sm:text-[0.65rem]'
+                className={
+                    isGoalie
+                        ? 'text-center'
+                        : 'text-center text-[0.55rem] sm:text-[0.65rem]'
+                }
                 style={{ color: '#FFFFFF' }}
             >
-                ATOI
+                {isGoalie ? 'SO' : 'ATOI'}
             </div>
 
             <div
@@ -414,9 +466,11 @@ const LineupHeader = memo(function LineupHeader({
 const LineupRow = memo(function LineupRow({
     entry,
     isLastOfSection,
+    showContracts,
 }: {
     entry: RosterEntry;
     isLastOfSection: boolean;
+    showContracts: boolean;
 }) {
     const group = toLineupPositionGroup(entry.position);
     const isGoalie = group === 'G';
@@ -535,14 +589,17 @@ const LineupRow = memo(function LineupRow({
                   restent identiques.
                 - Polices et leadings inchangés. */}
             <div className='min-w-0 pl-1 text-left'>
-                <div className='truncate text-[0.90rem] leading-[1.18] text-foreground min-[400px]:text-[1rem] min-[400px]:leading-[1.19] translate-y-1'>
+                <div
+                    className={`truncate text-[0.90rem] leading-[1.18] text-foreground min-[400px]:text-[1rem] min-[400px]:leading-[1.19] ${showContracts && contracts ? 'translate-y-1' : ''
+                        }`}
+                >
                     {shortName}
                 </div>
-                {contracts && (
+                {showContracts && contracts && (
                     <div
                         className={`truncate leading-tight text-[#22C55E] translate-y-1 ${hasTwoContracts
-                                ? 'text-[0.60rem] max-sm:text-[0.55rem] max-[399px]:text-[0.50rem]'
-                                : 'text-[0.60rem] max-[399px]:text-[0.55rem]'
+                            ? 'text-[0.60rem] max-sm:text-[0.55rem] max-[399px]:text-[0.50rem]'
+                            : 'text-[0.60rem] max-[399px]:text-[0.55rem]'
                             }`}
                     >
                         {contracts}
@@ -583,8 +640,25 @@ const LineupRow = memo(function LineupRow({
                 </>
             )}
 
-            <div className='text-center text-[0.65rem] text-white min-[400px]:text-[0.75rem]'>
-                {atoi ?? '—'}
+            {/* Skaters show ATOI (per-game average, "MM:SS"), null
+                rendered as an em-dash so it is distinct from a real
+                "0:00". Goalies show shutouts (an integer, 0 meaning
+                "played but blanked nobody" is meaningful and stays
+                as "0"; null only when the goalie has no season row
+                at all, which is the fresh-install case and renders
+                as "—"). The value uses the standard goalie-stat
+                font size so it sits at the same visual weight as
+                W / L / OTL on the same row. */}
+            <div
+                className={
+                    isGoalie
+                        ? 'text-center text-[0.9rem] text-white min-[400px]:text-[1rem]'
+                        : 'text-center text-[0.65rem] text-white min-[400px]:text-[0.70rem]'
+                }
+            >
+                {isGoalie
+                    ? (s?.shutouts ?? '—')
+                    : (atoi ?? '—')}
             </div>
 
             {/* HIER et AJD : réduits de 0.95rem à 0.9rem sur ≥ 400px. */}
@@ -618,11 +692,13 @@ const LineupTable = memo(function LineupTable({
     defensemen,
     goalies,
     showSeparators,
+    showContracts,
 }: {
     forwards: RosterEntry[];
     defensemen: RosterEntry[];
     goalies: RosterEntry[];
     showSeparators: boolean;
+    showContracts: boolean;
 }) {
     const hasSkaters = forwards.length > 0 || defensemen.length > 0;
     const hasGoalies = goalies.length > 0;
@@ -664,6 +740,7 @@ const LineupTable = memo(function LineupTable({
                         key={entry.id}
                         entry={entry}
                         isLastOfSection={showSeparators && needsLine}
+                        showContracts={showContracts}
                     />
                 );
             })}
@@ -677,6 +754,7 @@ const LineupTable = memo(function LineupTable({
                         key={entry.id}
                         entry={entry}
                         isLastOfSection={showSeparators && needsLine}
+                        showContracts={showContracts}
                     />
                 );
             })}
@@ -689,6 +767,7 @@ const LineupTable = memo(function LineupTable({
                             key={entry.id}
                             entry={entry}
                             isLastOfSection={false}
+                            showContracts={showContracts}
                         />
                     ))}
                 </>
@@ -702,7 +781,7 @@ const LineupTable = memo(function LineupTable({
 // =====================================================================
 
 export default function MonEquipePage() {
-    const { user, loading: authLoading } = useAuth();
+    const { user, updatePreferences, loading: authLoading } = useAuth();
 
     const [searchParams, setSearchParams] = useSearchParams();
     const teamIdParam = searchParams.get('teamId');
@@ -713,6 +792,8 @@ export default function MonEquipePage() {
     const [activeView, setActiveView] = useState<
         'lineup' | 'cap' | 'draft'
     >('lineup');
+
+    const showContracts = user?.showContractsRoster ?? true;
 
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
 
@@ -1172,7 +1253,7 @@ export default function MonEquipePage() {
                                     because the glyphs are already
                                     thick enough to hollow out. */}
                                 <span
-                                    className={`text-2xl leading-none tracking-[0.02em] ${neonAuraOn ? `${auraPulseClass('text')} aura-mobile-keep` : ''
+                                    className={`text-xl leading-none tracking-[0.02em] ${neonAuraOn ? `${auraPulseClass('text')} aura-mobile-keep` : ''
                                         }`}
                                     style={{
                                         fontFamily: "'Grindy Brush', sans-serif",
@@ -1349,6 +1430,42 @@ export default function MonEquipePage() {
                             Repêchage
                         </button>
                     </div>
+
+                    {/* Contrats toggle. self-start overrides the
+                        column's items-center so the label aligns to
+                        the section's left edge (the "far left").
+                        translate-y-2 nudges it 8px down visually
+                        without changing its flex-flow position, so
+                        the header height is unchanged and nothing
+                        below moves. Only this label's className is
+                        touched; the segmented buttons above it and
+                        the picker above them stay exactly where they
+                        were. Same white-on-white styling as before:
+                        checkbox border, checkmark and label text are
+                        all white; dims to white/80 on hover. */}
+                    <label className="self-start translate-y-1.5 ml-1 flex items-center gap-2 cursor-pointer text-[0.7rem] font-semibold text-white select-none transition-colors hover:text-white/80">
+                        <div className="relative flex items-center justify-center">
+                            <input
+                                type="checkbox"
+                                checked={showContracts}
+                                onChange={(e) => void updatePreferences({ showContractsRoster: e.target.checked })}
+                                className="peer sr-only"
+                            />
+                            <div className="h-4 w-4 rounded border border-white/50 bg-[#050A18] transition-colors peer-checked:border-white peer-checked:bg-white/20" />
+                            <svg
+                                className="absolute h-3 w-3 text-white opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            >
+                                <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                        </div>
+                        <span>Contrats</span>
+                    </label>
                 </div>
             </div>
 
@@ -1359,6 +1476,7 @@ export default function MonEquipePage() {
                         defensemen={mainDefensemen}
                         goalies={mainGoalies}
                         showSeparators
+                        showContracts={showContracts}
                     />
 
                     <RosterSection title='Banc'>
@@ -1367,6 +1485,7 @@ export default function MonEquipePage() {
                             defensemen={benchDefensemen}
                             goalies={benchGoalies}
                             showSeparators
+                            showContracts={showContracts}
                         />
                     </RosterSection>
 
@@ -1376,6 +1495,7 @@ export default function MonEquipePage() {
                             defensemen={prospectDefensemen}
                             goalies={prospectGoalies}
                             showSeparators={false}
+                            showContracts={showContracts}
                         />
                     </RosterSection>
                 </>

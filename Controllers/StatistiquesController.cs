@@ -175,6 +175,17 @@ namespace NhlFantasyLeague.api.Controllers
 
                 seasonStats.TryGetValue(entry.PlayerId, out var stats);
 
+                int? age = null;
+                if (player.BirthDate.HasValue)
+                {
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    age = today.Year - player.BirthDate.Value.Year;
+                    if (player.BirthDate.Value > today.AddYears(-age.Value))
+                    {
+                        age--;
+                    }
+                }
+
                 string? atoi = null;
 
                 if (toiGamesByPlayer.TryGetValue(
@@ -229,7 +240,8 @@ namespace NhlFantasyLeague.api.Controllers
                     LastName = player.LastName,
                     Position = player.Position,
                     NhlTeamAbbreviation =
-          player.NhlTeam?.Abbreviation ?? string.Empty,
+player.NhlTeam?.Abbreviation ?? string.Empty,
+                    Age = age,
                     FantasyTeamId = entry.FantasyTeamId,
                     FantasyTeamName = entry.FantasyTeam?.Name,
 

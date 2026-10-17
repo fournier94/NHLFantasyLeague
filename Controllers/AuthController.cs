@@ -9,12 +9,6 @@ using NhlFantasyLeague.api.Services.Auth;
 
 namespace NhlFantasyLeague.api.Controllers
 {
-    /// <summary>
-    /// Login, logout, registration, and "who am I".
-    ///
-    /// Login and register are the only anonymous endpoints. Everything
-    /// else requires an authenticated user.
-    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class AuthController : ControllerBase
@@ -36,16 +30,11 @@ namespace NhlFantasyLeague.api.Controllers
             _dbContext = dbContext;
         }
 
-        // -----------------------------------------------------------------
-        // Public
-        // -----------------------------------------------------------------
-
         [AllowAnonymous]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
-            var user = await _userManager.FindByNameAsync(
-                request.UserName.Trim());
+            var user = await _userManager.FindByNameAsync(request.UserName.Trim());
 
             if (user == null)
             {
@@ -96,18 +85,12 @@ namespace NhlFantasyLeague.api.Controllers
                 return BadRequest(new { message = error });
             }
 
-            // Sign the new user in right away.
             await _signInManager.SignInAsync(
                 user, isPersistent: true);
 
             return Ok(await BuildAuthUserAsync(user));
         }
 
-        /// <summary>
-        /// Returns the list of FantasyTeams that no user owns yet. Used
-        /// by the registration form's team picker. Anonymous: a
-        /// prospective user needs this before he has an account.
-        /// </summary>
         [AllowAnonymous]
         [HttpGet("unclaimed-teams")]
         public async Task<IActionResult> GetUnclaimedTeams()
@@ -129,10 +112,6 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(teams);
         }
-
-        // -----------------------------------------------------------------
-        // Authenticated
-        // -----------------------------------------------------------------
 
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
@@ -182,43 +161,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(new { message = "Mot de passe mis à jour." });
         }
 
-        // -----------------------------------------------------------------
-        // Helpers
-        // -----------------------------------------------------------------
-
-        private async Task<AuthUserDto> BuildAuthUserAsync(ApplicationUser user)
-        {
-            string? teamName = null;
-
-            if (user.FantasyTeamId.HasValue)
-            {
-                teamName = await _dbContext.FantasyTeams
-                    .Where(t => t.Id == user.FantasyTeamId.Value)
-                    .Select(t => t.Name)
-                    .FirstOrDefaultAsync();
-            }
-
-            return new AuthUserDto
-            {
-                Id = user.Id,
-                UserName = user.UserName ?? string.Empty,
-                DisplayName = user.DisplayName,
-                FantasyTeamId = user.FantasyTeamId,
-                FantasyTeamName = teamName,
-                IsCommissioner = await _authService.IsCommissionerAsync(user),
-                PlayerPageStyle = user.PlayerPageStyle.ToString()
-            };
-        }
-
-        // -----------------------------------------------------------------
-        // Player page style preference
-        // -----------------------------------------------------------------
-
-        /// <summary>
-        /// Updates the current user's PlayerPage visual style. Returns
-        /// the refreshed AuthUserDto so the SPA can swap its cached
-        /// user object in one round trip.
-        /// </summary>
         [HttpPost("player-page-style")]
         public async Task<IActionResult> SetPlayerPageStyle(
             [FromBody] SetPlayerPageStyleRequest request)
@@ -246,6 +188,58 @@ namespace NhlFantasyLeague.api.Controllers
             await _userManager.UpdateAsync(user);
 
             return Ok(await BuildAuthUserAsync(user));
+        }
+
+        [HttpPost("preferences")]
+        public async Task<IActionResult> UpdatePreferences(
+            [FromBody] UpdatePreferencesRequest request)
+        {
+            var user = await _userManager.GetUserAsync(User);
+
+            if (user == null)
+            {
+                return Unauthorized();
+            }
+
+            if (request.ShowContractsStats.HasValue)
+            {
+                user.ShowContractsStats = request.ShowContractsStats.Value;
+            }
+
+            if (request.ShowContractsRoster.HasValue)
+            {
+                user.ShowContractsRoster = request.ShowContractsRoster.Value;
+            }
+
+            await _userManager.UpdateAsync(user);
+
+            return Ok(await BuildAuthUserAsync(user));
+        }
+
+        private async Task<AuthUserDto> BuildAuthUserAsync(ApplicationUser user)
+        {
+            string? teamName = null;
+
+            if (user.FantasyTeamId.HasValue)
+            {
+                teamName = await _dbContext.FantasyTeams
+                    .Where(t => t.Id == user.FantasyTeamId.Value)
+                    .Select(t => t.Name)
+                    .FirstOrDefaultAsync();
+            }
+
+            return new AuthUserDto
+            {
+                Id = user.Id,
+                UserName = user.UserName ?? string.Empty,
+                DisplayName = user.DisplayName,
+                FantasyTeamId = user.FantasyTeamId,
+                FantasyTeamName = teamName,
+                IsCommissioner = await _authService.IsCommissionerAsync(user),
+                PlayerPageStyle = user.PlayerPageStyle.ToString(),
+                ShowContractsStats = user.ShowContractsStats,
+                ShowContractsRoster = user.ShowContractsRoster
+            };
         }
     }
 }

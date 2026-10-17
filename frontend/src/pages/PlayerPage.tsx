@@ -2089,17 +2089,17 @@ export default function PlayerPage() {
     }
 
     const closeRest = [
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 2).toFixed(2)}px rgba(0, 168, 255, 0.7)`,
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 3).toFixed(2)}px rgba(0, 168, 255, 0.4)`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 0) * 1.2).toFixed(2)}px #FFFFFF`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 1) * 1.5).toFixed(2)}px #EF4444`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 2) * 1.5).toFixed(2)}px rgba(239, 68, 68, 0.9)`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 3) * 1.5).toFixed(2)}px rgba(239, 68, 68, 0.6)`,
     ].join(', ');
 
     const closePeak = [
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 0).toFixed(2)}px #F2F5FA`,
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 1).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 2).toFixed(2)}px #00A8FF`,
-        `0 0 ${auraRangeFor(closeAura, 'playerPageCloseButton', 3).toFixed(2)}px rgba(0, 168, 255, 0.9)`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 0) * 1.5).toFixed(2)}px #FFFFFF`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 1) * 2.0).toFixed(2)}px #EF4444`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 2) * 2.0).toFixed(2)}px #EF4444`,
+        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 3) * 2.0).toFixed(2)}px rgba(239, 68, 68, 0.9)`,
     ].join(', ');
 
     // Use the aura-only color so the logo glow stays visible for
@@ -2122,11 +2122,14 @@ export default function PlayerPage() {
     ].join(' ');
 
     const closeButtonClass = cn(
-        'pointer-events-auto cursor-pointer rounded-md bg-transparent px-3 py-1.5 text-sm font-bold text-foreground transition-colors hover:bg-secondary',
+        'pointer-events-auto cursor-pointer rounded-md bg-transparent px-3 py-1.5 text-[0.95rem] font-normal text-white transition-colors hover:bg-secondary',
         !isAuraOff(closeAura) ? auraPulseClass('text') : '',
     );
 
     const closeButtonStyle = {
+        WebkitTextStrokeWidth: '1.75px',
+        WebkitTextStrokeColor: '#EF4444',
+        paintOrder: 'stroke fill',
         ...(!isAuraOff(closeAura)
             ? auraPulseStyle(closeRest, closePeak)
             : {}),

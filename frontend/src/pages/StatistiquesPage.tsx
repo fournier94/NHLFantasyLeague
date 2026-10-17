@@ -15,7 +15,9 @@ import { getFantasyTeamColor } from '@/lib/fantasyTeamColors';
 import {
     getTopScorers,
     type TopScorerRow,
+    type PlayerContractLine,
 } from '@/api/client';
+import { getStatsFilters, setStatsFilters } from '@/lib/statsFiltersState';
 
 type MainTab = 'players' | 'injuries' | 'teams';
 
@@ -51,7 +53,13 @@ type SortKey =
     | 'assists'
     | 'gamesPlayed'
     | 'hatTricks'
-    | 'timeOnIce';
+    | 'timeOnIce'
+    | 'wins'
+    | 'losses'
+    | 'overtimeLosses'
+    | 'shutouts'
+    | 'savePercentage'
+    | 'goalsAgainstAverage';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -165,6 +173,77 @@ const FANTASY_TEAM_SHORT_NAMES: Record<string, string> = {
 
 function shortTeamName(name: string): string {
     return FANTASY_TEAM_SHORT_NAMES[name] ?? name;
+}
+
+/**
+ * Couleur utilisée pour un contrat qui n'a plus qu'une seule
+ * année restante. Même jaune que sur MonEquipePage : jaune vif,
+ * distinct du vert des contrats "sains" et du or (#FFC72C)
+ * réservé au FP et au classement.
+ */
+const EXPIRING_CONTRACT_COLOR = '#FACC15';
+
+/**
+ * Formate une ligne de contrat pour le tableau des pointeurs.
+ * Même logique que MonEquipePage : "10M · 5 ans" ou "10M · 1 an".
+ *
+ * Un contrat qui n'a plus qu'une seule année restante est rendu
+ * entièrement en jaune (salaire + durée), pour signaler au
+ * manager que le joueur sera à re-signer à la fin de la saison.
+ */
+function formatContract(c: PlayerContractLine | null): React.ReactNode {
+    if (!c) return '';
+    const salary = (c.salary / 1_000_000).toFixed(2).replace(/\.?0+$/, '') + 'M';
+    const years = c.yearsRemaining > 1 ? `${c.yearsRemaining} ans` : '1 an';
+
+    const content = (
+        <>
+            {salary}
+            <span className='mx-1 font-bold'>·</span>
+            {years}
+        </>
+    );
+
+    return c.yearsRemaining === 1 ? (
+        <span style={{ color: EXPIRING_CONTRACT_COLOR }}>
+            {content}
+        </span>
+    ) : (
+        content
+    );
+}
+
+/**
+ * Accepte "2", "2M", "2m", "2000000" et les convertit tous en
+ * 2000000. Accepte aussi "k" pour les milliers.
+ */
+function parseSalaryInput(input: string): number | null {
+    if (!input) return null;
+    let val = input.trim().toLowerCase();
+    if (!val) return null;
+    let multiplier = 1;
+    let hasSuffix = false;
+
+    if (val.endsWith('m')) {
+        multiplier = 1_000_000;
+        val = val.slice(0, -1);
+        hasSuffix = true;
+    } else if (val.endsWith('k')) {
+        multiplier = 1_000;
+        val = val.slice(0, -1);
+        hasSuffix = true;
+    }
+
+    const num = parseFloat(val);
+    if (isNaN(num)) return null;
+
+    // If the user types a bare number < 1000 (like "2"), assume they mean millions.
+    // If they type a full number like "2000000", it stays as-is.
+    if (!hasSuffix && num < 1000) {
+        multiplier = 1_000_000;
+    }
+
+    return num * multiplier;
 }
 
 /**
@@ -350,90 +429,38 @@ const TopScorersHeader = memo(function TopScorersHeader({
                 backgroundColor: '#050A16',
             }}
         >
-            <div className='text-center' style={{ color: '#7DD3FC' }}>
-                #
-            </div>
-            {/* Team — nom d'équipe fantasy, à droite du rang.
-                Non triable, comme le rang et le nom. */}
-            <div className='text-center text-white'>Team</div>
-            <div className='col-span-2 pr-1 text-center text-white'>
-                Joueur
-            </div>
-            <div className='text-center' style={{ color: '#33BBFF' }}>
-                GP
-            </div>
+            <StaticHeader label='#' color='#7DD3FC' />
+            <StaticHeader label='Team' color='#FFFFFF' />
+            <StaticHeader label='Joueur' color='#FFFFFF' colSpan={2} />
+
+            <SortableHeader
+                label='GP'
+                sortKey='gamesPlayed'
+                activeSortKey={sortKey}
+                sortDirection={sortDirection}
+                onSort={onSort}
+                color='#33BBFF'
+            />
 
             {showGoalieColumns ? (
                 <>
-                    <div
-                        className='text-center'
-                        style={{ color: '#00F0FF' }}
-                    >
-                        W
-                    </div>
-                    <div
-                        className='text-center'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        L
-                    </div>
-                    <div
-                        className='text-center text-[0.55rem] sm:text-[0.65rem]'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        OTL
-                    </div>
-                    <div
-                        className='text-center'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        SO
-                    </div>
-                    <div
-                        className='text-center text-[0.55rem] sm:text-[0.65rem]'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        SV%
-                    </div>
-                    <div
-                        className='text-center text-[0.55rem] sm:text-[0.65rem]'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        GAA
-                    </div>
+                    <SortableHeader label='W' sortKey='wins' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#00F0FF' />
+                    <SortableHeader label='L' sortKey='losses' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' />
+                    <SortableHeader label='OTL' sortKey='overtimeLosses' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' compact />
+                    <SortableHeader label='SO' sortKey='shutouts' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' />
+                    <SortableHeader label='SV%' sortKey='savePercentage' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' compact />
+                    <SortableHeader label='GAA' sortKey='goalsAgainstAverage' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' compact />
                 </>
             ) : (
                 <>
-                    <div
-                        className='text-center'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        G
-                    </div>
-                    <div
-                        className='text-center'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        A
-                    </div>
-                    <div
-                        className='text-center'
-                        style={{ color: '#00F0FF' }}
-                    >
-                        PTS
-                    </div>
-                    <div
-                        className='text-center text-[0.55rem] sm:text-[0.65rem]'
-                        style={{ color: '#FFFFFF' }}
-                    >
-                        ATOI
-                    </div>
+                    <SortableHeader label='G' sortKey='goals' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' />
+                    <SortableHeader label='A' sortKey='assists' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' />
+                    <SortableHeader label='PTS' sortKey='points' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#00F0FF' />
+                    <SortableHeader label='ATOI' sortKey='timeOnIce' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFFFFF' compact />
                 </>
             )}
 
-            <div className='text-center' style={{ color: '#FFC72C' }}>
-                FP
-            </div>
+            <SortableHeader label='FP' sortKey='fp' activeSortKey={sortKey} sortDirection={sortDirection} onSort={onSort} color='#FFC72C' activeColor='#FFC72C' />
         </div>
     );
 });
@@ -443,6 +470,7 @@ const TopScorersRow = memo(function TopScorersRow({
     rank,
     isMine,
     showGoalieColumns,
+    showContracts,
 }: {
     row: TopScorerRow;
     rank: number;
@@ -453,6 +481,12 @@ const TopScorersRow = memo(function TopScorersRow({
      * de G / A / PTS / ATOI.
      */
     showGoalieColumns: boolean;
+    /**
+     * True quand la case "Afficher les contrats" est cochée.
+     * Affiche le salaire et les années restantes sous le nom
+     * du joueur, comme sur MonEquipePage.
+     */
+    showContracts: boolean;
 }) {
     const navigate = useNavigate();
 
@@ -513,8 +547,8 @@ const TopScorersRow = memo(function TopScorersRow({
                         }}
                         aria-label={`Voir l'équipe ${row.fantasyTeamName}`}
                         className={`cursor-pointer truncate font-semibold hover:underline focus:outline-none focus-visible:underline ${showGoalieColumns
-                                ? 'text-[0.55rem]'
-                                : 'text-[0.65rem]'
+                            ? 'text-[0.55rem]'
+                            : 'text-[0.65rem]'
                             }`}
                         style={{ color: teamColor }}
                     >
@@ -543,21 +577,29 @@ const TopScorersRow = memo(function TopScorersRow({
                 </div>
             </div>
 
-            <div className='min-w-0 pl-1 text-left'>
+            <div className='min-w-0 pl-1 text-left flex flex-col justify-center'>
                 <div
-                    className={`truncate text-foreground translate-y-[3px] ${showGoalieColumns
+                    className={`truncate text-foreground ${showContracts && (row.currentContract || row.secondContract) ? 'translate-y-[2.5px]' : ''
+                        } ${showGoalieColumns
                             ? 'text-[0.65rem] max-[399px]:leading-[0.90rem] min-[400px]:text-[0.75rem] min-[400px]:leading-[1.00rem]'
                             : 'text-[0.90rem] max-[399px]:leading-[1.17rem] min-[400px]:text-[1rem] min-[400px]:leading-[1.30rem]'
                         }`}
                 >
                     {shortName(row.firstName, row.lastName)}
                 </div>
+                {showContracts && (row.currentContract || row.secondContract) && (
+                    <div className='truncate leading-tight text-[#22C55E] text-[0.60rem] max-[399px]:text-[0.55rem] mt-0.5'>
+                        {row.currentContract ? formatContract(row.currentContract) : ''}
+                        {row.currentContract && row.secondContract ? <span className='inline-block mx-0.5 text-[0.7rem] opacity-80 scale-x-[0.75]'>→</span> : ''}
+                        {row.secondContract ? formatContract(row.secondContract) : ''}
+                    </div>
+                )}
             </div>
 
             <div
                 className={`text-center text-[#7DD3FC] ${showGoalieColumns
-                        ? 'text-[0.85rem] min-[400px]:text-[0.9rem]'
-                        : 'text-[0.9rem] min-[400px]:text-[0.95rem]'
+                    ? 'text-[0.85rem] min-[400px]:text-[0.9rem]'
+                    : 'text-[0.9rem] min-[400px]:text-[0.95rem]'
                     }`}
             >
                 {row.gamesPlayed}
@@ -584,6 +626,12 @@ const TopScorersRow = memo(function TopScorersRow({
                         {row.goalsAgainstAverage.toFixed(2)}
                     </div>
                 </>
+            ) : toPositionGroup(row.position) === 'G' ? (
+                <div className='col-span-4 flex items-center justify-center whitespace-nowrap text-[0.75rem] min-[400px]:text-[0.85rem] overflow-hidden text-ellipsis'>
+                    <span style={{ color: '#00F0FF' }}>{row.wins} W</span>
+                    <span className='font-bold text-white/50'>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
+                    <span className='text-white'>{row.shutouts} SO</span>
+                </div>
             ) : (
                 <>
                     <div className='text-center text-[0.9rem] text-white min-[400px]:text-[0.95rem]'>
@@ -618,7 +666,7 @@ type PositionFilter = 'all' | PositionGroup;
 function AllPositionsIcon({ color }: { color: string }) {
     return (
         <svg
-            viewBox='2 2 20 18'
+            viewBox='0 0 24 24'
             width={26}
             height={26}
             fill='none'
@@ -628,8 +676,17 @@ function AllPositionsIcon({ color }: { color: string }) {
             strokeLinejoin='round'
             aria-hidden='true'
         >
-            <path d='M20 3 L12 13 L8 17 Q7 19 5 19 L3 19' />
-            <path d='M4 3 L12 13 L16 17 Q17 19 19 19 L21 19' />
+            {/* Personne du centre */}
+            <circle cx='12' cy='6.5' r='3.5' />
+            <path d='M5.5 19v-1.5c0-2.5 2-4.5 4.5-4.5h4c2.5 0 4.5 2 4.5 4.5v1.5' />
+
+            {/* Personne de gauche */}
+            <circle cx='4.5' cy='10' r='2.5' />
+            <path d='M1 19v-1.5c0-1.7 1.3-3 3-3h1.5' />
+
+            {/* Personne de droite */}
+            <circle cx='19.5' cy='10' r='2.5' />
+            <path d='M23 19v-1.5c0-1.7-1.3-3-3-3h-1.5' />
         </svg>
     );
 }
@@ -761,16 +818,16 @@ function PositionFilterButton({
             className='
                 relative
                 flex
-                h-[68px]
+                h-[54px]
                 min-w-0
                 flex-1
                 cursor-pointer
                 flex-col
                 items-center
                 justify-center
-                gap-1
-                rounded-[13px]
-                px-2
+                gap-0.5
+                rounded-none
+                px-1
                 transition-all
                 duration-200
                 ease-out
@@ -866,28 +923,290 @@ function PositionFilterButton({
     );
 }
 
+function DurationDropdown({ value, onChange }: { value: number, onChange: (v: number) => void }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (ref.current && !ref.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const options = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+    const label = value === 0 ? 'Tous' : `${value} an${value > 1 ? 's' : ''}`;
+
+    // Three states, same rule as the two inputs above:
+    //   - value === 0 ("Tous") and closed  -> gray
+    //   - value === 0 and OPEN             -> cyan
+    //   - value !== 0 (any focus state)    -> cyan
+    // "Open" is the dropdown's equivalent of "focused": it is
+    // what the user is currently interacting with, so it lights up
+    // even before a choice is made. Once a value is picked the
+    // control stays cyan after the panel closes, matching the
+    // "filled = active filter" rule the inputs follow.
+    const hasValue = value !== 0;
+    const isBlue = hasValue || isOpen;
+
+    const triggerBorderClass = isBlue
+        ? 'border-[#00E5FF]'
+        : 'border-gray-500/50';
+
+    const caretColorClass = isBlue
+        ? 'text-[#00E5FF]'
+        : 'text-gray-500';
+
+    return (
+        <div ref={ref} className="relative w-full">
+            <button
+                type="button"
+                onClick={() => setIsOpen(!isOpen)}
+                className={`flex h-8 w-full items-center justify-between rounded-md border bg-[#050A18] px-2 text-xs text-white focus:outline-none ${triggerBorderClass}`}
+            >
+                {label}
+                <span className={`text-[0.5rem] ${caretColorClass} transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+            </button>
+            {isOpen && (
+                <ul className="absolute left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {options.map((opt) => (
+                        <li key={opt}>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    onChange(opt);
+                                    setIsOpen(false);
+                                }}
+                                className={`w-full px-2 py-1.5 text-center text-xs transition-colors ${value === opt
+                                        ? 'bg-[#00E5FF]/20 font-bold text-[#00E5FF]'
+                                        : 'text-white hover:bg-[#00E5FF]/10'
+                                    }`}
+                            >
+                                {opt === 0 ? 'Tous' : `${opt} an${opt > 1 ? 's' : ''}`}
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Bouton "Filtres" qui ouvre le modal des filtres avancés.
+ *
+ * Même technique visuelle que les boutons `PositionFilterButton`
+ * juste au-dessus : le bouton garde TOUJOURS la même couleur bleue
+ * (#3B82F6), qu'il y ait des filtres actifs ou non. Il n'y a plus
+ * de vert "filtres actifs" — l'intensité de l'aura bleue est ce qui
+ * distingue les deux états :
+ *
+ *   - Inactif : bordure à ~62% d'opacité, aura à 0.16 d'opacité.
+ *   - Hover   : bordure à ~95%, aura un peu plus prononcée, bouton
+ *               qui se soulève de 1px (même comportement que les
+ *               boutons de position).
+ *   - Actif   : bordure pleine, aura multi-couches complète
+ *               (tight / medium / wide + filament inset blanc),
+ *               identique à l'état actif des boutons de position.
+ *
+ * L'état actif lit donc comme "ce bouton a quelque chose à
+ * signaler" tout en restant dans la même famille chromatique que
+ * le bouton inactif, ce qui est exactement ce que les boutons de
+ * position font (bleu "Défenseurs", cyan "Tous", etc.).
+ */
+function FiltersButton({
+    hasActiveFilters,
+    onClick,
+}: {
+    hasActiveFilters: boolean;
+    onClick: () => void;
+}) {
+    const [hovered, setHovered] = useState(false);
+
+    // Blue accent identical to the current border/text color of the
+    // Filters button before this change (the "Défenseurs" blue). It
+    // never changes based on hasActiveFilters — the active state is
+    // signalled by the aura intensity, not by the hue.
+    const color = '#3B82F6';
+
+    const hexToRgba = (hex: string, alpha: number) => {
+        const clean = hex.replace('#', '');
+        const r = parseInt(clean.substring(0, 2), 16);
+        const g = parseInt(clean.substring(2, 4), 16);
+        const b = parseInt(clean.substring(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    };
+
+    return (
+        <button
+            type='button'
+            onClick={onClick}
+            aria-pressed={hasActiveFilters}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            className='
+                relative
+                flex
+                shrink-0
+                items-center
+                gap-1.5
+                rounded-md
+                px-3
+                py-1
+                text-[0.65rem]
+                font-bold
+                uppercase
+                tracking-wider
+                transition-all
+                duration-200
+                ease-out
+                hover:-translate-y-[1px]
+            '
+            style={{
+                color,
+                background: `
+                    radial-gradient(
+                        circle at 50% 0%,
+                        ${hexToRgba(
+                    color,
+                    hasActiveFilters ? 0.10 : hovered ? 0.06 : 0.035,
+                )} 0%,
+                        transparent 58%
+                    ),
+                    linear-gradient(
+                        180deg,
+                        #081827 0%,
+                        #06111F 100%
+                    )
+                `,
+                border: hasActiveFilters
+                    ? `1px solid ${color}`
+                    : `1px solid ${hexToRgba(
+                        color,
+                        hovered ? 0.95 : 0.62,
+                    )}`,
+                boxShadow: hasActiveFilters
+                    ? [
+                        `0 0 3px ${color}`,
+                        `0 0 8px ${hexToRgba(color, 0.90)}`,
+                        `0 0 17px ${hexToRgba(color, 0.48)}`,
+                        `inset 0 0 7px ${hexToRgba(color, 0.16)}`,
+                        `inset 0 0 1px ${hexToRgba('#FFFFFF', 0.45)}`,
+                    ].join(', ')
+                    : hovered
+                        ? [
+                            `0 0 3px ${hexToRgba(color, 0.40)}`,
+                            `0 0 9px ${hexToRgba(color, 0.25)}`,
+                        ].join(', ')
+                        : `0 0 5px ${hexToRgba(color, 0.16)}`,
+            }}
+        >
+            Filtres
+        </button>
+    );
+}
+
 const TopScorersTable = memo(function TopScorersTable({
     rows,
     loading,
     error,
     myTeamId,
+    showContracts,
+    onToggleContracts,
 }: {
     rows: TopScorerRow[];
     loading: boolean;
     error: string | null;
     myTeamId: number | null;
+    showContracts: boolean;
+    onToggleContracts: (checked: boolean) => void;
 }) {
     const listRef = useRef<HTMLDivElement | null>(null);
 
     const [scrollMargin, setScrollMargin] = useState(0);
 
+    const savedFilters = getStatsFilters();
+
+    // League rule: the "Meilleurs pointeurs" table ALWAYS starts
+    // sorted by FP descending. The previous implementation read the
+    // last-saved sort key from the module store, which meant a user
+    // who had previously clicked PTS (or any other column) would see
+    // that stale sort on their next visit — and players with more FP
+    // would end up below players with less FP. We now hardcode the
+    // initial sort to FP desc and force it back on every filter
+    // change (see the effect below).
     const [sort, setSort] = useState<SortState>({
         key: 'fp',
         direction: 'desc',
     });
 
     const [positionFilter, setPositionFilter] =
-        useState<PositionFilter>('all');
+        useState<PositionFilter>(savedFilters.positionFilter);
+
+    const [isFiltersOpen, setIsFiltersOpen] = useState(savedFilters.isFiltersOpen);
+
+    interface FilterState {
+        maxAgeStr: string;
+        maxSalaryStr: string;
+        minContractLength: number;
+        useSecondContract: boolean;
+    }
+
+    const defaultFilterState: FilterState = {
+        maxAgeStr: '',
+        maxSalaryStr: '',
+        minContractLength: 0,
+        useSecondContract: true,
+    };
+
+    const [appliedFilters, setAppliedFilters] = useState<FilterState>({
+        maxAgeStr: savedFilters.maxAgeStr,
+        maxSalaryStr: savedFilters.maxSalaryStr,
+        minContractLength: savedFilters.minContractLength,
+        useSecondContract: savedFilters.useSecondContract,
+    });
+
+    const [draftFilters, setDraftFilters] = useState<FilterState>(appliedFilters);
+
+    const hasActiveFilters =
+        appliedFilters.maxAgeStr !== '' ||
+        appliedFilters.maxSalaryStr !== '' ||
+        appliedFilters.minContractLength > 0 ||
+        !appliedFilters.useSecondContract ||
+        positionFilter !== 'all';
+
+    const isDraftDefault =
+        draftFilters.maxAgeStr === '' &&
+        draftFilters.maxSalaryStr === '' &&
+        draftFilters.minContractLength === 0 &&
+        draftFilters.useSecondContract === true;
+
+    // Sync the local React state back to the module store on every change
+    // so it survives when the user navigates away and returns.
+    // Note: the sort itself is intentionally NOT restored on mount
+    // (see the useState above) — only the filter selection is
+    // persisted. The sort is always forced back to FP desc on mount
+    // and on every filter change.
+    useEffect(() => {
+        setStatsFilters({
+            sortKey: sort.key,
+            sortDirection: sort.direction,
+            positionFilter,
+            isFiltersOpen,
+            maxAgeStr: appliedFilters.maxAgeStr,
+            maxSalaryStr: appliedFilters.maxSalaryStr,
+            minContractLength: appliedFilters.minContractLength,
+            useSecondContract: appliedFilters.useSecondContract,
+        });
+    }, [
+        sort,
+        positionFilter,
+        isFiltersOpen,
+        appliedFilters,
+    ]);
 
     const handleSort = useCallback((key: SortKey) => {
         setSort((prev) => {
@@ -903,6 +1222,40 @@ const TopScorersTable = memo(function TopScorersTable({
     }, []);
 
     /**
+     * Force the sort back to FP desc whenever the user changes any
+     * filter — the three position buttons at the top of the table
+     * AND the modal "Appliquer" button. This is required by the
+     * league rules: the table must always be FP-sorted by default,
+     * and any filter change must snap back to that default so the
+     * highest-FP player among the filtered set is always on top.
+     *
+     * The manual sort via the column headers is preserved as long
+     * as the filters don't change. Once the filters change, the
+     * manual sort is discarded and FP desc is restored.
+     *
+     * We store the previous filter values in refs and only reset
+     * the sort when they differ. This means the effect is a no-op
+     * on the initial mount (refs start at the current values),
+     * so the initial `useState` above is what controls the very
+     * first render.
+     */
+    const prevPositionFilterRef = useRef(positionFilter);
+    const prevAppliedFiltersRef = useRef(appliedFilters);
+
+    useEffect(() => {
+        const positionChanged =
+            prevPositionFilterRef.current !== positionFilter;
+        const appliedChanged =
+            prevAppliedFiltersRef.current !== appliedFilters;
+
+        if (positionChanged || appliedChanged) {
+            setSort({ key: 'fp', direction: 'desc' });
+            prevPositionFilterRef.current = positionFilter;
+            prevAppliedFiltersRef.current = appliedFilters;
+        }
+    }, [positionFilter, appliedFilters]);
+
+    /**
      * Filtrage avant tri.
      *
      * On filtre `rows` en premier, puis on trie le résultat. Cela
@@ -913,13 +1266,50 @@ const TopScorersTable = memo(function TopScorersTable({
      * parce que les patineurs se sont intercalés.
      */
     const filteredRows = useMemo(() => {
-        if (positionFilter === 'all') {
-            return rows;
-        }
-        return rows.filter(
-            (r) => toPositionGroup(r.position) === positionFilter,
-        );
-    }, [rows, positionFilter]);
+        return rows.filter((r) => {
+            // Position Filter
+            if (positionFilter !== 'all' && toPositionGroup(r.position) !== positionFilter) {
+                return false;
+            }
+
+            // Age Filter
+            if (appliedFilters.maxAgeStr) {
+                const parsedMaxAge = parseInt(appliedFilters.maxAgeStr, 10);
+                if (!isNaN(parsedMaxAge)) {
+                    if (r.age == null || r.age > parsedMaxAge) {
+                        return false;
+                    }
+                }
+            }
+
+            // Contract Filter Logic
+            // Si la case est cochée ET que le joueur a un 2e contrat, on utilise le 2e.
+            // Sinon (case décochée OU joueur avec 1 seul contrat), on utilise le 1er.
+            const contractToUse =
+                appliedFilters.useSecondContract && r.secondContract
+                    ? r.secondContract
+                    : r.currentContract;
+
+            // Salary Filter
+            if (appliedFilters.maxSalaryStr) {
+                const parsedMaxSalary = parseSalaryInput(appliedFilters.maxSalaryStr);
+                if (parsedMaxSalary !== null) {
+                    if (!contractToUse || contractToUse.salary > parsedMaxSalary) {
+                        return false;
+                    }
+                }
+            }
+
+            // Contract Duration Filter
+            if (appliedFilters.minContractLength > 0) {
+                if (!contractToUse || contractToUse.yearsRemaining < appliedFilters.minContractLength) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+    }, [rows, positionFilter, appliedFilters]);
 
     const sortedRows = useMemo(() => {
         const copy = [...filteredRows];
@@ -974,6 +1364,48 @@ const TopScorersTable = memo(function TopScorersTable({
                     cmp = compareNullable(
                         parseToiSeconds(a.timeOnIce),
                         parseToiSeconds(b.timeOnIce),
+                        sort.direction,
+                    );
+                    break;
+                case 'wins':
+                    cmp = compareNullable(
+                        a.wins,
+                        b.wins,
+                        sort.direction,
+                    );
+                    break;
+                case 'losses':
+                    cmp = compareNullable(
+                        a.losses,
+                        b.losses,
+                        sort.direction,
+                    );
+                    break;
+                case 'overtimeLosses':
+                    cmp = compareNullable(
+                        a.overtimeLosses,
+                        b.overtimeLosses,
+                        sort.direction,
+                    );
+                    break;
+                case 'shutouts':
+                    cmp = compareNullable(
+                        a.shutouts,
+                        b.shutouts,
+                        sort.direction,
+                    );
+                    break;
+                case 'savePercentage':
+                    cmp = compareNullable(
+                        a.savePercentage,
+                        b.savePercentage,
+                        sort.direction,
+                    );
+                    break;
+                case 'goalsAgainstAverage':
+                    cmp = compareNullable(
+                        a.goalsAgainstAverage,
+                        b.goalsAgainstAverage,
                         sort.direction,
                     );
                     break;
@@ -1034,7 +1466,7 @@ const TopScorersTable = memo(function TopScorersTable({
              * pour que l'utilisateur puisse toujours changer de
              * filtre sans avoir à attendre un re-fetch.
              */}
-            <div className='mb-3 flex w-full gap-2.5'>
+            <div className='mb-3 flex w-full gap-1.5'>
                 <PositionFilterButton
                     active={positionFilter === 'all'}
                     onClick={() => setPositionFilter('all')}
@@ -1042,6 +1474,7 @@ const TopScorersTable = memo(function TopScorersTable({
                     color='#00E5FF'
                     icon={<AllPositionsIcon color='#00E5FF' />}
                 />
+
                 <PositionFilterButton
                     active={positionFilter === 'F'}
                     onClick={() => setPositionFilter('F')}
@@ -1049,6 +1482,7 @@ const TopScorersTable = memo(function TopScorersTable({
                     color='#FF3B5C'
                     icon={<ForwardIcon color='#FF3B5C' />}
                 />
+
                 <PositionFilterButton
                     active={positionFilter === 'D'}
                     onClick={() => setPositionFilter('D')}
@@ -1056,6 +1490,7 @@ const TopScorersTable = memo(function TopScorersTable({
                     color='#3B82F6'
                     icon={<DefenseIcon color='#3B82F6' />}
                 />
+
                 <PositionFilterButton
                     active={positionFilter === 'G'}
                     onClick={() => setPositionFilter('G')}
@@ -1064,6 +1499,180 @@ const TopScorersTable = memo(function TopScorersTable({
                     icon={<GoalieIcon color='#FFC72C' />}
                 />
             </div>
+
+            <div className='mb-3 flex w-full items-center justify-between gap-2'>
+                <FiltersButton
+                    hasActiveFilters={hasActiveFilters}
+                    onClick={() => {
+                        setDraftFilters(appliedFilters);
+                        setIsFiltersOpen(true);
+                    }}
+                />
+
+                <button
+                    type='button'
+                    disabled={!hasActiveFilters}
+                    onClick={() => {
+                        setAppliedFilters(defaultFilterState);
+                        setDraftFilters(defaultFilterState);
+                        setPositionFilter('all');
+                    }}
+                    className='flex h-[26px] flex-1 items-center justify-center rounded-md border border-[#00E5FF]/30 bg-[#050A18] px-1 text-center text-[0.55rem] font-bold uppercase leading-tight tracking-wider text-[#7DD3FC] transition-colors hover:border-[#00E5FF] hover:text-[#00E5FF] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/30 disabled:hover:border-white/10 disabled:hover:text-white/30'
+                >
+                    Réinitialiser les filtres
+                </button>
+
+                <label className="flex shrink-0 items-center gap-2 cursor-pointer text-[0.7rem] font-semibold text-[#7DD3FC] select-none transition-colors hover:text-[#00E5FF]">
+                    <div className="relative flex items-center justify-center">
+                        <input
+                            type="checkbox"
+                            checked={showContracts}
+                            onChange={(e) => onToggleContracts(e.target.checked)}
+                            className="peer sr-only"
+                        />
+                        <div className="h-4 w-4 rounded border border-[#00E5FF]/50 bg-[#050A18] transition-colors peer-checked:border-[#00E5FF] peer-checked:bg-[#00E5FF]/20" />
+                        <svg
+                            className="absolute h-3 w-3 text-[#00E5FF] opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        >
+                            <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                    </div>
+                    <span>Afficher les contrats</span>
+                </label>
+            </div>
+
+            {isFiltersOpen && (
+                <div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4' onClick={() => setIsFiltersOpen(false)}>
+                    <div
+                        className='w-full max-w-sm rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] p-4 shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)]'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='relative mb-3 flex items-center justify-end border-b border-[#00E5FF]/20 pb-2'>
+                            <h3 className='absolute left-1/2 -translate-x-1/2 text-sm font-bold uppercase tracking-wider text-white'>
+                                Filtres
+                            </h3>
+                            <button
+                                type='button'
+                                onClick={() => setIsFiltersOpen(false)}
+                                className='text-white/60 transition-colors hover:text-white'
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className='grid w-full grid-cols-2 gap-2'>
+                            {/* All labels are centered horizontally over
+                                their input / dropdown. The two salary /
+                                duration filters are prefixed with
+                                "Contrat :" so it is immediately clear
+                                they target the contract rows (current
+                                and/or second) rather than some other
+                                per-player number, and "Durée minimum"
+                                replaces the terse "(ans)" form that was
+                                easy to misread as a duration window
+                                rather than a minimum.
+                                The checkbox row is a flex row (box +
+                                text), so it needs justify-center as
+                                well as text-center.
+                                INPUT / CHECKBOX CHROME
+                                Three states per field:
+                                  - empty + not focused  -> gray border
+                                  - empty + focused      -> cyan border
+                                  - filled (any focus)   -> cyan border
+                                The focus state is what restores the
+                                pre-change behaviour where interacting
+                                with an empty field lit it up. Once a
+                                value is entered the field stays cyan
+                                even when the user tabs away, so an
+                                active filter is always visible at a
+                                glance. Labels and typed values stay
+                                white; only the border changes. The
+                                checkbox follows the same visual rule
+                                via peer-checked (checked -> cyan,
+                                unchecked -> gray); checking it is what
+                                "selected" means for a checkbox. */}
+                            <div className='flex flex-col gap-1'>
+                                <label className='text-center text-[0.55rem] font-bold uppercase tracking-wider text-white'>Âge max</label>
+                                <input
+                                    type='number'
+                                    placeholder='Ex: 25'
+                                    value={draftFilters.maxAgeStr}
+                                    onChange={(e) => setDraftFilters(prev => ({ ...prev, maxAgeStr: e.target.value }))}
+                                    className={`h-8 rounded-md border bg-[#050A18] px-2 text-xs text-white placeholder:text-white/20 focus:outline-none ${draftFilters.maxAgeStr !== '' ? 'border-[#00E5FF]' : 'border-gray-500/50 focus:border-[#00E5FF]'}`}
+                                />
+                            </div>
+                            <div className='flex flex-col gap-1'>
+                                <label className='text-center text-[0.55rem] font-bold uppercase tracking-wider text-white'>Contrat : Salaire maximum</label>
+                                <input
+                                    type='text'
+                                    placeholder='Ex: 2M, 2 ou 2000000'
+                                    value={draftFilters.maxSalaryStr}
+                                    onChange={(e) => setDraftFilters(prev => ({ ...prev, maxSalaryStr: e.target.value }))}
+                                    className={`h-8 rounded-md border bg-[#050A18] px-2 text-xs text-white placeholder:text-white/20 focus:outline-none ${draftFilters.maxSalaryStr !== '' ? 'border-[#00E5FF]' : 'border-gray-500/50 focus:border-[#00E5FF]'}`}
+                                />
+                            </div>
+                            <div className='flex flex-col gap-1'>
+                                <label className='text-center text-[0.55rem] font-bold uppercase tracking-wider text-white'>Contrat : Durée minimum</label>
+                                <DurationDropdown value={draftFilters.minContractLength} onChange={(v) => setDraftFilters(prev => ({ ...prev, minContractLength: v }))} />
+                            </div>
+                            <div className='flex flex-col justify-end pb-1.5'>
+                                <label className='flex cursor-pointer items-center justify-center gap-2 text-center text-[0.7rem] font-semibold text-white select-none'>
+                                    <div className='relative flex items-center justify-center'>
+                                        <input
+                                            type='checkbox'
+                                            checked={draftFilters.useSecondContract}
+                                            onChange={(e) => setDraftFilters(prev => ({ ...prev, useSecondContract: e.target.checked }))}
+                                            className='peer sr-only'
+                                        />
+                                        <div className='h-4 w-4 rounded border border-gray-500/50 bg-[#050A18] transition-colors peer-checked:border-[#00E5FF] peer-checked:bg-[#00E5FF]/20' />
+                                        <svg
+                                            className='pointer-events-none absolute h-3 w-3 text-[#00E5FF] opacity-0 transition-opacity peer-checked:opacity-100'
+                                            viewBox='0 0 24 24'
+                                            fill='none'
+                                            stroke='currentColor'
+                                            strokeWidth='3'
+                                            strokeLinecap='round'
+                                            strokeLinejoin='round'
+                                        >
+                                            <polyline points='20 6 9 17 4 12' />
+                                        </svg>
+                                    </div>
+                                    Inclure 2e contrats?
+                                </label>
+                            </div>
+                        </div>
+
+                        <div className='mt-4 flex w-full gap-2'>
+                            <button
+                                type='button'
+                                disabled={isDraftDefault}
+                                onClick={() => {
+                                    setDraftFilters(defaultFilterState);
+                                }}
+                                className='flex-1 rounded-md border border-[#00E5FF]/30 bg-[#050A18] px-2 py-1.5 text-center text-[0.55rem] font-bold uppercase tracking-wider text-[#7DD3FC] transition-colors hover:border-[#00E5FF] hover:text-[#00E5FF] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/30 disabled:hover:border-white/10 disabled:hover:text-white/30'
+                            >
+                                Réinitialiser
+                            </button>
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    setAppliedFilters(draftFilters);
+                                    setIsFiltersOpen(false);
+                                }}
+                                className='flex-1 rounded-md border border-[#22C55E] bg-[#22C55E]/10 px-2 py-1.5 text-center text-[0.55rem] font-bold uppercase tracking-wider text-[#22C55E] transition-colors hover:bg-[#22C55E]/20'
+                            >
+                                Appliquer
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {loading ? (
                 <p className='mt-3 text-center text-sm text-muted-foreground'>
@@ -1090,14 +1699,12 @@ const TopScorersTable = memo(function TopScorersTable({
                             backgroundColor: '#050A16',
                         }}
                     >
-                                    <TopScorersHeader
-                                        sortKey={sort.key}
-                                        sortDirection={sort.direction}
-                                        onSort={handleSort}
-                                        showGoalieColumns={
-                                            positionFilter === 'G'
-                                        }
-                                    />
+                        <TopScorersHeader
+                            sortKey={sort.key}
+                            sortDirection={sort.direction}
+                            onSort={handleSort}
+                            showGoalieColumns={positionFilter === 'G'}
+                        />
 
                         <div
                             ref={listRef}
@@ -1134,6 +1741,7 @@ const TopScorersTable = memo(function TopScorersTable({
                                             showGoalieColumns={
                                                 positionFilter === 'G'
                                             }
+                                            showContracts={showContracts}
                                         />
                                     </div>
                                 );
@@ -1151,9 +1759,10 @@ const TopScorersTable = memo(function TopScorersTable({
 // ---------------------------------------------------------------------
 
 export default function StatistiquesPage() {
-    const { user } = useAuth();
+    const { user, updatePreferences } = useAuth();
 
     const myTeamId = user?.fantasyTeamId ?? null;
+    const showContracts = user?.showContractsStats ?? true;
 
     const [mainTab, setMainTab] = useState<MainTab>('players');
 
@@ -1293,6 +1902,8 @@ export default function StatistiquesPage() {
                     loading={scorerLoading}
                     error={scorerError}
                     myTeamId={myTeamId}
+                    showContracts={showContracts}
+                    onToggleContracts={(checked) => void updatePreferences({ showContractsStats: checked })}
                 />
             </div>
 
