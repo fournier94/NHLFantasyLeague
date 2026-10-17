@@ -353,6 +353,7 @@
 @media (min-width: 400px) {
     :root {
         --stats-grid-columns: 18px 30px 22px minmax(0, 1fr) 25px 22px 22px 26px 44px 32px;
+        --stats-grid-goalie-columns: 18px 26px 22px minmax(0, 1fr) 22px 18px 14px 22px 17px 32px 28px 24px;
     }
 }
 

@@ -968,6 +968,24 @@ export interface TopScorerRow {
     hatTricks: number;
 
     /**
+     * Statistiques de gardien. Zéro pour les patineurs.
+     *
+     * Le frontend affiche W / L / OTL / SO / SV% / GAA à la place
+     * de G / A / PTS / ATOI quand le filtre "Gardiens" est actif
+     * sur la page Statistiques.
+     *
+     * SV% et GAA sont calculés côté serveur à partir des totaux
+     * de la saison (arrêts / tirs contre / buts contre / matchs
+     * joués), ce qui les garde synchronisés avec les stats live.
+     */
+    wins: number;
+    losses: number;
+    overtimeLosses: number;
+    shutouts: number;
+    savePercentage: number;
+    goalsAgainstAverage: number;
+
+    /**
      * Temps de jeu moyen (ATOI) pour la saison en cours,
      * formaté "MM:SS", ou null si aucune donnée n'est
      * disponible. Moyenne pondérée par les matchs joués.

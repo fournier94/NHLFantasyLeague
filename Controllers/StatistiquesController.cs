@@ -11,7 +11,7 @@ namespace NhlFantasyLeague.api.Controllers
     /// <summary>
     /// Endpoints agrégés de la page Statistiques.
     ///
-    /// Pour l'instant : "Meilleurs pointeurs" (tous les patineurs
+    /// Pour l'instant : "Meilleurs pointeurs" (tous les joueurs
     /// appartenant à une équipe fantasy de la ligue).
     ///
     /// Un seul appel remplace les 13 appels que la page faisait
@@ -44,12 +44,17 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
-        /// Retourne tous les patineurs appartenant à une équipe fantasy
+        /// Retourne tous les joueurs appartenant à une équipe fantasy
         /// de la ligue pour la saison courante, avec les mêmes
         /// statistiques que celles affichées sur MonEquipePage
         /// (GP / G / A / PTS / 3B / ATOI / FP + contrats).
         ///
-        /// Les gardiens sont exclus.
+        /// Les gardiens sont inclus : le filtrage par position est
+        /// fait côté client, sur le frontend StatistiquesPage, via
+        /// les quatre boutons (Tous / Attaquants / Défenseurs /
+        /// Gardiens). Les colonnes G / A / PTS pour un gardien
+        /// représentent ses propres buts et passes (généralement 0),
+        /// pas ses victoires ni ses blanchissages.
         ///
         /// Tri par défaut : FP décroissant, puis PTS, puis buts, puis
         /// passes, puis nom de famille. Les joueurs dont le FP est
@@ -80,8 +85,8 @@ namespace NhlFantasyLeague.api.Controllers
 
             // 1. Toutes les entrées de roster de la saison courante,
             //    jointe au joueur, à son équipe NHL et à son équipe
-            //    fantasy. Les gardiens sont exclus ici, en SQL, pour
-            //    ne jamais les rapatrier.
+            //    fantasy. Aucun filtre par position : le client
+            //    choisit ce qu'il veut afficher.
             var entries = await _dbContext.RosterEntries
                 .AsNoTracking()
                 .Include(e => e.Player)
@@ -89,8 +94,7 @@ namespace NhlFantasyLeague.api.Controllers
                 .Include(e => e.FantasyTeam)
                 .Where(e =>
                     e.SeasonId == season.Id &&
-                    e.Player != null &&
-                    e.Player.Position != "G")
+                    e.Player != null)
                 .ToListAsync(ct);
 
             if (entries.Count == 0)
@@ -190,6 +194,33 @@ namespace NhlFantasyLeague.api.Controllers
                         playerContracts ?? new List<PlayerContract>(),
                         season.NhlSeasonCode);
 
+                // SV% and GAA are computed from the season totals
+                // (Saves / ShotsAgainst / GoalsAgainst / GP) instead of
+                // being read from the stored columns, because the
+                // stored columns are only refreshed by the landing
+                // sync and can lag behind the live-tracked season
+                // stats. Standard hockey formatting: SV% with 3
+                // decimals, GAA with 2.
+                var svPct = 0m;
+                var gaa = 0m;
+
+                if (stats != null)
+                {
+                    if (stats.ShotsAgainst > 0)
+                    {
+                        svPct = Math.Round(
+                            (decimal)stats.Saves / stats.ShotsAgainst,
+                            3);
+                    }
+
+                    if (stats.GamesPlayed > 0)
+                    {
+                        gaa = Math.Round(
+                            (decimal)stats.GoalsAgainst / stats.GamesPlayed,
+                            2);
+                    }
+                }
+
                 rows.Add(new TopScorerRowDto
                 {
                     PlayerId = entry.PlayerId,
@@ -207,6 +238,13 @@ namespace NhlFantasyLeague.api.Controllers
                     Assists = stats?.Assists ?? 0,
                     Points = stats?.Points ?? 0,
                     HatTricks = stats?.HatTricks ?? 0,
+
+                    Wins = stats?.Wins ?? 0,
+                    Losses = stats?.Losses ?? 0,
+                    OvertimeLosses = stats?.OvertimeLosses ?? 0,
+                    Shutouts = stats?.Shutouts ?? 0,
+                    SavePercentage = svPct,
+                    GoalsAgainstAverage = gaa,
 
                     TimeOnIce = atoi,
 
