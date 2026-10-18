@@ -12,6 +12,7 @@ import {
     getUsers,
     promoteUser,
     releasePlayer,
+    resetPlayerFantasyHistory,
     resetUserPassword,
     searchPlayers,
     swapRosterStatus,
@@ -429,6 +430,7 @@ export default function AdminPage() {
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
     const [fantasyTeamId, setFantasyTeamId] = useState('');
     const [rosterStatus, setRosterStatus] = useState('Active');
+    const [assignEffectiveAt, setAssignEffectiveAt] = useState('');
     const [searching, setSearching] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [releaseArmed, setReleaseArmed] = useState(false);
@@ -702,6 +704,60 @@ export default function AdminPage() {
         };
     }, [movementSearch, movementSelectedPlayer]);
 
+    // --- Reset player fantasy history section state ---
+
+    const [resetPlayerSearch, setResetPlayerSearch] = useState('');
+    const [resetPlayerSearchResults, setResetPlayerSearchResults] =
+        useState<PlayerSearchResult[]>([]);
+    const [resetPlayerSearching, setResetPlayerSearching] = useState(false);
+    const [resetPlayerSelected, setResetPlayerSelected] =
+        useState<PlayerSearchResult | null>(null);
+    const [resetPlayerConfirmFor, setResetPlayerConfirmFor] =
+        useState<number | null>(null);
+    const [resetPlayerConfirmInput, setResetPlayerConfirmInput] =
+        useState('');
+    const [resetPlayerBusy, setResetPlayerBusy] = useState(false);
+    const [resetPlayerError, setResetPlayerError] = useState<string | null>(
+        null,
+    );
+    const [resetPlayerSuccess, setResetPlayerSuccess] = useState<
+        string | null
+    >(null);
+
+    // Debounced player search for the "Réinitialiser l'historique
+    // fantasy d'un joueur" section.
+    useEffect(() => {
+        const text = resetPlayerSearch.trim();
+
+        if (text.length < MIN_SEARCH_LENGTH || resetPlayerSelected) {
+            setResetPlayerSearchResults([]);
+            setResetPlayerSearching(false);
+            return;
+        }
+
+        setResetPlayerSearching(true);
+
+        let cancelled = false;
+
+        const timer = setTimeout(() => {
+            searchPlayers(text)
+                .then((data) => {
+                    if (!cancelled) setResetPlayerSearchResults(data);
+                })
+                .catch(() => {
+                    if (!cancelled) setResetPlayerSearchResults([]);
+                })
+                .finally(() => {
+                    if (!cancelled) setResetPlayerSearching(false);
+                });
+        }, SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [resetPlayerSearch, resetPlayerSelected]);
+
     // --- Shape audit state ---
     const [shapeViolations, setShapeViolations] = useState<
         RosterShapeViolation[]
@@ -884,6 +940,57 @@ export default function AdminPage() {
         setMovementEditingEffectiveAt('');
         setMovementEditingStatus('Active');
         setMovementEditingNote('');
+    }
+
+    function handleResetPlayerPick(player: PlayerSearchResult) {
+        setResetPlayerSelected(player);
+        setResetPlayerSearch(`${player.firstName} ${player.lastName}`);
+        setResetPlayerSearchResults([]);
+        setResetPlayerError(null);
+        setResetPlayerSuccess(null);
+    }
+
+    async function handleResetPlayerFantasyHistory() {
+        if (!resetPlayerSelected) return;
+
+        // The button is already disabled until the confirmation text
+        // matches, but double-check here so a programmatic click
+        // cannot bypass the guard.
+        if (
+            resetPlayerConfirmInput.trim().toUpperCase() !== 'SUPPRIMER'
+        ) {
+            setResetPlayerError('Tapez SUPPRIMER pour confirmer.');
+            return;
+        }
+
+        setResetPlayerBusy(true);
+        setResetPlayerError(null);
+        setResetPlayerSuccess(null);
+
+        try {
+            const result = await resetPlayerFantasyHistory(
+                resetPlayerSelected.playerId,
+            );
+
+            setResetPlayerSuccess(result.message);
+
+            setResetPlayerConfirmFor(null);
+            setResetPlayerConfirmInput('');
+
+            // Clear the selection: the player no longer has any
+            // fantasy linkage, so there is nothing more to delete
+            // on a second click. Re-searching him will show him as
+            // a free agent.
+            setResetPlayerSelected(null);
+            setResetPlayerSearch('');
+            setResetPlayerSearchResults([]);
+        } catch (err) {
+            setResetPlayerError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setResetPlayerBusy(false);
+        }
     }
 
     function beginEditMovementRow(row: RosterStatusHistoryRow) {
@@ -2295,6 +2402,7 @@ export default function AdminPage() {
         setSelectedPlayer(null);
         setFantasyTeamId('');
         setRosterStatus('Active');
+        setAssignEffectiveAt('');
         setReleaseArmed(false);
     }
 
@@ -3675,14 +3783,39 @@ export default function AdminPage() {
 
         const playerId = selectedPlayer.playerId;
 
+        // Convert the optional date to a UTC ISO instant at 00:00 UTC
+        // on that calendar day. Building it directly from the
+        // yyyy-MM-dd value (instead of via the browser's local
+        // timezone) guarantees a negative UTC offset cannot shift
+        // the chosen date by one.
+        let effectiveAt: string | undefined;
+
+        if (assignEffectiveAt.trim() !== '') {
+            const parsed = new Date(
+                `${assignEffectiveAt}T00:00:00Z`,
+            );
+
+            if (Number.isNaN(parsed.getTime())) {
+                setError("Date d'entrée en vigueur invalide.");
+                return;
+            }
+
+            effectiveAt = parsed.toISOString();
+        }
+
         return runMovement(async () => {
             const result = await assignPlayer({
                 fantasyTeamId: Number(fantasyTeamId),
                 playerId,
                 rosterStatus,
+                effectiveAt,
             });
 
             void refreshRosterIfVisible();
+
+            // Reset the date input so the next assignment starts
+            // with the safe "tomorrow" default.
+            setAssignEffectiveAt('');
 
             return result;
         });
@@ -4554,6 +4687,27 @@ export default function AdminPage() {
                                 </option>
                             ))}
                         </select>
+
+                        <label className='text-sm font-medium text-muted-foreground'>
+                            Date d'entrée en vigueur (optionnel)
+                        </label>
+
+                        <input
+                            type='date'
+                            value={assignEffectiveAt}
+                            onChange={(event) =>
+                                setAssignEffectiveAt(event.target.value)
+                            }
+                            className={selectClass}
+                        />
+
+                        <p className='text-xs text-muted-foreground'>
+                            Laisser vide pour que le joueur rejoigne
+                            l'équipe demain. Choisir une date passée
+                            (par exemple le début de la saison) fait
+                            comme s'il avait toujours été sur cette
+                            équipe depuis cette date.
+                        </p>
 
                         <button
                             type='button'
@@ -5508,6 +5662,318 @@ export default function AdminPage() {
                     </>
                 )}
             </div>
+
+            {/* ============================================================
+                Réinitialiser l'historique fantasy d'un joueur
+                ============================================================ */}
+            <div className='max-w-2xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Réinitialiser l'historique fantasy d'un joueur
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Supprime tous les liens entre un joueur et les équipes
+                    fantasy où il a été pendant la saison courante : son
+                    entrée de roster, tout son historique de statut, et
+                    toute offre ou réponse du marché qui le référence.
+                    Après cette action, il est traité comme s'il n'avait
+                    jamais été dans une équipe cette saison : aucun de ses
+                    points (passés ni futurs) ne sera compté nulle part.
+                    Les échanges et changements de statut enregistrés qui
+                    l'impliquaient restent en tant qu'audit, mais ne
+                    pourront plus être revertés.
+                </p>
+
+                {resetPlayerError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {resetPlayerError}
+                    </p>
+                )}
+
+                {resetPlayerSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {resetPlayerSuccess}
+                    </p>
+                )}
+
+                <div className='relative'>
+                    <input
+                        type='text'
+                        value={resetPlayerSearch}
+                        autoComplete='off'
+                        onChange={(event) => {
+                            setResetPlayerSearch(event.target.value);
+                            setResetPlayerSelected(null);
+                            setResetPlayerSuccess(null);
+                            setResetPlayerError(null);
+                        }}
+                        placeholder='Rechercher un joueur (min. 2 lettres)'
+                        className={selectClass}
+                    />
+
+                    {resetPlayerSearchResults.length > 0 && (
+                        <div className='absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg'>
+                            {resetPlayerSearchResults.map((player) => (
+                                <button
+                                    key={player.playerId}
+                                    type='button'
+                                    onClick={() =>
+                                        handleResetPlayerPick(player)
+                                    }
+                                    className='flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-secondary'
+                                >
+                                    <span className='text-foreground'>
+                                        {player.firstName}{' '}
+                                        {player.lastName}
+                                    </span>
+                                    <span className='text-xs text-muted-foreground'>
+                                        {player.nhlTeamAbbreviation} ·{' '}
+                                        {player.position}
+                                        {player.fantasyTeamName ? (
+                                            <span className='ml-1 text-[#FFC72C]'>
+                                                ({player.fantasyTeamName})
+                                            </span>
+                                        ) : (
+                                            <span className='ml-1 italic'>
+                                                (libre)
+                                            </span>
+                                        )}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {resetPlayerSearching && !resetPlayerSelected && (
+                    <p className='text-xs text-muted-foreground'>
+                        Recherche...
+                    </p>
+                )}
+
+                {!resetPlayerSearching &&
+                    !resetPlayerSelected &&
+                    resetPlayerSearch.trim().length >=
+                    MIN_SEARCH_LENGTH &&
+                    resetPlayerSearchResults.length === 0 && (
+                        <p className='text-sm text-muted-foreground'>
+                            Aucun joueur trouvé.
+                        </p>
+                    )}
+
+                {resetPlayerSelected && (
+                    <div className='space-y-3 rounded-lg border border-border bg-card p-3'>
+                        <div className='flex flex-wrap items-center justify-between gap-2'>
+                            <div className='min-w-0'>
+                                <p className='font-medium text-foreground'>
+                                    {resetPlayerSelected.firstName}{' '}
+                                    {resetPlayerSelected.lastName}
+                                </p>
+                                <p className='text-xs text-muted-foreground'>
+                                    {resetPlayerSelected.nhlTeamAbbreviation}{' '}
+                                    · {resetPlayerSelected.position}
+                                    {resetPlayerSelected.fantasyTeamName ? (
+                                        <span className='ml-1 text-[#FFC72C]'>
+                                            · actuellement sur{' '}
+                                            {resetPlayerSelected.fantasyTeamName}
+                                        </span>
+                                    ) : (
+                                        <span className='ml-1 italic'>
+                                            · agent libre
+                                        </span>
+                                    )}
+                                </p>
+                            </div>
+
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    setResetPlayerSelected(null);
+                                    setResetPlayerSearch('');
+                                    setResetPlayerSuccess(null);
+                                    setResetPlayerError(null);
+                                }}
+                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                            >
+                                Changer
+                            </button>
+                        </div>
+
+                        <button
+                            type='button'
+                            onClick={() => {
+                                setResetPlayerConfirmFor(
+                                    resetPlayerSelected.playerId,
+                                );
+                                setResetPlayerConfirmInput('');
+                                setResetPlayerError(null);
+                            }}
+                            className='w-full cursor-pointer rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/20'
+                        >
+                            Supprimer tous les liens fantasy
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Confirm popup for player reset */}
+            {resetPlayerConfirmFor !== null && resetPlayerSelected && (
+                <div
+                    className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
+                    onClick={() => {
+                        if (resetPlayerBusy) return;
+                        setResetPlayerConfirmFor(null);
+                        setResetPlayerConfirmInput('');
+                        setResetPlayerError(null);
+                    }}
+                    role='dialog'
+                    aria-modal='true'
+                >
+                    <div
+                        className='flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-destructive/60 bg-[#0F1626] shadow-[0_0_20px_rgba(220,38,38,0.5),0_8px_24px_rgba(0,0,0,0.6)]'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='flex items-center justify-between border-b border-destructive/40 px-3 py-2'>
+                            <h3 className='text-sm font-bold uppercase tracking-wider text-destructive'>
+                                Supprimer l'historique fantasy
+                            </h3>
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    if (resetPlayerBusy) return;
+                                    setResetPlayerConfirmFor(null);
+                                    setResetPlayerConfirmInput('');
+                                    setResetPlayerError(null);
+                                }}
+                                disabled={resetPlayerBusy}
+                                className='cursor-pointer rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-red-500 disabled:opacity-50'
+                            >
+                                Fermer
+                            </button>
+                        </div>
+
+                        <div className='flex-1 space-y-3 overflow-y-auto px-3 py-3 text-sm text-foreground'>
+                            <p className='font-semibold text-destructive'>
+                                Cette action est irréversible.
+                            </p>
+
+                            <p>
+                                Joueur :{' '}
+                                <span className='font-semibold'>
+                                    {resetPlayerSelected.firstName}{' '}
+                                    {resetPlayerSelected.lastName}
+                                </span>
+                                {resetPlayerSelected.fantasyTeamName && (
+                                    <>
+                                        {' '}
+                                        (actuellement sur{' '}
+                                        <span className='text-[#FFC72C]'>
+                                            {resetPlayerSelected.fantasyTeamName}
+                                        </span>
+                                        )
+                                    </>
+                                )}
+                            </p>
+
+                            <p>
+                                Tous ses liens avec une équipe fantasy pour
+                                la saison courante seront supprimés :
+                            </p>
+
+                            <ul className='ml-4 list-disc space-y-1 text-xs'>
+                                <li>
+                                    Entrée de roster (s'il est sur une
+                                    équipe).
+                                </li>
+                                <li>
+                                    Toutes ses lignes d'historique de
+                                    statut et de changement d'équipe pour
+                                    la saison.
+                                </li>
+                                <li>
+                                    Toutes les offres du marché actives
+                                    qui l'annoncent.
+                                </li>
+                                <li>
+                                    Toutes les réponses (en attente ou
+                                    acceptées) qui le proposent.
+                                </li>
+                            </ul>
+
+                            <p className='rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive'>
+                                Les échanges et changements de statut
+                                enregistrés qui l'impliquaient{' '}
+                                <span className='font-semibold'>
+                                    restent en tant qu'audit
+                                </span>
+                                , mais ne pourront plus être revertés par
+                                la suite (l'historique d'un des joueurs du
+                                groupe aura été supprimé).
+                            </p>
+
+                            <p className='text-xs'>
+                                Pour confirmer, tapez{' '}
+                                <span className='font-mono font-semibold'>
+                                    SUPPRIMER
+                                </span>{' '}
+                                ci-dessous.
+                            </p>
+
+                            <input
+                                type='text'
+                                value={resetPlayerConfirmInput}
+                                onChange={(event) =>
+                                    setResetPlayerConfirmInput(
+                                        event.target.value,
+                                    )
+                                }
+                                placeholder='SUPPRIMER'
+                                disabled={resetPlayerBusy}
+                                className={`${selectClass} text-center font-mono uppercase`}
+                            />
+
+                            {resetPlayerError && (
+                                <p className='rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive'>
+                                    {resetPlayerError}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className='flex justify-end gap-2 border-t border-destructive/40 px-3 py-2'>
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    if (resetPlayerBusy) return;
+                                    setResetPlayerConfirmFor(null);
+                                    setResetPlayerConfirmInput('');
+                                    setResetPlayerError(null);
+                                }}
+                                disabled={resetPlayerBusy}
+                                className='cursor-pointer rounded border border-border px-3 py-1.5 text-sm text-foreground hover:bg-secondary disabled:opacity-50'
+                            >
+                                Annuler
+                            </button>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    void handleResetPlayerFantasyHistory()
+                                }
+                                disabled={
+                                    resetPlayerBusy ||
+                                    resetPlayerConfirmInput
+                                        .trim()
+                                        .toUpperCase() !== 'SUPPRIMER'
+                                }
+                                className='cursor-pointer rounded bg-destructive px-3 py-1.5 text-sm font-semibold text-destructive-foreground hover:brightness-110 disabled:opacity-50'
+                            >
+                                {resetPlayerBusy
+                                    ? 'Suppression...'
+                                    : 'Supprimer'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ============================================================
                 Trades en attentes

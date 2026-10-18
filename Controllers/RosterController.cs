@@ -452,5 +452,43 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(result);
         }
+
+        /// <summary>
+        /// Deletes every fantasy-team linkage for one player in the
+        /// given season: the live RosterEntry, every RosterStatusHistory
+        /// row, and every marketplace offer / pending or accepted
+        /// response that references him. The team totals recompute is
+        /// queued; the standings page reflects the change on the next
+        /// scheduler tick (≤ 30 s).
+        ///
+        /// After this call the player is treated as if he had never
+        /// been on any team this season, so no past game and no future
+        /// game will credit FP to any team for him.
+        ///
+        /// Trade and status-change audit records are preserved, but
+        /// their revert paths will refuse once one of their players
+        /// no longer has any history rows.
+        ///
+        /// Commissioner-only.
+        /// </summary>
+        /// <param name="playerId">Player id (Player.Id).</param>
+        /// <param name="seasonId">Season id, or omitted to use the current season.</param>
+        [HttpPost("player/{playerId:int}/reset-fantasy-history")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
+        public async Task<IActionResult> ResetPlayerFantasyHistory(
+            int playerId,
+            [FromQuery] int? seasonId,
+            CancellationToken ct = default)
+        {
+            var result = await _rosterAdminService
+                .ResetPlayerFantasyHistoryAsync(playerId, seasonId, ct);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
     }
 }

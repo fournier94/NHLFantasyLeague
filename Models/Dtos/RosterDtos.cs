@@ -19,6 +19,23 @@ namespace NhlFantasyLeague.api.Models.Dtos
         /// <summary>Roster status: "Active", "Bench" or "Prospect". Defaults to "Active".</summary>
         public string? RosterStatus { get; set; }
 
+        /// <summary>
+        /// Optional. UTC instant the assignment becomes effective.
+        ///
+        /// When null or omitted, the service uses tomorrow 00:00 UTC.
+        /// That is the default safety rule: a mid-season assign must
+        /// never retroactively re-attribute a game that already
+        /// started earlier the same ET day.
+        ///
+        /// When provided, the value is normalized to day precision
+        /// (00:00 UTC of the same calendar day) before it is written
+        /// to RosterStatusHistory. This is the mechanism the admin
+        /// page uses to backdate an assignment to the start of the
+        /// season, so a player who was reset then re-added behaves
+        /// as if he had always been on that team.
+        /// </summary>
+        public DateTime? EffectiveAt { get; set; }
+
         /// <summary>Ignored: the fantasy salary is always derived from the player's PlayerContracts. Kept for backward compatibility.</summary>
         public decimal? FantasySalary { get; set; }
 
@@ -476,5 +493,29 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public int Assists { get; set; }
         public int Points { get; set; }
         public int FantasyPoints { get; set; }
+    }
+
+    /// <summary>
+    /// Result of POST /api/Roster/player/{playerId}/reset-fantasy-history.
+    /// Reports every count that was deleted, so the admin page can
+    /// confirm exactly what was removed and how many marketplace
+    /// objects were auto-cleaned as a side effect.
+    /// </summary>
+    public class PlayerHistoryResetResultDto
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+
+        public int PlayerId { get; set; }
+        public int NhlPlayerId { get; set; }
+        public string PlayerName { get; set; } = string.Empty;
+
+        public int SeasonId { get; set; }
+        public string SeasonName { get; set; } = string.Empty;
+
+        public int RosterEntriesDeleted { get; set; }
+        public int StatusHistoryRowsDeleted { get; set; }
+        public int MarketplaceOffersDeleted { get; set; }
+        public int MarketplaceResponsesDeleted { get; set; }
     }
 }

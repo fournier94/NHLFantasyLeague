@@ -115,17 +115,70 @@ namespace NhlFantasyLeague.api.Services
             // Append a history row so the scoring recompute knows
             // this player became Active/Bench/Prospect on this team.
             //
-            // The effective instant is TOMORROW 00:00 UTC, not today.
-            // The recompute credits a game to a team iff the last
-            // history row with EffectiveAt <= game-day 00:00 UTC is
-            // Active. If we used today 00:00 UTC, a game that already
-            // started earlier the same ET day (a matinee) would be
+            // The effective instant is chosen by the caller when
+            // EffectiveAt is provided, and defaults to TOMORROW
+            // 00:00 UTC otherwise.
+            //
+            // Why tomorrow is the safe default: the recompute
+            // credits a game to a team iff the last history row with
+            // EffectiveAt <= game-day 00:00 UTC is Active. If we
+            // used today 00:00 UTC, a game that already started
+            // earlier the same ET day (a matinee) would be
             // retroactively credited to the new team, even though
             // the player was still on his old team when the game
             // started. Tomorrow's day boundary is past every game
             // that could possibly have already started, so the
-            // assignment can never retroactively steal a game.
-            var effectiveAt = NextUtcDayStart();
+            // default assignment can never retroactively steal a
+            // game.
+            //
+            // When the caller DOES provide EffectiveAt (the admin
+            // page's date picker), the value is normalized to day
+            // precision and used verbatim. This is the mechanism
+            // that lets the admin backdate an assignment to the
+            // start of the season, e.g. right after a
+            // "reset player fantasy history" to make a player
+            // appear as if he was always on that team.
+            var effectiveAt = request.EffectiveAt.HasValue
+                ? NormalizeEffectiveAt(request.EffectiveAt.Value)
+                : NextUtcDayStart();
+
+            // Backdating is only useful when the player has no
+            // later history rows for the season. If he does, those
+            // rows remain in force from their date onward and
+            // shadow the new assignment — which is correct
+            // behavior, but surprising if the admin expected a
+            // full replacement. Count them and mention it in the
+            // success message so the outcome is never silent.
+            string? backdateWarning = null;
+
+            if (request.EffectiveAt.HasValue)
+            {
+                var laterRows = await _dbContext.RosterStatusHistories
+                    .AsNoTracking()
+                    .Where(h =>
+                        h.PlayerId == player.Id &&
+                        h.SeasonId == season.Id &&
+                        h.EffectiveAt > effectiveAt)
+                    .OrderBy(h => h.EffectiveAt)
+                    .Select(h => h.EffectiveAt)
+                    .ToListAsync();
+
+                if (laterRows.Count > 0)
+                {
+                    backdateWarning =
+                        $" Attention : ce joueur avait déjà " +
+                        $"{laterRows.Count} ligne(s) d'historique " +
+                        $"à partir du {laterRows[0]:yyyy-MM-dd}. " +
+                        "Ces lignes restent en vigueur et bloquent " +
+                        "tout crédit de points après leur date. " +
+                        "Cette assignation ne couvrira que la période " +
+                        $"du {effectiveAt:yyyy-MM-dd} au " +
+                        $"{laterRows[0].AddDays(-1):yyyy-MM-dd}. " +
+                        "Utilisez « Réinitialiser l'historique " +
+                        "fantasy » d'abord si vous voulez repartir " +
+                        "de zéro.";
+                }
+            }
 
             AddHistoryRow(
                 player.Id,
@@ -144,7 +197,11 @@ namespace NhlFantasyLeague.api.Services
                 Success = true,
                 Message =
                     $"'{PlayerName(player)}' assigned to '{team.Name}' " +
-                    $"({rosterStatus}) for {season.Name}.",
+                    $"({rosterStatus}) for {season.Name}" +
+                    (request.EffectiveAt.HasValue
+                        ? $" (effectif le {effectiveAt:yyyy-MM-dd})."
+                        : ".") +
+                    (backdateWarning ?? string.Empty),
                 Entry = ToRosterEntryDto(entry)
             };
         }
@@ -370,6 +427,135 @@ namespace NhlFantasyLeague.api.Services
                 Success = true,
                 Message = $"Released {entries.Count} players from fantasy teams for {season.Name}.",
                 Entry = null
+            };
+        }
+
+        // =================================================================
+        // Full reset of one player's fantasy-team history
+        //
+        // Wipes every linkage between the player and every fantasy team
+        // for the season. After this call, the player is treated by the
+        // scoring recompute as if he had never been on any team this
+        // year: no past game is credited, and no future game will ever
+        // be credited either (there is no history row that could match
+        // any future game-day instant).
+        //
+        // Trade and status-change audit records are preserved. Their
+        // revert paths are designed to refuse once one of their linked
+        // history rows is missing, so an admin can no longer accidentally
+        // revert a trade whose other players are still in their post-
+        // trade state.
+        // =================================================================
+
+        public async Task<PlayerHistoryResetResultDto>
+            ResetPlayerFantasyHistoryAsync(
+                int playerId,
+                int? seasonId,
+                CancellationToken ct = default)
+        {
+            var season = await ResolveSeasonAsync(seasonId);
+
+            if (season == null)
+            {
+                return new PlayerHistoryResetResultDto
+                {
+                    Success = false,
+                    Message =
+                        "Season not found. Run POST /api/League/setup first."
+                };
+            }
+
+            var player = await _dbContext.Players
+                .Include(p => p.NhlTeam)
+                .FirstOrDefaultAsync(p => p.Id == playerId, ct);
+
+            if (player == null)
+            {
+                return new PlayerHistoryResetResultDto
+                {
+                    Success = false,
+                    Message = $"Player {playerId} not found."
+                };
+            }
+
+            // 1. Live ownership rows for the season.
+            var entries = await _dbContext.RosterEntries
+                .Where(e =>
+                    e.PlayerId == playerId &&
+                    e.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            var entriesDeleted = entries.Count;
+
+            if (entries.Count > 0)
+            {
+                _dbContext.RosterEntries.RemoveRange(entries);
+            }
+
+            // 2. Every history row for the season.
+            var historyRows = await _dbContext.RosterStatusHistories
+                .Where(h =>
+                    h.PlayerId == playerId &&
+                    h.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            var historyDeleted = historyRows.Count;
+
+            if (historyRows.Count > 0)
+            {
+                _dbContext.RosterStatusHistories.RemoveRange(historyRows);
+            }
+
+            // 3. Marketplace objects that reference the player.
+            var (offersDeleted, responsesDeleted) =
+                await DeleteMarketplaceObjectsInvolvingPlayersAsync(
+                    new[] { playerId });
+
+            await _dbContext.SaveChangesAsync(ct);
+
+            OnRosterChanged();
+
+            var playerName =
+                $"{player.FirstName} {player.LastName}".Trim();
+
+            var parts = new List<string>
+            {
+                $"{entriesDeleted} entrée(s) de roster",
+                $"{historyDeleted} ligne(s) d'historique"
+            };
+
+            if (offersDeleted > 0)
+            {
+                parts.Add($"{offersDeleted} offre(s) du marché");
+            }
+
+            if (responsesDeleted > 0)
+            {
+                parts.Add($"{responsesDeleted} réponse(s) du marché");
+            }
+
+            return new PlayerHistoryResetResultDto
+            {
+                Success = true,
+                Message =
+                    $"'{playerName}' détaché de toute équipe fantasy " +
+                    $"pour {season.Name}. Supprimé : " +
+                    $"{string.Join(", ", parts)}. " +
+                    "Il ne recevra plus aucun point d'aucune équipe, " +
+                    "y compris pour ses matchs futurs. Les échanges et " +
+                    "changements de statut enregistrés qui l'impliquaient " +
+                    "restent en tant qu'audit, mais ne pourront plus être " +
+                    "revertés. Les totaux de toutes les équipes seront " +
+                    "recalculés au prochain tick (≤ 30 s).",
+                PlayerId = player.Id,
+                NhlPlayerId = player.NhlPlayerId,
+                PlayerName = playerName,
+                SeasonId = season.Id,
+                SeasonName = season.Name,
+                RosterEntriesDeleted = entriesDeleted,
+                StatusHistoryRowsDeleted = historyDeleted,
+                MarketplaceOffersDeleted = offersDeleted,
+                MarketplaceResponsesDeleted = responsesDeleted
             };
         }
 

@@ -821,6 +821,20 @@ export interface AssignPlayerRequest {
     fantasyTeamId: number;
     playerId: number;
     rosterStatus: string;
+
+    /**
+     * Optional. UTC ISO instant the player joins the team.
+     *
+     * Omit or pass null to start tomorrow 00:00 UTC. That is the
+     * default safety rule: a mid-season assign must never
+     * retroactively re-attribute a game that already started.
+     *
+     * When provided, the backend normalizes to day precision
+     * (00:00 UTC of the same calendar day) and writes it into
+     * RosterStatusHistory. This is the mechanism the admin page
+     * uses to backdate an assignment to the start of the season.
+     */
+    effectiveAt?: string | null;
 }
 
 /** Result of a roster write endpoint: success flag + readable message. */
@@ -879,6 +893,43 @@ export const updateRosterEntry = (request: UpdateRosterEntryRequest) =>
 /** Removes a roster entry, making the player a free agent again (POST /api/Roster/release). */
 export const releasePlayer = (request: ReleasePlayerRequest) =>
     apiPost<RosterActionResult>('/Roster/release', request);
+
+// ---------------------------------------------------------------------
+// Reset a player's fantasy-team history for one season
+//
+// Deletes every RosterEntry and every RosterStatusHistory row for
+// the player in the current season, plus any marketplace offer or
+// pending/accepted response that references him. After this call,
+// the player is treated as having never been on any team this
+// season: no game is credited to any team, past or future.
+//
+// Trade and status-change audit records are preserved. Reverting a
+// trade that this player was part of will fail, because one of its
+// players no longer has history rows.
+// ---------------------------------------------------------------------
+
+export interface PlayerHistoryResetResult {
+    success: boolean;
+    message: string;
+    playerId: number;
+    nhlPlayerId: number;
+    playerName: string;
+    seasonId: number;
+    seasonName: string;
+    rosterEntriesDeleted: number;
+    statusHistoryRowsDeleted: number;
+    marketplaceOffersDeleted: number;
+    marketplaceResponsesDeleted: number;
+}
+
+export function resetPlayerFantasyHistory(
+    playerId: number,
+): Promise<PlayerHistoryResetResult> {
+    return apiPost<PlayerHistoryResetResult>(
+        `/Roster/player/${playerId}/reset-fantasy-history`,
+        {},
+    );
+}
 
 // ---------------------------------------------------------------------
 // Roster swaps / status history
