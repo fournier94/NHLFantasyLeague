@@ -12,7 +12,7 @@ import InjuriesPage from '@/pages/InjuriesPage';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { useAuth } from '@/lib/AuthContext';
 import { getFantasyTeamColor } from '@/lib/fantasyTeamColors';
-import { getNhlTeamAuraColor, getNhlTeamColor, getNhlTeamTextColor } from '@/lib/nhlTeamColors';
+import { getNhlTeamColor, getNhlTeamTextColor } from '@/lib/nhlTeamColors';
 import {
     getNhlStandings,
     getTopScorers,
@@ -495,7 +495,10 @@ const TopScorersRow = memo(function TopScorersRow({
 
     const group = toPositionGroup(row.position);
 
-    const teamColor = getFantasyTeamColor(row.fantasyTeamId);
+    const teamColor =
+        row.fantasyTeamId != null
+            ? getFantasyTeamColor(row.fantasyTeamId)
+            : '#FFFFFF';
 
     const teamLabel = row.fantasyTeamName
         ? shortTeamName(row.fantasyTeamName)
