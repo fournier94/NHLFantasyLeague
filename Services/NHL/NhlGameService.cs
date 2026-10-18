@@ -1503,6 +1503,22 @@ PersistFinalGamesResult result)
                 var deltaSA = stats.ShotsAgainst - existing.ShotsAgainst;
                 var deltaSV = stats.Saves - existing.Saves;
 
+                // A goalie's own goals and assists can change after a
+                // review (an assist is credited retroactively, or a
+                // rare goalie goal is awarded). They MUST be part of
+                // the change detection below, or a row whose G/A
+                // were wrong at insert time can never be repaired:
+                // FantasyPoints stays correct while the G/A
+                // components diverge from what the boxscore says,
+                // so deltaFP is 0 and the early-return fires forever.
+                var newGoals = stats.Goals;
+                var newAssists = stats.Assists;
+                var newPoints = newGoals + newAssists;
+
+                var deltaG = newGoals - existing.Goals;
+                var deltaA = newAssists - existing.Assists;
+                var deltaP = newPoints - existing.Points;
+
                 var newToi = MaxToi(existing.TimeOnIce, stats.TimeOnIce);
                 var toiChanged = !string.Equals(
                     newToi,
@@ -1512,6 +1528,7 @@ PersistFinalGamesResult result)
                 if (deltaFP == 0 && deltaW == 0 && deltaL == 0 &&
                     deltaOTL == 0 && deltaSO == 0 && deltaGA == 0 &&
                     deltaSA == 0 && deltaSV == 0 &&
+                    deltaG == 0 && deltaA == 0 && deltaP == 0 &&
                     !toiChanged)
                 {
                     return;
@@ -1523,13 +1540,6 @@ PersistFinalGamesResult result)
                 // ApplyStatDeltas. Without this, the log row and the
                 // PlayerSeasonStat row drift on any goalie-point
                 // change.
-                var newGoals = stats.Goals;
-                var newAssists = stats.Assists;
-                var newPoints = newGoals + newAssists;
-
-                var deltaG = newGoals - existing.Goals;
-                var deltaA = newAssists - existing.Assists;
-                var deltaP = newPoints - existing.Points;
 
                 existing.GameDate = gameDate;
                 existing.Goals = newGoals;
@@ -1579,6 +1589,14 @@ PersistFinalGamesResult result)
             }
             else
             {
+                // Goalies can be credited with goals and assists (a
+                // goalie goal is rare but real; assists on an empty-
+                // net play or a delayed penalty are more common).
+                // BOTH fields must be set from the boxscore, or the
+                // row defaults them to 0 while Points is correct,
+                // producing an impossible 0+0=1 line that every
+                // downstream reader (game log, career table,
+                // PlayerSeasonStat recompute) inherits.
                 var log = new PlayerGameLog
                 {
                     PlayerId = player.Id,
@@ -1588,6 +1606,8 @@ PersistFinalGamesResult result)
                     NhlTeamId = nhlTeamId,
                     OpponentNhlTeamId = opponentNhlTeamId,
                     IsHomeGame = isHomeGame,
+                    Goals = stats.Goals,
+                    Assists = stats.Assists,
                     Points = points,
                     GoalsAgainst = stats.GoalsAgainst,
                     ShotsAgainst = stats.ShotsAgainst,
@@ -1604,10 +1624,18 @@ PersistFinalGamesResult result)
                 newLogsToInsert.Add(log);
                 logsByKey[key] = log;
 
+                // Goals and Assists MUST be passed here too. Passing
+                // 0/0 leaves PlayerSeasonStat.Goals and .Assists
+                // permanently stuck at 0 for the season, even
+                // though FantasyPoints (built from points) is
+                // correct. The season strip would then show G=0,
+                // A=0, PTS=1 — impossible for a real player line.
                 ApplyStatDeltas(
                     player.Id,
                     gamesPlayed: 1,
-                    goals: 0, assists: 0, points: points,
+                    goals: stats.Goals,
+                    assists: stats.Assists,
+                    points: points,
                     plusMinus: 0, penaltyMinutes: 0, shots: 0,
                     hatTricks: 0,
                     wins: isWin ? 1 : 0,
