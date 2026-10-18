@@ -5,6 +5,7 @@ using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.Auth;
 using NhlFantasyLeague.api.Services.CapFreeze;
+using NhlFantasyLeague.api.Services.Jobs;
 using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers.NHL
@@ -16,15 +17,21 @@ namespace NhlFantasyLeague.api.Controllers.NHL
     {
         private readonly NhlPlayerService _nhlPlayerService;
         private readonly NhlPopulationService _nhlPopulationService;
+        private readonly NhlGameLogService _nhlGameLogService;
+        private readonly ScheduledJobsRunner _jobs;
         private readonly ILogger<NhlPlayerController> _logger;
 
         public NhlPlayerController(
             NhlPlayerService nhlPlayerService,
             NhlPopulationService nhlPopulationService,
+            NhlGameLogService nhlGameLogService,
+            ScheduledJobsRunner jobs,
             ILogger<NhlPlayerController> logger)
         {
             _nhlPlayerService = nhlPlayerService;
             _nhlPopulationService = nhlPopulationService;
+            _nhlGameLogService = nhlGameLogService;
+            _jobs = jobs;
             _logger = logger;
         }
 
@@ -85,6 +92,7 @@ namespace NhlFantasyLeague.api.Controllers.NHL
         [HttpPost("player/{id}/refresh")]
         public async Task<IActionResult> RefreshPlayer(int id)
         {
+            // 1. Refresh the player's landing data (bio, draft, season totals).
             var player = await _nhlPlayerService.SavePlayerAsync(id);
 
             if (player == null)
@@ -96,6 +104,30 @@ namespace NhlFantasyLeague.api.Controllers.NHL
                         $"{id}. L'ID est peut-être invalide, ou l'API NHL " +
                         "n'a rien renvoyé pour ce joueur."
                 });
+            }
+
+            // 2. Refresh the player's game logs for the current season.
+            //    This is what catches missing stats (like an assist that
+            //    was added to the game log after the boxscore was first fetched).
+            var seasonCode = NhlFantasyLeague.api.Constants.SeasonCodes.Current;
+
+            try
+            {
+                await _nhlGameLogService.SavePlayerGameLogsAsync(
+                    id,
+                    seasonCode,
+                    preloadedPlayer: player);
+
+                // 3. Trigger a background team totals recompute so the
+                //    standings update to reflect any newly found points.
+                _jobs.RequestRecompute();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to refresh game logs during single player refresh for NhlPlayerId {Id}.",
+                    id);
             }
 
             return Ok(new
