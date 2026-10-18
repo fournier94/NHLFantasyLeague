@@ -495,7 +495,7 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public int FantasyPoints { get; set; }
     }
 
-    /// <summary>
+      /// <summary>
     /// Result of POST /api/Roster/player/{playerId}/reset-fantasy-history.
     /// Reports every count that was deleted, so the admin page can
     /// confirm exactly what was removed and how many marketplace
@@ -517,5 +517,59 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public int StatusHistoryRowsDeleted { get; set; }
         public int MarketplaceOffersDeleted { get; set; }
         public int MarketplaceResponsesDeleted { get; set; }
+    }
+
+    /// <summary>
+    /// One player in a team's EFFECTIVE roster at the current instant.
+    /// "Effective" means: the last RosterStatusHistory row for the
+    /// player and season whose EffectiveAt is &lt;= now. That is the
+    /// exact row the scoring recompute would resolve to for a game
+    /// starting right now.
+    ///
+    /// This is not the same as RosterEntry: RosterEntry is a UI
+    /// convenience row that can briefly drift from history when a
+    /// trade has a future effective date or a fresh assignment
+    /// defaults to tomorrow. Use this DTO when the question is
+    /// "who gets credit if a game starts right now".
+    /// </summary>
+    public class EffectiveRosterPlayerDto
+    {
+        public int PlayerId { get; set; }
+        public int NhlPlayerId { get; set; }
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string Position { get; set; } = string.Empty;
+        public string NhlTeamAbbreviation { get; set; } = string.Empty;
+
+        /// <summary>"Active", "Bench" or "Prospect". Never "Released".</summary>
+        public string RosterStatus { get; set; } = string.Empty;
+
+        /// <summary>
+        /// UTC instant (day precision) of the effective history row.
+        /// Useful when the admin wants to know how recently the
+        /// current state was written.
+        /// </summary>
+        public DateTime EffectiveAt { get; set; }
+    }
+
+    /// <summary>
+    /// The complete effective roster of one fantasy team for one
+    /// season, as the scoring engine would resolve it for a game
+    /// starting right now.
+    /// </summary>
+    public class EffectiveRosterDto
+    {
+        public int FantasyTeamId { get; set; }
+        public string FantasyTeamName { get; set; } = string.Empty;
+
+        public int SeasonId { get; set; }
+        public string SeasonName { get; set; } = string.Empty;
+
+        public int ActiveCount { get; set; }
+        public int BenchCount { get; set; }
+        public int ProspectCount { get; set; }
+
+        /// <summary>Players ordered Active → Bench → Prospect, then by last name.</summary>
+        public List<EffectiveRosterPlayerDto> Players { get; set; } = new();
     }
 }

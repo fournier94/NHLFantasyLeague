@@ -2217,6 +2217,124 @@ namespace NhlFantasyLeague.api.Services
         }
 
         /// <summary>
+        /// Returns the EFFECTIVE roster of the given fantasy team for
+        /// the given season: every player whose latest
+        /// RosterStatusHistory row (with EffectiveAt &lt;= now, status
+        /// != Released) points at this team, with the status and
+        /// effective date of that row.
+        ///
+        /// This is the source-of-truth view used by the scoring
+        /// recompute. Any player shown as Active here will have his
+        /// production credited to this team for the next game,
+        /// assuming no further status/team change is made before the
+        /// game starts. Trade and assignment flows with a future
+        /// effective date therefore do not appear until that date
+        /// arrives, exactly matching the scoring behaviour.
+        /// </summary>
+        public async Task<EffectiveRosterDto?> GetEffectiveRosterAsync(
+            int fantasyTeamId,
+            int? seasonId,
+            CancellationToken ct = default)
+        {
+            var team = await _dbContext.FantasyTeams
+                .AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Id == fantasyTeamId, ct);
+
+            if (team == null)
+            {
+                return null;
+            }
+
+            var season = await ResolveSeasonAsync(seasonId);
+
+            if (season == null)
+            {
+                return null;
+            }
+
+            // Load every history row for the season in one query.
+            // Include Player and NhlTeam so identity can be projected
+            // without N+1 lookups.
+            var allHistory = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Include(h => h.Player)
+                    .ThenInclude(p => p.NhlTeam)
+                .Where(h => h.SeasonId == season.Id)
+                .ToListAsync(ct);
+
+            // Resolve the effective row per player. Same tie-break
+            // as the scoring recompute: order by (EffectiveAt, Id),
+            // take the last row with EffectiveAt <= now. Released
+            // rows are skipped: the player is not on any team.
+            var nowUtc = DateTime.UtcNow;
+
+            var effectiveByPlayer =
+                new Dictionary<int, RosterStatusHistory>();
+
+            foreach (var group in allHistory.GroupBy(h => h.PlayerId))
+            {
+                RosterStatusHistory? effective = null;
+
+                foreach (var row in group
+                    .Where(h => h.EffectiveAt <= nowUtc)
+                    .OrderBy(h => h.EffectiveAt)
+                    .ThenBy(h => h.Id))
+                {
+                    effective = row;
+                }
+
+                if (effective == null)
+                {
+                    continue;
+                }
+
+                if (effective.RosterStatus == RosterStatus.Released)
+                {
+                    continue;
+                }
+
+                effectiveByPlayer[group.Key] = effective;
+            }
+
+            // Filter to this team and project. Ordering by the
+            // RosterStatus enum sorts Active -> Bench -> Prospect,
+            // matching the enum values.
+            var players = effectiveByPlayer.Values
+                .Where(h => h.FantasyTeamId == fantasyTeamId)
+                .OrderBy(h => h.RosterStatus)
+                .ThenBy(h => h.Player.LastName)
+                .ThenBy(h => h.Player.FirstName)
+                .Select(h => new EffectiveRosterPlayerDto
+                {
+                    PlayerId = h.PlayerId,
+                    NhlPlayerId = h.Player.NhlPlayerId,
+                    FirstName = h.Player.FirstName,
+                    LastName = h.Player.LastName,
+                    Position = h.Player.Position,
+                    NhlTeamAbbreviation =
+                        h.Player.NhlTeam?.Abbreviation ?? string.Empty,
+                    RosterStatus = h.RosterStatus.ToString(),
+                    EffectiveAt = h.EffectiveAt,
+                })
+                .ToList();
+
+            return new EffectiveRosterDto
+            {
+                FantasyTeamId = team.Id,
+                FantasyTeamName = team.Name,
+                SeasonId = season.Id,
+                SeasonName = season.Name,
+                ActiveCount = players.Count(p =>
+                    p.RosterStatus == "Active"),
+                BenchCount = players.Count(p =>
+                    p.RosterStatus == "Bench"),
+                ProspectCount = players.Count(p =>
+                    p.RosterStatus == "Prospect"),
+                Players = players,
+            };
+        }
+
+        /// <summary>
         /// Returns the fantasy team's roster as it stood on a specific
         /// calendar date (ET, day precision): the players who had any
         /// non-Released status on that team at 00:00 UTC of that day,

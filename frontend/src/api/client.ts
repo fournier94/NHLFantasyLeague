@@ -721,6 +721,54 @@ export function getActiveGameLogsForTeam(
 }
 
 // ---------------------------------------------------------------------
+// Effective roster (source of truth for scoring)
+//
+// Returns every player whose latest RosterStatusHistory row for the
+// season (with effectiveAt <= now and status !== 'Released') points
+// at the given team. This is exactly the state the scoring engine
+// resolves to for a game starting right now, so it is the
+// authoritative answer to "who is currently on this team".
+//
+// Unlike getTeamRoster, this is not affected by pending trades
+// with future effective dates or by assignments that default to
+// tomorrow.
+// ---------------------------------------------------------------------
+
+export interface EffectiveRosterPlayer {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    nhlTeamAbbreviation: string;
+    rosterStatus: string;
+    effectiveAt: string;
+}
+
+export interface EffectiveRoster {
+    fantasyTeamId: number;
+    fantasyTeamName: string;
+    seasonId: number;
+    seasonName: string;
+    activeCount: number;
+    benchCount: number;
+    prospectCount: number;
+    players: EffectiveRosterPlayer[];
+}
+
+export function getEffectiveRoster(
+    fantasyTeamId: number,
+    seasonId?: number,
+): Promise<EffectiveRoster> {
+    const query = seasonId != null ? `?seasonId=${seasonId}` : '';
+
+    return apiGet<EffectiveRoster>(
+        `/Roster/team/${fantasyTeamId}/effective-roster${query}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
+// ---------------------------------------------------------------------
 // Roster shape violations (commissioner audit)
 //
 // Retrospective scan of the season's RosterStatusHistory. Reports

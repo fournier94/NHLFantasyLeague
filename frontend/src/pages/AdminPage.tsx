@@ -40,6 +40,7 @@ import {
     deleteAcceptedTrade,
     getRosterShapeViolations,
     getActiveGameLogsForTeam,
+    getEffectiveRoster,
     startCapFreezeContractsJob,
     finalizeAdminTrade,
     getAdminTradeHistory,
@@ -53,6 +54,7 @@ import {
     triggerBackup,
     downloadBackupUrl,
     type DraftPick,
+    type EffectiveRoster,
     type RosterStatusHistoryRow,
     type ProtectedSalaryRow,
     type PlayerContractRow,
@@ -1131,6 +1133,55 @@ export default function AdminPage() {
             cancelled = true;
         };
     }, [activeLogsTeamId]);
+
+    // --- Effective roster state ---
+    //
+    // Reads from RosterStatusHistory (source of truth for the
+    // scoring engine). NOT from RosterEntry, so it cannot drift
+    // when a trade has a future effective date or when a fresh
+    // assignment defaults to tomorrow. See getEffectiveRoster.
+    const [effectiveRosterTeamId, setEffectiveRosterTeamId] =
+        useState('');
+    const [effectiveRoster, setEffectiveRoster] =
+        useState<EffectiveRoster | null>(null);
+    const [effectiveRosterLoading, setEffectiveRosterLoading] =
+        useState(false);
+    const [effectiveRosterError, setEffectiveRosterError] =
+        useState<string | null>(null);
+
+    useEffect(() => {
+        if (!effectiveRosterTeamId) {
+            setEffectiveRoster(null);
+            setEffectiveRosterError(null);
+            return;
+        }
+
+        let cancelled = false;
+        setEffectiveRosterLoading(true);
+        setEffectiveRosterError(null);
+
+        getEffectiveRoster(Number(effectiveRosterTeamId))
+            .then((data) => {
+                if (!cancelled) setEffectiveRoster(data);
+            })
+            .catch((err) => {
+                if (!cancelled) {
+                    setEffectiveRosterError(
+                        err instanceof Error ? err.message : 'Erreur inconnue.',
+                    );
+                    setEffectiveRoster(null);
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setEffectiveRosterLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [effectiveRosterTeamId]);
+
+    // --- Swap section state ---
 
     // Aggregated per-player totals from the raw per-game log.
     //
@@ -4241,6 +4292,158 @@ export default function AdminPage() {
                             </tbody>
                         </table>
                     </div>
+                )}
+            </div>
+
+            {/* ============================================================
+                Effectif effectif actuel (source de vérité)
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Effectif effectif actuel
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Affiche, pour l'équipe sélectionnée, les joueurs
+                    auxquels les points sont présentement crédités par
+                    le moteur de calcul, basé sur l'historique de
+                    statut de la saison. Ceci est la source de vérité
+                    utilisée par le calcul des totaux : si un joueur
+                    y apparaît « Actif », sa production sera créditée
+                    à cette équipe pour le prochain match (jusqu'à ce
+                    qu'un autre changement de statut ou d'équipe soit
+                    enregistré).
+                </p>
+
+                <select
+                    value={effectiveRosterTeamId}
+                    onChange={(event) =>
+                        setEffectiveRosterTeamId(event.target.value)
+                    }
+                    className={selectClass}
+                >
+                    <option value='' disabled>
+                        Choisir une équipe
+                    </option>
+                    {teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                            {team.name}
+                        </option>
+                    ))}
+                </select>
+
+                {effectiveRosterLoading && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {effectiveRosterError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {effectiveRosterError}
+                    </p>
+                )}
+
+                {effectiveRoster && !effectiveRosterLoading && (
+                    <>
+                        <div className='grid grid-cols-3 gap-2'>
+                            <div className='rounded-lg border border-border bg-card px-3 py-2'>
+                                <p className='text-[0.65rem] uppercase tracking-wide text-muted-foreground'>
+                                    Alignement
+                                </p>
+                                <p className='text-lg font-semibold text-[#00F0FF]'>
+                                    {effectiveRoster.activeCount}
+                                    <span className='ml-1 text-xs font-normal text-muted-foreground'>
+                                        / 19
+                                    </span>
+                                </p>
+                            </div>
+
+                            <div className='rounded-lg border border-border bg-card px-3 py-2'>
+                                <p className='text-[0.65rem] uppercase tracking-wide text-muted-foreground'>
+                                    Banc
+                                </p>
+                                <p className='text-lg font-semibold text-[#FFC72C]'>
+                                    {effectiveRoster.benchCount}
+                                    <span className='ml-1 text-xs font-normal text-muted-foreground'>
+                                        / 7
+                                    </span>
+                                </p>
+                            </div>
+
+                            <div className='rounded-lg border border-border bg-card px-3 py-2'>
+                                <p className='text-[0.65rem] uppercase tracking-wide text-muted-foreground'>
+                                    Prospects
+                                </p>
+                                <p className='text-lg font-semibold text-[#7DD3FC]'>
+                                    {effectiveRoster.prospectCount}
+                                    <span className='ml-1 text-xs font-normal text-muted-foreground'>
+                                        / 3
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+
+                        {effectiveRoster.players.length === 0 && (
+                            <p className='rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground'>
+                                Aucun joueur n'est actuellement crédité à
+                                cette équipe dans le calcul des points.
+                            </p>
+                        )}
+
+                        {effectiveRoster.players.length > 0 && (
+                            <div className='overflow-x-auto rounded-lg border border-border bg-card'>
+                                <table className='w-full min-w-[320px] text-sm'>
+                                    <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
+                                        <tr>
+                                            <th className='px-2 py-2 text-left font-medium'>
+                                                Joueur
+                                            </th>
+                                            <th className='px-2 py-2 text-center font-medium'>
+                                                Statut
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className='text-foreground'>
+                                        {effectiveRoster.players.map(
+                                            (row, idx) => (
+                                                <tr
+                                                    key={row.playerId}
+                                                    className={
+                                                        idx % 2 === 0
+                                                            ? 'bg-transparent'
+                                                            : 'bg-secondary/20'
+                                                    }
+                                                >
+                                                    <td className='px-2 py-1.5 text-left'>
+                                                        {row.firstName}{' '}
+                                                        {row.lastName}
+                                                    </td>
+                                                    <td className='px-2 py-1.5 text-center'>
+                                                        {row.rosterStatus ===
+                                                            'Active' ? (
+                                                            <span className='font-semibold text-[#00F0FF]'>
+                                                                Actif
+                                                            </span>
+                                                        ) : row.rosterStatus ===
+                                                            'Bench' ? (
+                                                            <span className='text-[#FFC72C]'>
+                                                                Banc
+                                                            </span>
+                                                        ) : (
+                                                            <span className='text-muted-foreground'>
+                                                                Prospect
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ),
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
 

@@ -279,17 +279,42 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         /// <summary>
+        /// Returns the EFFECTIVE roster of one fantasy team for one
+        /// season: every player whose latest RosterStatusHistory row
+        /// (with EffectiveAt &lt;= now, status != Released) points at
+        /// that team. This is the source-of-truth view used by the
+        /// scoring recompute.
+        ///
+        /// Any player shown as Active here will have his production
+        /// credited to this team for the next game, assuming no
+        /// further change is made before that game. Trade and
+        /// assignment flows with a future effective date therefore
+        /// do not appear until that date arrives, exactly matching
+        /// the scoring behaviour.
+        ///
+        /// Read-only. Available to any authenticated user.
+        /// </summary>
+        [HttpGet("team/{fantasyTeamId:int}/effective-roster")]
+        public async Task<IActionResult> GetEffectiveRoster(
+            int fantasyTeamId,
+            [FromQuery] int? seasonId,
+            CancellationToken ct = default)
+        {
+            var roster = await _rosterAdminService
+                .GetEffectiveRosterAsync(fantasyTeamId, seasonId, ct);
+
+            if (roster == null)
+            {
+                return NotFound();
+            }
+
+            return Ok(roster);
+        }
+
+        /// <summary>
         /// Returns every continuous window during which some fantasy
         /// team's roster shape was not
         /// 12F/6D/1G active + 4F/2D/1G bench + 3 prospects.
-        ///
-        /// Each window carries its start date, its end date (or null
-        /// when still wrong), the counts that broke it, and the
-        /// roster that produced them. Same day-precision UTC
-        /// instants as every other RosterStatusHistory row.
-        ///
-        /// Optional ?seasonId= targets a specific season; the
-        /// current season is used when omitted.
         /// </summary>
         [HttpGet("shape-violations")]
         [Authorize(Roles = AuthService.CommissionerRole)]
