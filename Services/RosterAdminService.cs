@@ -5500,6 +5500,140 @@ PlayerSeasonStat? seasonStat = null)
                 row, row.Season, row.TeamA, row.TeamB, payload);
         }
 
+        /// <summary>
+        /// Returns every game log for every player who was ever in the
+        /// ACTIVE starting lineup for the given fantasy team during the
+        /// given season.
+        ///
+        /// Players who were traded away are included for the games they
+        /// played while they were Active on this team.
+        /// Players who arrived mid-season are included for the games they
+        /// played while they were Active on this team.
+        ///
+        /// Uses the same history-slicing logic as the scoring recompute:
+        /// for each game, look up the last RosterStatusHistory row that
+        /// was effective at the start of the game day. Only include the
+        /// game log if that effective row belonged to this fantasy team
+        /// AND its status was Active.
+        /// </summary>
+        public async Task<List<ActivePlayerGameLogDto>> GetActiveGameLogsForTeamAsync(
+            int fantasyTeamId,
+            int? seasonId,
+            CancellationToken ct = default)
+        {
+            var season = await ResolveSeasonAsync(seasonId);
+
+            if (season == null)
+            {
+                return new List<ActivePlayerGameLogDto>();
+            }
+
+            // 1. Find every player who has at least one history row
+            // for this team during the season.
+            var playerIds = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Where(h =>
+                    h.SeasonId == season.Id &&
+                    h.FantasyTeamId == fantasyTeamId)
+                .Select(h => h.PlayerId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            if (playerIds.Count == 0)
+            {
+                return new List<ActivePlayerGameLogDto>();
+            }
+
+            // 2. Load the full history for those players in this
+            // season so we can slice it per game.
+            var allHistory = await _dbContext.RosterStatusHistories
+                .AsNoTracking()
+                .Where(h =>
+                    h.SeasonId == season.Id &&
+                    playerIds.Contains(h.PlayerId))
+                .OrderBy(h => h.EffectiveAt)
+                .ThenBy(h => h.Id)
+                .ToListAsync(ct);
+
+            var historyByPlayer = allHistory
+                .GroupBy(h => h.PlayerId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderBy(h => h.EffectiveAt).ThenBy(h => h.Id).ToList());
+
+            // 3. Load every game log for those players in this season.
+            var gameLogs = await _dbContext.PlayerGameLogs
+                .AsNoTracking()
+                .Include(g => g.Player)
+                .Where(g =>
+                    g.SeasonId == season.Id &&
+                    playerIds.Contains(g.PlayerId))
+                .OrderBy(g => g.GameDate)
+                .ThenBy(g => g.Player!.LastName)
+                .ToListAsync(ct);
+
+            var result = new List<ActivePlayerGameLogDto>();
+
+            // 4. Slice the history and filter the game logs.
+            foreach (var log in gameLogs)
+            {
+                if (!historyByPlayer.TryGetValue(log.PlayerId, out var history) ||
+                    history.Count == 0)
+                {
+                    continue;
+                }
+
+                var gameDayUtc = new DateTime(
+                    log.GameDate.Year,
+                    log.GameDate.Month,
+                    log.GameDate.Day,
+                    0, 0, 0,
+                    DateTimeKind.Utc);
+
+                RosterStatusHistory? effective = null;
+
+                foreach (var row in history)
+                {
+                    if (row.EffectiveAt <= gameDayUtc)
+                    {
+                        effective = row;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                // Only include the log if the player was active on
+                // THIS team on that specific day.
+                if (effective != null &&
+                    effective.FantasyTeamId == fantasyTeamId &&
+                    effective.RosterStatus == RosterStatus.Active)
+                {
+                    result.Add(new ActivePlayerGameLogDto
+                    {
+                        PlayerId = log.PlayerId,
+                        NhlPlayerId = log.Player!.NhlPlayerId,
+                        FirstName = log.Player.FirstName,
+                        LastName = log.Player.LastName,
+                        GameDate = log.GameDate,
+                        Goals = log.Goals,
+                        Assists = log.Assists,
+                        Points = log.Points,
+                        FantasyPoints = log.FantasyPoints
+                    });
+                }
+            }
+
+            // Sort primarily by player last name, then by date ascending
+            // so the user can see the timeline of each player's games.
+            return result
+                .OrderBy(r => r.LastName)
+                .ThenBy(r => r.FirstName)
+                .ThenBy(r => r.GameDate)
+                .ToList();
+        }
+
         private sealed class CardStatLine
         {
             public int PlayerId { get; set; }

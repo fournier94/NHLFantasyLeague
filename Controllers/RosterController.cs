@@ -235,9 +235,9 @@ namespace NhlFantasyLeague.api.Controllers
         /// </summary>
         [HttpGet("game-stats-for-date")]
         public async Task<IActionResult> GetGameStatsForDate(
-            [FromQuery] int fantasyTeamId,
-            [FromQuery] string date,
-            CancellationToken ct = default)
+     [FromQuery] int fantasyTeamId,
+     [FromQuery] string date,
+     CancellationToken ct = default)
         {
             if (!DateOnly.TryParseExact(
                     date,
@@ -255,6 +255,25 @@ namespace NhlFantasyLeague.api.Controllers
             var rows = await _rosterAdminService
                 .GetRosterGameStatsForDateAsync(
                     fantasyTeamId, parsed, ct);
+
+            return Ok(rows);
+        }
+
+        /// <summary>
+        /// Returns every game log for every player who was ever in the
+        /// ACTIVE starting lineup for the given fantasy team during
+        /// the season.
+        /// </summary>
+        [HttpGet("team/{fantasyTeamId}/active-game-logs")]
+        [Authorize(Roles = AuthService.CommissionerRole)]
+        public async Task<IActionResult> GetActiveGameLogs(
+            int fantasyTeamId,
+            [FromQuery] int? seasonId,
+            CancellationToken ct = default)
+        {
+            var rows = await _rosterAdminService
+                .GetActiveGameLogsForTeamAsync(
+                    fantasyTeamId, seasonId, ct);
 
             return Ok(rows);
         }

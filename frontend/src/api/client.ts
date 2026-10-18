@@ -694,6 +694,33 @@ export function getRosterGameStatsForDate(
 }
 
 // ---------------------------------------------------------------------
+// Active Lineup Game Logs (commissioner audit)
+// ---------------------------------------------------------------------
+
+export interface ActivePlayerGameLog {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    gameDate: string; // yyyy-MM-dd
+    goals: number;
+    assists: number;
+    points: number;
+    fantasyPoints: number;
+}
+
+export function getActiveGameLogsForTeam(
+    fantasyTeamId: number,
+    seasonId?: number,
+): Promise<ActivePlayerGameLog[]> {
+    const query = seasonId != null ? `?seasonId=${seasonId}` : '';
+    return apiGet<ActivePlayerGameLog[]>(
+        `/Roster/team/${fantasyTeamId}/active-game-logs${query}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
+// ---------------------------------------------------------------------
 // Roster shape violations (commissioner audit)
 //
 // Retrospective scan of the season's RosterStatusHistory. Reports

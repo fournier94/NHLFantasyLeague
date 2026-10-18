@@ -38,6 +38,7 @@ import {
     getAcceptedTrades,
     deleteAcceptedTrade,
     getRosterShapeViolations,
+    getActiveGameLogsForTeam,
     startCapFreezeContractsJob,
     finalizeAdminTrade,
     getAdminTradeHistory,
@@ -65,6 +66,7 @@ import {
     type SystemEventLog,
     type TeamRoster,
     type AcceptedTradeRow,
+    type ActivePlayerGameLog,
     type AdminTradePlayerSide,
     type AdminTradePickSide,
     type FinalizeAdminTradeRequest,
@@ -711,6 +713,12 @@ export default function AdminPage() {
     const [shapeViolationsLoaded, setShapeViolationsLoaded] =
         useState(false);
 
+    // --- Active Lineup Game Logs state ---
+    const [activeLogsTeamId, setActiveLogsTeamId] = useState('');
+    const [activeLogs, setActiveLogs] = useState<ActivePlayerGameLog[]>([]);
+    const [activeLogsLoading, setActiveLogsLoading] = useState(false);
+    const [activeLogsError, setActiveLogsError] = useState<string | null>(null);
+
     // Poll the background job while it runs. Stops as soon as the
     // job reports Completed or Failed, so no timer is left running.
     useEffect(() => {
@@ -984,6 +992,38 @@ export default function AdminPage() {
             setShapeViolationsLoading(false);
         }
     }
+
+    // Load active game logs when team selection changes
+    useEffect(() => {
+        if (!activeLogsTeamId) {
+            setActiveLogs([]);
+            setActiveLogsError(null);
+            return;
+        }
+
+        let cancelled = false;
+        setActiveLogsLoading(true);
+        setActiveLogsError(null);
+
+        getActiveGameLogsForTeam(Number(activeLogsTeamId))
+            .then((data) => {
+                if (!cancelled) setActiveLogs(data);
+            })
+            .catch((err) => {
+                if (!cancelled) {
+                    setActiveLogsError(
+                        err instanceof Error ? err.message : 'Erreur inconnue.',
+                    );
+                }
+            })
+            .finally(() => {
+                if (!cancelled) setActiveLogsLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeLogsTeamId]);
 
     // --- Swap section state ---
     const [swapTeamId, setSwapTeamId] = useState('');
@@ -3890,6 +3930,107 @@ export default function AdminPage() {
 
     return (
         <section className='space-y-6'>
+            {/* ============================================================
+                Historique des matchs de l'alignement (par équipe)
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Historique des matchs de l'alignement
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Sélectionnez une équipe pour voir tous les matchs joués
+                    par les joueurs qui ont été dans son alignement partant
+                    cette saison. Utile pour repérer les erreurs de
+                    changement de joueur.
+                </p>
+
+                {activeLogsError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {activeLogsError}
+                    </p>
+                )}
+
+                <select
+                    value={activeLogsTeamId}
+                    onChange={(event) => setActiveLogsTeamId(event.target.value)}
+                    className={selectClass}
+                >
+                    <option value='' disabled>
+                        Choisir une équipe
+                    </option>
+                    {teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                            {team.name}
+                        </option>
+                    ))}
+                </select>
+
+                {activeLogsLoading && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {!activeLogsLoading && activeLogsTeamId !== '' && activeLogs.length === 0 && !activeLogsError && (
+                    <p className='text-sm text-muted-foreground'>
+                        Aucun match trouvé pour l'alignement de cette équipe.
+                    </p>
+                )}
+
+                {activeLogs.length > 0 && (
+                    <div className='overflow-x-auto rounded-lg border border-border bg-card'>
+                        <table className='w-full min-w-[600px] text-sm'>
+                            <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
+                                <tr>
+                                    <th className='px-2 py-2 text-left font-medium'>Joueur</th>
+                                    <th className='px-2 py-2 text-center font-medium'>Date</th>
+                                    <th className='px-2 py-2 text-center font-medium'>GP</th>
+                                    <th className='px-2 py-2 text-center font-medium'>B</th>
+                                    <th className='px-2 py-2 text-center font-medium'>A</th>
+                                    <th className='px-2 py-2 text-center font-medium'>PTS</th>
+                                    <th className='px-2 py-2 text-center font-medium text-[#FFC72C]'>FP</th>
+                                </tr>
+                            </thead>
+                            <tbody className='text-foreground'>
+                                {activeLogs.map((row, idx) => (
+                                    <tr
+                                        key={`${row.playerId}-${row.gameDate}`}
+                                        className={
+                                            idx % 2 === 0
+                                                ? 'bg-transparent'
+                                                : 'bg-secondary/20'
+                                        }
+                                    >
+                                        <td className='px-2 py-1.5 text-left'>
+                                            {row.firstName} {row.lastName}
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center text-muted-foreground'>
+                                            {row.gameDate.slice(0, 10)}
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center text-[#7DD3FC]'>
+                                            1
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center'>
+                                            {row.goals}
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center'>
+                                            {row.assists}
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center text-[#00F0FF]'>
+                                            {row.points}
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center font-semibold text-[#FFC72C]'>
+                                            {row.fantasyPoints}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+
             {/* ============================================================
                 Utilisateurs
                 ============================================================ */}

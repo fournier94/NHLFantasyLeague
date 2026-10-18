@@ -458,4 +458,23 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public string FantasyTeamName { get; set; } = string.Empty;
         public string RosterStatus { get; set; } = string.Empty;
     }
+
+    /// <summary>
+    /// One game log row for a player who was in the ACTIVE starting
+    /// lineup of a specific fantasy team on the date the game was
+    /// played. Used by the admin audit page to spot historical
+    /// lineup mistakes.
+    /// </summary>
+    public class ActivePlayerGameLogDto
+    {
+        public int PlayerId { get; set; }
+        public int NhlPlayerId { get; set; }
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public DateOnly GameDate { get; set; }
+        public int Goals { get; set; }
+        public int Assists { get; set; }
+        public int Points { get; set; }
+        public int FantasyPoints { get; set; }
+    }
 }
