@@ -1491,7 +1491,36 @@ PersistFinalGamesResult result)
 
             if (logsByKey.TryGetValue(key, out var existing))
             {
-                var deltaFP = newFP - existing.FantasyPoints;
+                // Guard goalie goals and assists against boxscore
+                // regressions.
+                //
+                // The manual "Rafraîchir un joueur" path goes through
+                // SavePlayerGameLogsAsync, which uses Math.Max on every
+                // per-game counting stat. This method used to overwrite
+                // those fields directly from the boxscore. When the
+                // game-log endpoint and the boxscore endpoint disagree
+                // on a goalie's G/A — which happens whenever an assist
+                // is added to one feed before the other, or when the
+                // boxscore ingestion lags behind — the two paths
+                // oscillated the value: manual refresh restored it,
+                // the next reconciliation wiped it, manual refresh
+                // restored it again.
+                //
+                // Using Math.Max here makes the two writers agree: a
+                // stale boxscore can no longer reduce a value the
+                // game-log feed already corrected. Bonuses (W / OTL /
+                // SO) are NOT guarded, because they only flip on
+                // FINAL and there is no equivalent lag scenario.
+                var guardedGoals = Math.Max(existing.Goals, stats.Goals);
+                var guardedAssists = Math.Max(existing.Assists, stats.Assists);
+                var guardedPoints = guardedGoals + guardedAssists;
+
+                var guardedFP = guardedPoints;
+                if (isWin) guardedFP += 2;
+                if (isOTLoss) guardedFP += 1;
+                if (isShutout) guardedFP += 3;
+
+                var deltaFP = guardedFP - existing.FantasyPoints;
 
                 var deltaW = (isWin ? 1 : 0) - (existing.GoalieWin ? 1 : 0);
                 var deltaL = (isLoss ? 1 : 0) - (existing.GoalieLoss ? 1 : 0);
@@ -1503,21 +1532,9 @@ PersistFinalGamesResult result)
                 var deltaSA = stats.ShotsAgainst - existing.ShotsAgainst;
                 var deltaSV = stats.Saves - existing.Saves;
 
-                // A goalie's own goals and assists can change after a
-                // review (an assist is credited retroactively, or a
-                // rare goalie goal is awarded). They MUST be part of
-                // the change detection below, or a row whose G/A
-                // were wrong at insert time can never be repaired:
-                // FantasyPoints stays correct while the G/A
-                // components diverge from what the boxscore says,
-                // so deltaFP is 0 and the early-return fires forever.
-                var newGoals = stats.Goals;
-                var newAssists = stats.Assists;
-                var newPoints = newGoals + newAssists;
-
-                var deltaG = newGoals - existing.Goals;
-                var deltaA = newAssists - existing.Assists;
-                var deltaP = newPoints - existing.Points;
+                var deltaG = guardedGoals - existing.Goals;
+                var deltaA = guardedAssists - existing.Assists;
+                var deltaP = guardedPoints - existing.Points;
 
                 var newToi = MaxToi(existing.TimeOnIce, stats.TimeOnIce);
                 var toiChanged = !string.Equals(
@@ -1542,9 +1559,9 @@ PersistFinalGamesResult result)
                 // change.
 
                 existing.GameDate = gameDate;
-                existing.Goals = newGoals;
-                existing.Assists = newAssists;
-                existing.Points = newPoints;
+                existing.Goals = guardedGoals;
+                existing.Assists = guardedAssists;
+                existing.Points = guardedPoints;
                 existing.GoalsAgainst = stats.GoalsAgainst;
                 existing.ShotsAgainst = stats.ShotsAgainst;
                 existing.Saves = stats.Saves;
@@ -1554,7 +1571,7 @@ PersistFinalGamesResult result)
                 existing.GoalieLoss = isLoss;
                 existing.GoalieOvertimeLoss = isOTLoss;
                 existing.SavePercentage = stats.SavePercentage;
-                existing.FantasyPoints = newFP;
+                existing.FantasyPoints = guardedFP;
 
                 ApplyStatDeltas(
                     player.Id,
