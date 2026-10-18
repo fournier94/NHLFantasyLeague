@@ -4,8 +4,8 @@ using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Services;
 using NhlFantasyLeague.api.Services.Auth;
+using NhlFantasyLeague.api.Services.Cache;
 using NhlFantasyLeague.api.Services.CapFreeze;
-using NhlFantasyLeague.api.Services.Jobs;
 using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers.NHL
@@ -18,20 +18,20 @@ namespace NhlFantasyLeague.api.Controllers.NHL
         private readonly NhlPlayerService _nhlPlayerService;
         private readonly NhlPopulationService _nhlPopulationService;
         private readonly NhlGameLogService _nhlGameLogService;
-        private readonly ScheduledJobsRunner _jobs;
+        private readonly ResponseCacheService _cache;
         private readonly ILogger<NhlPlayerController> _logger;
 
         public NhlPlayerController(
             NhlPlayerService nhlPlayerService,
             NhlPopulationService nhlPopulationService,
             NhlGameLogService nhlGameLogService,
-            ScheduledJobsRunner jobs,
+            ResponseCacheService cache,
             ILogger<NhlPlayerController> logger)
         {
             _nhlPlayerService = nhlPlayerService;
             _nhlPopulationService = nhlPopulationService;
             _nhlGameLogService = nhlGameLogService;
-            _jobs = jobs;
+            _cache = cache;
             _logger = logger;
         }
 
@@ -80,14 +80,11 @@ namespace NhlFantasyLeague.api.Controllers.NHL
         /// his PlayerCareerStat rows, and the landing-owned columns
         /// of his current-season PlayerSeasonStat.
         ///
-        /// One NHL API call per invocation. Doesn't touch CapFreeze,
-        /// doesn't touch RosterEntries, doesn't touch contract rows.
-        /// Those are owned by other flows.
-        ///
-        /// Use case: the commissioner notices a specific player's
-        /// data is stale and wants to force a refresh without
-        /// waiting for the scheduled jobs or running the full
-        /// league-wide populate.
+        /// Then, it immediately fetches his game logs for the current
+        /// season to catch any missing stats (like a goalie assist
+        /// that was added late by the NHL). Finally, it forces an
+        /// immediate recompute of the team standings and clears the
+        /// response cache so the Classement page updates instantly.
         /// </summary>
         [HttpPost("player/{id}/refresh")]
         public async Task<IActionResult> RefreshPlayer(int id)
@@ -107,8 +104,7 @@ namespace NhlFantasyLeague.api.Controllers.NHL
             }
 
             // 2. Refresh the player's game logs for the current season.
-            //    This is what catches missing stats (like an assist that
-            //    was added to the game log after the boxscore was first fetched).
+            //    This catches missing stats (e.g. an assist added late).
             var seasonCode = NhlFantasyLeague.api.Constants.SeasonCodes.Current;
 
             try
@@ -118,15 +114,23 @@ namespace NhlFantasyLeague.api.Controllers.NHL
                     seasonCode,
                     preloadedPlayer: player);
 
-                // 3. Trigger a background team totals recompute so the
-                //    standings update to reflect any newly found points.
-                _jobs.RequestRecompute();
+                // 3. Recompute team totals synchronously so the standings
+                //    are updated before the API responds to the frontend.
+                await _nhlGameLogService.RecomputeTeamSeasonTotalsAsync(
+                    seasonCode,
+                    CancellationToken.None);
+
+                // 4. Clear the API caches immediately.
+                _cache.Invalidate("standings:");
+                _cache.Invalidate("roster:");
+                _cache.Invalidate("player-detail:");
+                _cache.Invalidate("player-career:");
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(
                     ex,
-                    "Failed to refresh game logs during single player refresh for NhlPlayerId {Id}.",
+                    "Failed to refresh game logs or recompute totals during single player refresh for NhlPlayerId {Id}.",
                     id);
             }
 
@@ -192,8 +196,8 @@ namespace NhlFantasyLeague.api.Controllers.NHL
 
         [HttpGet("player/{id}/test-team-change/{newTeamId}")]
         public async Task<IActionResult> TestTeamChange(
-int id,
-int newTeamId)
+            int id,
+            int newTeamId)
         {
             var player =
                 await _nhlPlayerService.TestUpdatePlayerNhlTeamAsync(
