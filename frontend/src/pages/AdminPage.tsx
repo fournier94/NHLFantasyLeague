@@ -1132,6 +1132,50 @@ export default function AdminPage() {
         };
     }, [activeLogsTeamId]);
 
+    // Aggregated per-player totals from the raw per-game log.
+    //
+    // Each ActivePlayerGameLog row is one game. Grouping by PlayerId
+    // and summing FantasyPoints gives us the player's contribution
+    // while he was in the Active starting lineup for this team.
+    //
+    // Sorted by total FP desc, then by last name so ties are stable.
+    const activeLogTotals = useMemo(() => {
+        const map = new Map<
+            number,
+            {
+                playerId: number;
+                nhlPlayerId: number;
+                firstName: string;
+                lastName: string;
+                gp: number;
+                fp: number;
+            }
+        >();
+
+        for (const row of activeLogs) {
+            const existing = map.get(row.playerId);
+
+            if (existing) {
+                existing.gp += 1;
+                existing.fp += row.fantasyPoints;
+            } else {
+                map.set(row.playerId, {
+                    playerId: row.playerId,
+                    nhlPlayerId: row.nhlPlayerId,
+                    firstName: row.firstName,
+                    lastName: row.lastName,
+                    gp: 1,
+                    fp: row.fantasyPoints,
+                });
+            }
+        }
+
+        return Array.from(map.values()).sort((a, b) => {
+            if (b.fp !== a.fp) return b.fp - a.fp;
+            return a.lastName.localeCompare(b.lastName);
+        });
+    }, [activeLogs]);
+
     // --- Swap section state ---
     const [swapTeamId, setSwapTeamId] = useState('');
     const [swapTeamRoster, setSwapTeamRoster] = useState<TeamRoster | null>(null);
@@ -4155,6 +4199,42 @@ export default function AdminPage() {
                                         </td>
                                         <td className='px-2 py-1.5 text-center font-semibold text-[#FFC72C]'>
                                             {row.fantasyPoints}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {activeLogTotals.length > 0 && (
+                    <div className='overflow-x-auto rounded-lg border border-border bg-card'>
+                        <table className='w-full min-w-[400px] text-sm'>
+                            <thead className='border-b border-border text-xs uppercase tracking-wide text-foreground'>
+                                <tr>
+                                    <th className='px-2 py-2 text-left font-medium'>Joueur</th>
+                                    <th className='px-2 py-2 text-center font-medium'>GP</th>
+                                    <th className='px-2 py-2 text-center font-medium text-[#FFC72C]'>FP</th>
+                                </tr>
+                            </thead>
+                            <tbody className='text-foreground'>
+                                {activeLogTotals.map((row, idx) => (
+                                    <tr
+                                        key={row.playerId}
+                                        className={
+                                            idx % 2 === 0
+                                                ? 'bg-transparent'
+                                                : 'bg-secondary/20'
+                                        }
+                                    >
+                                        <td className='px-2 py-1.5 text-left'>
+                                            {row.firstName} {row.lastName}
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center text-[#7DD3FC]'>
+                                            {row.gp}
+                                        </td>
+                                        <td className='px-2 py-1.5 text-center font-semibold text-[#FFC72C]'>
+                                            {row.fp}
                                         </td>
                                     </tr>
                                 ))}
