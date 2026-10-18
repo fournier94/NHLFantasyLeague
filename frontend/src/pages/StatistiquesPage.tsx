@@ -6,14 +6,17 @@
     useRef,
     useState,
 } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import InjuriesPage from '@/pages/InjuriesPage';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { useAuth } from '@/lib/AuthContext';
 import { getFantasyTeamColor } from '@/lib/fantasyTeamColors';
+import { getNhlTeamAuraColor, getNhlTeamColor, getNhlTeamTextColor } from '@/lib/nhlTeamColors';
 import {
+    getNhlStandings,
     getTopScorers,
+    type NhlTeamStandingsRow,
     type TopScorerRow,
     type PlayerContractLine,
 } from '@/api/client';
@@ -501,7 +504,9 @@ const TopScorersRow = memo(function TopScorersRow({
     function handleTeamClick(e: React.SyntheticEvent) {
         e.preventDefault();
         e.stopPropagation();
-        navigate(`/mon-equipe?teamId=${row.fantasyTeamId}`);
+        if (row.fantasyTeamId != null) {
+            navigate(`/mon-equipe?teamId=${row.fantasyTeamId}`);
+        }
     }
 
     return (
@@ -532,7 +537,7 @@ const TopScorersRow = memo(function TopScorersRow({
                 page Mon équipe de cette équipe, comme partout
                 ailleurs. */}
             <div className='flex min-w-0 items-center justify-center'>
-                {teamLabel && (
+                {teamLabel && row.fantasyTeamId != null && (
                     <span
                         role='button'
                         tabIndex={0}
@@ -995,6 +1000,73 @@ function DurationDropdown({ value, onChange }: { value: number, onChange: (v: nu
     );
 }
 
+function PlayerFilterDropdown({ value, onChange }: { value: string, onChange: (v: string) => void }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (ref.current && !ref.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const options = [
+        { value: 'rostered', label: 'Qui ont une équipe' },
+        { value: 'freeAgents', label: "N'ont pas d'équipe" },
+        { value: 'all', label: 'Tous les joueurs' },
+    ];
+
+    const selectedOption = options.find(o => o.value === value) || options[0];
+
+    const isBlue = value !== 'rostered' || isOpen;
+
+    const triggerBorderClass = isBlue
+        ? 'border-[#00E5FF]'
+        : 'border-gray-500/50';
+
+    const caretColorClass = isBlue
+        ? 'text-[#00E5FF]'
+        : 'text-gray-500';
+
+    return (
+        <div ref={ref} className="relative w-full">
+            <button
+                type="button"
+                onClick={() => setIsOpen(!isOpen)}
+                className={`flex h-8 w-full items-center justify-between rounded-md border bg-[#050A18] px-2 text-xs text-white focus:outline-none ${triggerBorderClass}`}
+            >
+                <span className="truncate">{selectedOption.label}</span>
+                <span className={`text-[0.5rem] shrink-0 ml-1 ${caretColorClass} transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+            </button>
+            {isOpen && (
+                <ul className="absolute left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {options.map((opt) => (
+                        <li key={opt.value}>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    onChange(opt.value);
+                                    setIsOpen(false);
+                                }}
+                                className={`w-full px-2 py-1.5 text-center text-xs transition-colors ${value === opt.value
+                                    ? 'bg-[#00E5FF]/20 font-bold text-[#00E5FF]'
+                                    : 'text-white hover:bg-[#00E5FF]/10'
+                                    }`}
+                            >
+                                {opt.label}
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
 /**
  * Bouton "Filtres" qui ouvre le modal des filtres avancés.
  *
@@ -1026,11 +1098,8 @@ function FiltersButton({
 }) {
     const [hovered, setHovered] = useState(false);
 
-    // Blue accent identical to the current border/text color of the
-    // Filters button before this change (the "Défenseurs" blue). It
-    // never changes based on hasActiveFilters — the active state is
-    // signalled by the aura intensity, not by the hue.
-    const color = '#3B82F6';
+    // Blue when active, white when inactive.
+    const color = hasActiveFilters ? '#3B82F6' : '#FFFFFF';
 
     const hexToRgba = (hex: string, alpha: number) => {
         const clean = hex.replace('#', '');
@@ -1124,6 +1193,9 @@ const TopScorersTable = memo(function TopScorersTable({
     showContracts: boolean;
     onToggleContracts: (checked: boolean) => void;
 }) {
+    const { user, updatePreferences } = useAuth();
+    const playerFilter = user?.statistiquesPlayerFilter || 'rostered';
+
     const listRef = useRef<HTMLDivElement | null>(null);
 
     const [scrollMargin, setScrollMargin] = useState(0);
@@ -1170,19 +1242,27 @@ const TopScorersTable = memo(function TopScorersTable({
     });
 
     const [draftFilters, setDraftFilters] = useState<FilterState>(appliedFilters);
+    const [draftPlayerFilter, setDraftPlayerFilter] = useState(playerFilter);
+
+    useEffect(() => {
+        setDraftPlayerFilter(playerFilter);
+    }, [playerFilter]);
 
     const hasActiveFilters =
         appliedFilters.maxAgeStr !== '' ||
         appliedFilters.maxSalaryStr !== '' ||
         appliedFilters.minContractLength > 0 ||
         !appliedFilters.useSecondContract ||
-        positionFilter !== 'all';
+        playerFilter !== 'rostered';
 
     const isDraftDefault =
         draftFilters.maxAgeStr === '' &&
         draftFilters.maxSalaryStr === '' &&
         draftFilters.minContractLength === 0 &&
-        draftFilters.useSecondContract === true;
+        draftFilters.useSecondContract === true &&
+        draftPlayerFilter === 'rostered';
+
+    const showQuitButton = !hasActiveFilters && isDraftDefault;
 
     // Sync the local React state back to the module store on every change
     // so it survives when the user navigates away and returns.
@@ -1500,7 +1580,7 @@ const TopScorersTable = memo(function TopScorersTable({
                 />
             </div>
 
-            <div className='mb-3 flex w-full items-center justify-between gap-2'>
+            <div className='mb-3 flex w-full flex-wrap items-center gap-2'>
                 <FiltersButton
                     hasActiveFilters={hasActiveFilters}
                     onClick={() => {
@@ -1515,9 +1595,9 @@ const TopScorersTable = memo(function TopScorersTable({
                     onClick={() => {
                         setAppliedFilters(defaultFilterState);
                         setDraftFilters(defaultFilterState);
-                        setPositionFilter('all');
+                        void updatePreferences({ statistiquesPlayerFilter: 'rostered' });
                     }}
-                    className='flex h-[26px] flex-1 items-center justify-center rounded-md border border-[#00E5FF]/30 bg-[#050A18] px-1 text-center text-[0.55rem] font-bold uppercase leading-tight tracking-wider text-[#7DD3FC] transition-colors hover:border-[#00E5FF] hover:text-[#00E5FF] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/30 disabled:hover:border-white/10 disabled:hover:text-white/30'
+                    className='flex h-[26px] flex-1 min-w-[100px] items-center justify-center rounded-md border border-[#00E5FF]/30 bg-[#050A18] px-1 text-center text-[0.55rem] font-bold uppercase leading-tight tracking-wider text-[#7DD3FC] transition-colors hover:border-[#00E5FF] hover:text-[#00E5FF] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/30 disabled:hover:border-white/10 disabled:hover:text-white/30'
                 >
                     Réinitialiser les filtres
                 </button>
@@ -1567,6 +1647,13 @@ const TopScorersTable = memo(function TopScorersTable({
                         </div>
 
                         <div className='grid w-full grid-cols-2 gap-2'>
+                            <div className='col-span-2 flex flex-col gap-1 pb-1'>
+                                <label className='text-center text-[0.55rem] font-bold uppercase tracking-wider text-white'>Afficher les joueurs :</label>
+                                <PlayerFilterDropdown
+                                    value={draftPlayerFilter}
+                                    onChange={setDraftPlayerFilter}
+                                />
+                            </div>
                             {/* All labels are centered horizontally over
                                 their input / dropdown. The two salary /
                                 duration filters are prefixed with
@@ -1654,21 +1741,35 @@ const TopScorersTable = memo(function TopScorersTable({
                                 disabled={isDraftDefault}
                                 onClick={() => {
                                     setDraftFilters(defaultFilterState);
+                                    setDraftPlayerFilter('rostered');
                                 }}
                                 className='flex-1 rounded-md border border-[#00E5FF]/30 bg-[#050A18] px-2 py-1.5 text-center text-[0.55rem] font-bold uppercase tracking-wider text-[#7DD3FC] transition-colors hover:border-[#00E5FF] hover:text-[#00E5FF] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/30 disabled:hover:border-white/10 disabled:hover:text-white/30'
                             >
                                 Réinitialiser
                             </button>
-                            <button
-                                type='button'
-                                onClick={() => {
-                                    setAppliedFilters(draftFilters);
-                                    setIsFiltersOpen(false);
-                                }}
-                                className='flex-1 rounded-md border border-[#22C55E] bg-[#22C55E]/10 px-2 py-1.5 text-center text-[0.55rem] font-bold uppercase tracking-wider text-[#22C55E] transition-colors hover:bg-[#22C55E]/20'
-                            >
-                                Appliquer
-                            </button>
+                            {showQuitButton ? (
+                                <button
+                                    type='button'
+                                    onClick={() => setIsFiltersOpen(false)}
+                                    className='flex-1 rounded-md border border-[#EF4444] bg-[#EF4444]/10 px-2 py-1.5 text-center text-[0.55rem] font-bold uppercase tracking-wider text-[#EF4444] transition-colors hover:bg-[#EF4444]/20'
+                                >
+                                    Quitter
+                                </button>
+                            ) : (
+                                <button
+                                    type='button'
+                                    onClick={() => {
+                                        setAppliedFilters(draftFilters);
+                                        if (draftPlayerFilter !== playerFilter) {
+                                            void updatePreferences({ statistiquesPlayerFilter: draftPlayerFilter });
+                                        }
+                                        setIsFiltersOpen(false);
+                                    }}
+                                    className='flex-1 rounded-md border border-[#22C55E] bg-[#22C55E]/10 px-2 py-1.5 text-center text-[0.55rem] font-bold uppercase tracking-wider text-[#22C55E] transition-colors hover:bg-[#22C55E]/20'
+                                >
+                                    Appliquer
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -1755,6 +1856,355 @@ const TopScorersTable = memo(function TopScorersTable({
 });
 
 // ---------------------------------------------------------------------
+// NHL standings ("Équipes" tab)
+//
+// Three views over the same NHL team standings rows:
+//
+//   Ligue      - one table, 32 teams ranked league-wide.
+//   Conférence - two sections (Est, Ouest), ranked within conference.
+//   Division   - four sections (Atlantique, Métropolitaine, Centrale,
+//                Pacifique), ranked within division.
+//
+// Ranking uses the standard NHL tiebreak chain: points, then wins,
+// then goal differential, then fewer games played, then alphabetic.
+// Left-edge bar is a contained-filament triple (accent / mid / core)
+// derived from each team's aura color, so dark team colors stay
+// readable on the dark background.
+// ---------------------------------------------------------------------
+
+type StandingsView = 'league' | 'conference' | 'division';
+
+const STANDINGS_VIEWS: { key: StandingsView; label: string }[] = [
+    { key: 'division', label: 'Division' },
+    { key: 'conference', label: 'Conférence' },
+    { key: 'league', label: 'Ligue' },
+];
+
+const CONFERENCE_LABELS: Record<string, string> = {
+    Eastern: 'Est',
+    Western: 'Ouest',
+};
+
+const DIVISION_LABELS: Record<string, string> = {
+    Atlantic: 'Atlantique',
+    Metropolitan: 'Métropolitaine',
+    Central: 'Centrale',
+    Pacific: 'Pacifique',
+};
+
+const CONFERENCE_ORDER = ['Eastern', 'Western'];
+
+const DIVISION_ORDER = [
+    'Atlantic',
+    'Metropolitan',
+    'Central',
+    'Pacific',
+];
+
+const TEAM_STANDINGS_GRID =
+    '18px minmax(0, 1fr) 22px 22px 22px 26px 28px 32px';
+
+function compareStandings(
+    a: NhlTeamStandingsRow,
+    b: NhlTeamStandingsRow,
+): number {
+    if (b.points !== a.points) return b.points - a.points;
+    if (b.wins !== a.wins) return b.wins - a.wins;
+
+    if (b.goalDifferential !== a.goalDifferential) {
+        return b.goalDifferential - a.goalDifferential;
+    }
+
+    if (a.gamesPlayed !== b.gamesPlayed) {
+        return a.gamesPlayed - b.gamesPlayed;
+    }
+
+    return a.teamAbbreviation.localeCompare(b.teamAbbreviation);
+}
+
+function formatDiff(diff: number): string {
+    if (diff > 0) return `+${diff}`;
+    return String(diff);
+}
+
+interface StandingsGroup {
+    key: string;
+    label: string;
+    teams: NhlTeamStandingsRow[];
+}
+
+function groupStandings(
+    rows: NhlTeamStandingsRow[],
+    view: StandingsView,
+): StandingsGroup[] {
+    if (view === 'league') {
+        return [
+            {
+                key: 'league',
+                label: 'LNH',
+                teams: Array.from(rows).sort(compareStandings),
+            },
+        ];
+    }
+
+    const field: 'conferenceName' | 'divisionName' =
+        view === 'conference' ? 'conferenceName' : 'divisionName';
+
+    const order =
+        view === 'conference' ? CONFERENCE_ORDER : DIVISION_ORDER;
+
+    const labels =
+        view === 'conference' ? CONFERENCE_LABELS : DIVISION_LABELS;
+
+    const groups = new Map<string, NhlTeamStandingsRow[]>();
+
+    for (const row of rows) {
+        const raw = row[field];
+        const key = raw ?? 'Autre';
+
+        const existing = groups.get(key);
+        if (existing) {
+            existing.push(row);
+        } else {
+            groups.set(key, [row]);
+        }
+    }
+
+    return Array.from(groups.entries())
+        .sort(([a], [b]) => {
+            const ai = order.indexOf(a);
+            const bi = order.indexOf(b);
+
+            if (ai === -1 && bi === -1) return a.localeCompare(b);
+            if (ai === -1) return 1;
+            if (bi === -1) return -1;
+            return ai - bi;
+        })
+        .map(([rawKey, teams]) => ({
+            key: rawKey,
+            label: labels[rawKey] ?? rawKey,
+            teams: Array.from(teams).sort(compareStandings),
+        }));
+}
+
+const NhlStandingsTable = memo(function NhlStandingsTable({
+    view,
+}: {
+    view: StandingsView;
+}) {
+    const [rows, setRows] = useState<NhlTeamStandingsRow[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        setLoading(true);
+        setError(null);
+
+        getNhlStandings()
+            .then((data) => {
+                if (!cancelled) {
+                    setRows(data);
+                    setError(null);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setError(
+                        'Impossible de charger le classement LNH.',
+                    );
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const groups = useMemo(
+        () => groupStandings(rows, view),
+        [rows, view],
+    );
+
+    if (loading) {
+        return (
+            <p className='mt-3 text-center text-sm text-muted-foreground'>
+                Chargement du classement LNH...
+            </p>
+        );
+    }
+
+    if (error) {
+        return (
+            <p className='mt-3 w-full rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-center text-sm text-destructive'>
+                {error}
+            </p>
+        );
+    }
+
+    if (rows.length === 0) {
+        return (
+            <p className='mt-3 w-full rounded-lg border border-border bg-card px-3 py-6 text-center text-sm text-muted-foreground'>
+                Aucune donnée de classement LNH pour le moment.
+            </p>
+        );
+    }
+
+    return (
+        <div className='mt-1.5 flex flex-col gap-8'>
+            {groups.map((group) => (
+                <div key={group.key}>
+                    <h3 className='mb-2 text-center text-sm font-bold uppercase tracking-wider text-white'>
+                        {group.label}
+                    </h3>
+
+                    <div className='w-full overflow-hidden'>
+                        {/* Header Row */}
+                        <div
+                            className='grid w-full items-center py-2 px-3 text-[0.8rem] font-black uppercase leading-none sm:text-[0.85rem]'
+                            style={{
+                                gridTemplateColumns: TEAM_STANDINGS_GRID,
+                                columnGap: '0.3rem',
+                                border: '2px solid #FFFFFF',
+                            }}
+                        >
+                            <div className='text-center text-white'>#</div>
+                            <div className='pl-1 text-white tracking-wider'>Équipe</div>
+                            <div className='text-center text-white'>GP</div>
+                            <div className='text-center text-white'>V</div>
+                            <div className='text-center text-white'>D</div>
+                            <div className='text-center text-white'>DP</div>
+                            <div className='text-center text-white'>PTS</div>
+                            <div className='text-center text-white'>DIFF</div>
+                        </div>
+
+                        {/* Data Rows */}
+                        <div>
+                            {group.teams.map((team, index) => (
+                                <div
+                                    key={team.id}
+                                    className='grid items-center py-2 px-3 text-[1.05rem] font-bold tabular-nums leading-none transition-[filter] duration-150 hover:brightness-110'
+                                    style={{
+                                        gridTemplateColumns: TEAM_STANDINGS_GRID,
+                                        backgroundColor: getNhlTeamColor(team.teamAbbreviation),
+                                        color: getNhlTeamTextColor(team.teamAbbreviation),
+                                        columnGap: '0.3rem',
+                                        border: '2px solid transparent',
+                                        contentVisibility: 'auto',
+                                        containIntrinsicSize: '40px',
+                                    } as React.CSSProperties}
+                                >
+                                    <div className='text-center'>
+                                        {index + 1}
+                                    </div>
+
+                                    <div className='flex min-w-0 items-center gap-3 pl-2'>
+                                        <div
+                                            style={{
+                                                width: 20,
+                                                height: 20,
+                                                flexShrink: 0,
+                                                transform: 'scale(2)',
+                                                transformOrigin: 'center',
+                                            }}
+                                        >
+                                            <NhlTeamLogo
+                                                abbreviation={team.teamAbbreviation}
+                                                size={20}
+                                            />
+                                        </div>
+                                        <span className='truncate'>
+                                            {team.teamAbbreviation}
+                                        </span>
+                                    </div>
+
+                                    <div className='text-center'>
+                                        {team.gamesPlayed}
+                                    </div>
+                                    <div className='text-center'>
+                                        {team.wins}
+                                    </div>
+                                    <div className='text-center'>
+                                        {team.losses}
+                                    </div>
+                                    <div className='text-center'>
+                                        {team.otLosses}
+                                    </div>
+                                    <div className='text-center'>
+                                        {team.points}
+                                    </div>
+                                    <div className='text-center'>
+                                        {formatDiff(team.goalDifferential)}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+});
+
+function TeamsSection() {
+    const { user, updatePreferences } = useAuth();
+    const [view, setView] = useState<StandingsView>(
+        (user?.statistiquesStandingsView as StandingsView) || 'division'
+    );
+
+    useEffect(() => {
+        if (user?.statistiquesStandingsView) {
+            setView(user.statistiquesStandingsView as StandingsView);
+        }
+    }, [user?.statistiquesStandingsView]);
+
+    const handleViewChange = (v: StandingsView) => {
+        setView(v);
+        if (user?.statistiquesStandingsView !== v) {
+            void updatePreferences({ statistiquesStandingsView: v });
+        }
+    };
+
+    return (
+        <div className='w-full flex flex-col items-center'>
+            <div className='mb-1.5 flex items-center justify-center'>
+                <div
+                    className='marketplace-sub-toggle flex items-center rounded-full border border-[#00E5FF]/60 bg-[#050A18]/80 p-0.5 text-xs'
+                    style={{
+                        boxShadow:
+                            '0 0 6px rgba(0, 229, 255, 0.35), inset 0 0 6px rgba(0, 229, 255, 0.08)',
+                    }}
+                >
+                    {STANDINGS_VIEWS.map((v) => (
+                        <button
+                            key={v.key}
+                            type='button'
+                            onClick={() => handleViewChange(v.key)}
+                            className={`cursor-pointer whitespace-nowrap rounded-full px-3 py-0.5 font-semibold transition-colors ${view === v.key
+                                ? 'bg-[#00E5FF] text-[#080D1A]'
+                                : 'bg-transparent text-[#A6ECFF] hover:text-white'
+                                }`}
+                        >
+                            {v.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className='w-full'>
+                <NhlStandingsTable view={view} />
+            </div>
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------
 // StatistiquesPage
 // ---------------------------------------------------------------------
 
@@ -1762,20 +2212,30 @@ export default function StatistiquesPage() {
     const { user, updatePreferences } = useAuth();
 
     const myTeamId = user?.fantasyTeamId ?? null;
-    const showContracts = user?.showContractsStats ?? true;
+    const showContracts = user?.showContractsStats ?? false;
 
     const [mainTab, setMainTab] = useState<MainTab>('players');
+    const location = useLocation();
+
+    useEffect(() => {
+        if (location.state && (location.state as any).resetTab) {
+            setMainTab('players');
+            window.scrollTo(0, 0);
+        }
+    }, [location.state]);
 
     const [scorerRows, setScorerRows] = useState<TopScorerRow[]>([]);
     const [scorerLoading, setScorerLoading] = useState(true);
     const [scorerError, setScorerError] = useState<string | null>(null);
+
+    const playerFilter = user?.statistiquesPlayerFilter || 'rostered';
 
     useEffect(() => {
         let cancelled = false;
 
         setScorerLoading(true);
 
-        getTopScorers()
+        getTopScorers(playerFilter)
             .then((data) => {
                 if (!cancelled) {
                     setScorerRows(data);
@@ -1798,13 +2258,20 @@ export default function StatistiquesPage() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [playerFilter]);
 
     const [hasVisitedInjuries, setHasVisitedInjuries] = useState(false);
+    const [hasVisitedTeams, setHasVisitedTeams] = useState(false);
 
     useEffect(() => {
         if (mainTab === 'injuries') {
             setHasVisitedInjuries(true);
+        }
+    }, [mainTab]);
+
+    useEffect(() => {
+        if (mainTab === 'teams') {
+            setHasVisitedTeams(true);
         }
     }, [mainTab]);
 
@@ -1834,6 +2301,33 @@ export default function StatistiquesPage() {
             cleanup?.();
         };
     }, [scorerLoading, hasVisitedInjuries]);
+
+    useEffect(() => {
+        if (scorerLoading) return;
+        if (hasVisitedTeams) return;
+
+        let cleanup: (() => void) | null = null;
+
+        if (typeof window.requestIdleCallback === 'function') {
+            const handle = window.requestIdleCallback(
+                () => setHasVisitedTeams(true),
+                { timeout: 2000 },
+            );
+
+            cleanup = () => window.cancelIdleCallback(handle);
+        } else {
+            const timer = window.setTimeout(
+                () => setHasVisitedTeams(true),
+                500,
+            );
+
+            cleanup = () => window.clearTimeout(timer);
+        }
+
+        return () => {
+            cleanup?.();
+        };
+    }, [scorerLoading, hasVisitedTeams]);
 
     return (
         <section className='-mt-4 flex min-h-full w-full flex-col items-center gap-3 pt-2.5 sm:-mt-6'>
@@ -1906,6 +2400,18 @@ export default function StatistiquesPage() {
                     onToggleContracts={(checked) => void updatePreferences({ showContractsStats: checked })}
                 />
             </div>
+
+            {hasVisitedTeams && (
+                <div
+                    className={
+                        mainTab === 'teams'
+                            ? 'block w-full'
+                            : 'hidden'
+                    }
+                >
+                    <TeamsSection />
+                </div>
+            )}
 
             {hasVisitedInjuries && (
                 <div

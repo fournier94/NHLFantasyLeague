@@ -35,7 +35,7 @@ interface AuthContextValue {
     playerPageStyle: PlayerPageStyle;
 
     updatePlayerPageStyle: (style: PlayerPageStyle) => Promise<void>;
-    updatePreferences: (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean }) => Promise<void>;
+    updatePreferences: (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean; statistiquesPlayerFilter?: string; statistiquesStandingsView?: string }) => Promise<void>;
 
     login: (request: LoginRequest) => Promise<AuthUser>;
     register: (request: RegisterRequest) => Promise<AuthUser>;
@@ -143,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
 
     const updatePreferences = useCallback(
-        async (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean }) => {
+        async (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean; statistiquesPlayerFilter?: string; statistiquesStandingsView?: string }) => {
             const me = await apiUpdatePreferences(prefs);
             setUser(me);
         },

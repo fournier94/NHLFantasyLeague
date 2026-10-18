@@ -62,17 +62,22 @@ namespace NhlFantasyLeague.api.Controllers
         /// </summary>
         [HttpGet("top-scorers")]
         public async Task<IActionResult> GetTopScorers(
-            CancellationToken ct)
+      [FromQuery] string? playerFilter,
+      CancellationToken ct)
         {
+            var filter = playerFilter ?? "rostered";
+            var cacheKey = $"top-scorers:{filter}";
+
             var rows = await _cache.GetOrCreateAsync(
-                "top-scorers:current",
+                cacheKey,
                 CacheTtl,
-                () => BuildTopScorersAsync(ct));
+                () => BuildTopScorersAsync(filter, ct));
 
             return Ok(rows);
         }
 
         private async Task<List<TopScorerRowDto>> BuildTopScorersAsync(
+            string playerFilter,
             CancellationToken ct)
         {
             var season = await SeasonQueries.GetCurrentSeasonAsync(
@@ -83,27 +88,40 @@ namespace NhlFantasyLeague.api.Controllers
                 return new List<TopScorerRowDto>();
             }
 
-            // 1. Toutes les entrées de roster de la saison courante,
-            //    jointe au joueur, à son équipe NHL et à son équipe
-            //    fantasy. Aucun filtre par position : le client
-            //    choisit ce qu'il veut afficher.
-            var entries = await _dbContext.RosterEntries
+            var rosterEntries = await _dbContext.RosterEntries
                 .AsNoTracking()
-                .Include(e => e.Player)
-                    .ThenInclude(p => p.NhlTeam)
                 .Include(e => e.FantasyTeam)
-                .Where(e =>
-                    e.SeasonId == season.Id &&
-                    e.Player != null)
+                .Where(e => e.SeasonId == season.Id)
                 .ToListAsync(ct);
 
-            if (entries.Count == 0)
+            var entriesByPlayerId = rosterEntries
+                .ToDictionary(e => e.PlayerId);
+
+            var rosteredPlayerIds = entriesByPlayerId.Keys.ToHashSet();
+
+            var query = _dbContext.Players
+                .AsNoTracking()
+                .Include(p => p.NhlTeam)
+                .AsQueryable();
+
+            if (playerFilter == "rostered")
+            {
+                query = query.Where(p => rosteredPlayerIds.Contains(p.Id));
+            }
+            else if (playerFilter == "freeAgents")
+            {
+                query = query.Where(p => !rosteredPlayerIds.Contains(p.Id));
+            }
+
+            var players = await query.ToListAsync(ct);
+
+            if (players.Count == 0)
             {
                 return new List<TopScorerRowDto>();
             }
 
-            var playerIds = entries
-                .Select(e => e.PlayerId)
+            var playerIds = players
+                .Select(p => p.Id)
                 .Distinct()
                 .ToList();
 
@@ -167,13 +185,13 @@ namespace NhlFantasyLeague.api.Controllers
                 .ToDictionary(g => g.Key, g => g.ToList());
 
             // 5. Composition des DTOs.
-            var rows = new List<TopScorerRowDto>(entries.Count);
+            var rows = new List<TopScorerRowDto>(players.Count);
 
-            foreach (var entry in entries)
+            foreach (var player in players)
             {
-                var player = entry.Player!;
+                entriesByPlayerId.TryGetValue(player.Id, out var entry);
 
-                seasonStats.TryGetValue(entry.PlayerId, out var stats);
+                seasonStats.TryGetValue(player.Id, out var stats);
 
                 int? age = null;
                 if (player.BirthDate.HasValue)
@@ -189,16 +207,16 @@ namespace NhlFantasyLeague.api.Controllers
                 string? atoi = null;
 
                 if (toiGamesByPlayer.TryGetValue(
-                        entry.PlayerId, out var games) &&
+                        player.Id, out var games) &&
                     games > 0 &&
                     toiSecondsByPlayer.TryGetValue(
-                        entry.PlayerId, out var seconds))
+                        player.Id, out var seconds))
                 {
                     atoi = FormatToiFromSeconds(seconds / games);
                 }
 
                 contractsByPlayer.TryGetValue(
-                    entry.PlayerId, out var playerContracts);
+                    player.Id, out var playerContracts);
 
                 var (currentContract, secondContract) =
                     ResolveContractLines(
@@ -234,7 +252,7 @@ namespace NhlFantasyLeague.api.Controllers
 
                 rows.Add(new TopScorerRowDto
                 {
-                    PlayerId = entry.PlayerId,
+                    PlayerId = player.Id,
                     NhlPlayerId = player.NhlPlayerId,
                     FirstName = player.FirstName,
                     LastName = player.LastName,
@@ -242,8 +260,8 @@ namespace NhlFantasyLeague.api.Controllers
                     NhlTeamAbbreviation =
 player.NhlTeam?.Abbreviation ?? string.Empty,
                     Age = age,
-                    FantasyTeamId = entry.FantasyTeamId,
-                    FantasyTeamName = entry.FantasyTeam?.Name,
+                    FantasyTeamId = entry?.FantasyTeamId,
+                    FantasyTeamName = entry?.FantasyTeam?.Name,
 
                     GamesPlayed = stats?.GamesPlayed ?? 0,
                     Goals = stats?.Goals ?? 0,

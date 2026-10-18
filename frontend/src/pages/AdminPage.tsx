@@ -8,6 +8,7 @@ import {
     getSystemEventLogs,
     getTeamDraftPicks,
     getTeamRoster,
+    getTeamRosterAtDate,
     getUsers,
     promoteUser,
     releasePlayer,
@@ -38,6 +39,17 @@ import {
     deleteAcceptedTrade,
     getRosterShapeViolations,
     startCapFreezeContractsJob,
+    finalizeAdminTrade,
+    getAdminTradeHistory,
+    changeAdminTradeDate,
+    revertAdminTrade,
+    finalizeStatusChange,
+    getStatusChangeHistory,
+    changeStatusChangeDate,
+    revertStatusChange,
+    listBackups,
+    triggerBackup,
+    downloadBackupUrl,
     type DraftPick,
     type RosterStatusHistoryRow,
     type ProtectedSalaryRow,
@@ -53,6 +65,16 @@ import {
     type SystemEventLog,
     type TeamRoster,
     type AcceptedTradeRow,
+    type AdminTradePlayerSide,
+    type AdminTradePickSide,
+    type FinalizeAdminTradeRequest,
+    type TradeHistoryDto,
+    type AdminStatusChangePlayerSide,
+    type StatusChangePair,
+    type StatusChangePairRequest,
+    type StatusChangeHistoryDto,
+    type FinalizeStatusChangeRequest,
+    type BackupFile,
 } from '@/api/client';
 import { useAuraAll } from '@/lib/auraContext';
 import { AURA_CHANNELS } from '@/lib/auraConfig';
@@ -64,6 +86,34 @@ import { useAuth } from '@/lib/AuthContext';
 // ---------------------------------------------------------------------
 
 type PositionGroup = 'F' | 'D' | 'G' | 'U';
+
+/**
+ * Client-side preview of a trade, built from the current form state.
+ * Displayed in the confirm popup before the backend call. Same shape
+ * as TradeHistoryDto minus the ID / season / confirmedAt fields.
+ */
+interface AdminTradePreview {
+    teamAId: number;
+    teamAName: string;
+    teamBId: number;
+    teamBName: string;
+    effectiveAt: string;
+    note: string | null;
+    teamASentPlayers: AdminTradePlayerSide[];
+    teamBSentPlayers: AdminTradePlayerSide[];
+    teamASentPicks: AdminTradePickSide[];
+    teamBSentPicks: AdminTradePickSide[];
+}
+
+interface StatusChangePreview {
+    fantasyTeamId: number;
+    fantasyTeamName: string;
+    statusAName: string;
+    statusBName: string;
+    effectiveAt: string;
+    note: string | null;
+    pairs: StatusChangePair[];
+}
 
 function positionGroup(rawPosition: string | null | undefined): PositionGroup {
     if (!rawPosition) return 'U';
@@ -279,6 +329,83 @@ function sortRosterForExport(entries: RosterEntry[]): RosterEntry[] {
         if (ga !== gb) return ga - gb;
         return a.lastName.localeCompare(b.lastName);
     });
+}
+
+interface ProjectedShape {
+    activeF: number;
+    activeD: number;
+    activeG: number;
+    benchF: number;
+    benchD: number;
+    benchG: number;
+    prospects: number;
+    isValid: boolean;
+}
+
+/**
+ * Computes the roster shape a team WOULD have after a trade, given
+ * its current roster, the set of its players being sent away, and
+ * the (position + new status) of every player arriving from the
+ * other side.
+ *
+ * Used purely for display: a broken projected shape does NOT block
+ * the trade. The backend was relaxed to accept it, and the
+ * commissioner fixes the resulting statuses manually via the
+ * "Gestion des joueurs" edit form.
+ */
+function computeProjectedShape(
+    currentEntries: RosterEntry[],
+    outgoingPlayerIds: ReadonlySet<number>,
+    incomingPlayers: ReadonlyArray<{
+        position: string;
+        newStatus: string;
+    }>,
+): ProjectedShape {
+    const counts = {
+        activeF: 0,
+        activeD: 0,
+        activeG: 0,
+        benchF: 0,
+        benchD: 0,
+        benchG: 0,
+        prospects: 0,
+    };
+
+    function addToBucket(group: PositionGroup, status: string): void {
+        if (status === 'Prospect') {
+            counts.prospects++;
+            return;
+        }
+        if (status === 'Active') {
+            if (group === 'F') counts.activeF++;
+            else if (group === 'D') counts.activeD++;
+            else if (group === 'G') counts.activeG++;
+        } else if (status === 'Bench') {
+            if (group === 'F') counts.benchF++;
+            else if (group === 'D') counts.benchD++;
+            else if (group === 'G') counts.benchG++;
+        }
+    }
+
+    for (const entry of currentEntries) {
+        if (outgoingPlayerIds.has(entry.playerId)) continue;
+        addToBucket(positionGroup(entry.position), entry.rosterStatus);
+    }
+
+    for (const incoming of incomingPlayers) {
+        addToBucket(positionGroup(incoming.position), incoming.newStatus);
+    }
+
+    const isValid =
+        counts.activeF === 12 &&
+        counts.activeD === 6 &&
+        counts.activeG === 1 &&
+        counts.benchF === 4 &&
+        counts.benchD === 2 &&
+        counts.benchG === 1 &&
+        counts.prospects === 3;
+
+    return { ...counts, isValid };
 }
 
 const selectClass =
@@ -881,6 +1008,954 @@ export default function AdminPage() {
 
     // Current user, used to hide the demote button on our own row.
     const { user: authUser } = useAuth();
+
+    // ---------------------------------------------------------------
+    // Trades history / Créer un échange state
+    // ---------------------------------------------------------------
+    const [showAdminTradeForm, setShowAdminTradeForm] = useState(false);
+    const [adminTradeDate, setAdminTradeDate] = useState(
+        todayLocalDateInputValue().slice(0, 10),
+    );
+    const [adminTradeTeamAId, setAdminTradeTeamAId] = useState('');
+    const [adminTradeTeamBId, setAdminTradeTeamBId] = useState('');
+    const [adminTradeTeamAPlayerSlots, setAdminTradeTeamAPlayerSlots] =
+        useState<string[]>(['']);
+    const [
+        adminTradeTeamAPlayerNewStatuses,
+        setAdminTradeTeamAPlayerNewStatuses,
+    ] = useState<string[]>(['']);
+    const [adminTradeTeamBPlayerSlots, setAdminTradeTeamBPlayerSlots] =
+        useState<string[]>(['']);
+    const [
+        adminTradeTeamBPlayerNewStatuses,
+        setAdminTradeTeamBPlayerNewStatuses,
+    ] = useState<string[]>(['']);
+    const [adminTradeTeamAPickIds, setAdminTradeTeamAPickIds] =
+        useState<number[]>([]);
+    const [adminTradeTeamBPickIds, setAdminTradeTeamBPickIds] =
+        useState<number[]>([]);
+    const [adminTradeNote, setAdminTradeNote] = useState('');
+
+    const [adminTradeTeamARoster, setAdminTradeTeamARoster] =
+        useState<TeamRoster | null>(null);
+    const [adminTradeTeamBRoster, setAdminTradeTeamBRoster] =
+        useState<TeamRoster | null>(null);
+    const [adminTradeTeamAPicks, setAdminTradeTeamAPicks] =
+        useState<DraftPick[]>([]);
+    const [adminTradeTeamBPicks, setAdminTradeTeamBPicks] =
+        useState<DraftPick[]>([]);
+
+    const [adminTradePickPopupSide, setAdminTradePickPopupSide] =
+        useState<'A' | 'B' | null>(null);
+
+    const [adminTradePreviewOpen, setAdminTradePreviewOpen] =
+        useState(false);
+    const [adminTradePreview, setAdminTradePreview] =
+        useState<AdminTradePreview | null>(null);
+    const [adminTradeSubmitting, setAdminTradeSubmitting] = useState(false);
+    const [adminTradeError, setAdminTradeError] =
+        useState<string | null>(null);
+    const [adminTradeSuccess, setAdminTradeSuccess] =
+        useState<string | null>(null);
+
+    const [adminTradeHistory, setAdminTradeHistory] =
+        useState<TradeHistoryDto[]>([]);
+    const [adminTradeHistoryLoading, setAdminTradeHistoryLoading] =
+        useState(false);
+    const [showAdminTradeHistory, setShowAdminTradeHistory] =
+        useState(false);
+
+    // Per-trade date-change editing state. Only one trade can be in
+    // edit mode at a time.
+    const [adminTradeDateEditFor, setAdminTradeDateEditFor] =
+        useState<number | null>(null);
+    const [adminTradeDateEditValue, setAdminTradeDateEditValue] =
+        useState('');
+    const [adminTradeDateEditReason, setAdminTradeDateEditReason] =
+        useState('');
+    const [adminTradeDateEditBusy, setAdminTradeDateEditBusy] =
+        useState(false);
+    const [adminTradeDateEditError, setAdminTradeDateEditError] =
+        useState<string | null>(null);
+
+    // Revert-trade confirmation state. Only one trade can be in
+    // "pending revert" mode at a time; the admin must type the
+    // trade ID to confirm.
+    const [adminTradeRevertFor, setAdminTradeRevertFor] =
+        useState<number | null>(null);
+    const [adminTradeRevertConfirmInput, setAdminTradeRevertConfirmInput] =
+        useState('');
+    const [adminTradeRevertBusy, setAdminTradeRevertBusy] =
+        useState(false);
+    const [adminTradeRevertError, setAdminTradeRevertError] =
+        useState<string | null>(null);
+
+    async function handleRevertTrade(tradeId: number) {
+        if (adminTradeRevertConfirmInput.trim() !== String(tradeId)) {
+            setAdminTradeRevertError(
+                `Tapez le numéro de l'échange (${tradeId}) pour confirmer.`,
+            );
+            return;
+        }
+
+        setAdminTradeRevertBusy(true);
+        setAdminTradeRevertError(null);
+
+        try {
+            const result = await revertAdminTrade(tradeId);
+
+            setAdminTradeHistory((prev) =>
+                prev.filter((t) => t.id !== tradeId),
+            );
+
+            setAdminTradeRevertFor(null);
+            setAdminTradeRevertConfirmInput('');
+            setAdminTradeSuccess(result.message);
+        } catch (err) {
+            setAdminTradeRevertError(
+                err instanceof Error
+                    ? err.message
+                    : 'Erreur inconnue.',
+            );
+        } finally {
+            setAdminTradeRevertBusy(false);
+        }
+    }
+
+    async function handleChangeTradeDate(tradeId: number) {
+        if (!adminTradeDateEditValue) {
+            setAdminTradeDateEditError('Choisissez une date.');
+            return;
+        }
+
+        setAdminTradeDateEditBusy(true);
+        setAdminTradeDateEditError(null);
+
+        try {
+            const newEffectiveAtIso = new Date(
+                adminTradeDateEditValue + 'T00:00:00Z',
+            ).toISOString();
+
+            const result = await changeAdminTradeDate(
+                tradeId,
+                newEffectiveAtIso,
+                adminTradeDateEditReason.trim() || null,
+            );
+
+            if (!result.success || !result.tradeHistory) {
+                setAdminTradeDateEditError(
+                    result.message || 'Erreur inconnue.',
+                );
+                return;
+            }
+
+            setAdminTradeHistory((prev) =>
+                prev.map((t) =>
+                    t.id === tradeId ? result.tradeHistory! : t,
+                ),
+            );
+
+            setAdminTradeDateEditFor(null);
+            setAdminTradeDateEditValue('');
+            setAdminTradeDateEditReason('');
+        } catch (err) {
+            setAdminTradeDateEditError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setAdminTradeDateEditBusy(false);
+        }
+    }
+
+    useEffect(() => {
+        void loadAdminTradeHistory();
+    }, []);
+
+    useEffect(() => {
+        if (!adminTradeTeamAId || adminTradeDate.trim() === '') {
+            setAdminTradeTeamARoster(null);
+            setAdminTradeTeamAPicks([]);
+            setAdminTradeTeamAPlayerSlots(['']);
+            setAdminTradeTeamAPlayerNewStatuses(['']);
+            setAdminTradeTeamAPickIds([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        Promise.all([
+            getTeamRosterAtDate(
+                Number(adminTradeTeamAId),
+                adminTradeDate,
+            ),
+            getTeamDraftPicks(Number(adminTradeTeamAId)),
+        ])
+            .then(([roster, picks]) => {
+                if (cancelled) return;
+                setAdminTradeTeamARoster(roster);
+                setAdminTradeTeamAPicks(picks);
+                setAdminTradeTeamAPlayerSlots(['']);
+                setAdminTradeTeamAPlayerNewStatuses(['']);
+                setAdminTradeTeamAPickIds([]);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setAdminTradeTeamARoster(null);
+                setAdminTradeTeamAPicks([]);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [adminTradeTeamAId, adminTradeDate]);
+
+    useEffect(() => {
+        if (!adminTradeTeamBId || adminTradeDate.trim() === '') {
+            setAdminTradeTeamBRoster(null);
+            setAdminTradeTeamBPicks([]);
+            setAdminTradeTeamBPlayerSlots(['']);
+            setAdminTradeTeamBPlayerNewStatuses(['']);
+            setAdminTradeTeamBPickIds([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        Promise.all([
+            getTeamRosterAtDate(
+                Number(adminTradeTeamBId),
+                adminTradeDate,
+            ),
+            getTeamDraftPicks(Number(adminTradeTeamBId)),
+        ])
+            .then(([roster, picks]) => {
+                if (cancelled) return;
+                setAdminTradeTeamBRoster(roster);
+                setAdminTradeTeamBPicks(picks);
+                setAdminTradeTeamBPlayerSlots(['']);
+                setAdminTradeTeamBPlayerNewStatuses(['']);
+                setAdminTradeTeamBPickIds([]);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setAdminTradeTeamBRoster(null);
+                setAdminTradeTeamBPicks([]);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [adminTradeTeamBId, adminTradeDate]);
+
+    async function loadAdminTradeHistory() {
+        setAdminTradeHistoryLoading(true);
+        try {
+            const rows = await getAdminTradeHistory();
+            setAdminTradeHistory(rows);
+        } catch {
+            setAdminTradeHistory([]);
+        } finally {
+            setAdminTradeHistoryLoading(false);
+        }
+    }
+
+    function addAdminTradePlayerSlot() {
+        setAdminTradeTeamAPlayerSlots((prev) => [...prev, '']);
+        setAdminTradeTeamAPlayerNewStatuses((prev) => [...prev, '']);
+        setAdminTradeTeamBPlayerSlots((prev) => [...prev, '']);
+        setAdminTradeTeamBPlayerNewStatuses((prev) => [...prev, '']);
+    }
+
+    function removeAdminTradePlayerSlot(index: number) {
+        setAdminTradeTeamAPlayerSlots((prev) =>
+            prev.length > 1
+                ? prev.filter((_, i) => i !== index)
+                : prev,
+        );
+        setAdminTradeTeamAPlayerNewStatuses((prev) =>
+            prev.length > 1
+                ? prev.filter((_, i) => i !== index)
+                : prev,
+        );
+        setAdminTradeTeamBPlayerSlots((prev) =>
+            prev.length > 1
+                ? prev.filter((_, i) => i !== index)
+                : prev,
+        );
+        setAdminTradeTeamBPlayerNewStatuses((prev) =>
+            prev.length > 1
+                ? prev.filter((_, i) => i !== index)
+                : prev,
+        );
+    }
+
+    function setAdminTradeTeamAPlayerSlot(index: number, value: string) {
+        setAdminTradeTeamAPlayerSlots((prev) =>
+            prev.map((v, i) => (i === index ? value : v)),
+        );
+
+        // When the player changes, reset his status override so the
+        // dropdown reflects the new player's current status.
+        setAdminTradeTeamAPlayerNewStatuses((prev) =>
+            prev.map((v, i) => (i === index ? '' : v)),
+        );
+    }
+
+    function setAdminTradeTeamAPlayerNewStatus(
+        index: number,
+        value: string,
+    ) {
+        setAdminTradeTeamAPlayerNewStatuses((prev) =>
+            prev.map((v, i) => (i === index ? value : v)),
+        );
+    }
+
+    function setAdminTradeTeamBPlayerSlot(index: number, value: string) {
+        setAdminTradeTeamBPlayerSlots((prev) =>
+            prev.map((v, i) => (i === index ? value : v)),
+        );
+
+        setAdminTradeTeamBPlayerNewStatuses((prev) =>
+            prev.map((v, i) => (i === index ? '' : v)),
+        );
+    }
+
+    function setAdminTradeTeamBPlayerNewStatus(
+        index: number,
+        value: string,
+    ) {
+        setAdminTradeTeamBPlayerNewStatuses((prev) =>
+            prev.map((v, i) => (i === index ? value : v)),
+        );
+    }
+
+    function toggleAdminTradePick(side: 'A' | 'B', pickId: number) {
+        if (side === 'A') {
+            setAdminTradeTeamAPickIds((prev) =>
+                prev.includes(pickId)
+                    ? prev.filter((id) => id !== pickId)
+                    : [...prev, pickId],
+            );
+        } else {
+            setAdminTradeTeamBPickIds((prev) =>
+                prev.includes(pickId)
+                    ? prev.filter((id) => id !== pickId)
+                    : [...prev, pickId],
+            );
+        }
+    }
+
+    function buildAdminTradePreview(): AdminTradePreview | null {
+        setAdminTradeError(null);
+        setAdminTradeSuccess(null);
+
+        const teamA = teams.find(
+            (t) => String(t.id) === adminTradeTeamAId,
+        );
+        const teamB = teams.find(
+            (t) => String(t.id) === adminTradeTeamBId,
+        );
+
+        if (!teamA) {
+            setAdminTradeError('Choisissez Équipe 1.');
+            return null;
+        }
+        if (!teamB) {
+            setAdminTradeError('Choisissez Équipe 2.');
+            return null;
+        }
+        if (adminTradeDate.trim() === '') {
+            setAdminTradeError("Choisissez la date d'entrée en vigueur.");
+            return null;
+        }
+
+        // Validate: every slot with a player on one side must have one
+        // on the other side too, because slots are paired.
+        for (let i = 0; i < adminTradeTeamAPlayerSlots.length; i++) {
+            const a = adminTradeTeamAPlayerSlots[i];
+            const b = adminTradeTeamBPlayerSlots[i];
+            if ((a === '') !== (b === '')) {
+                setAdminTradeError(
+                    `Slot ${i + 1} : remplissez les deux côtés ou aucun.`,
+                );
+                return null;
+            }
+        }
+
+        // Pairs of { playerId, newStatus } derived from the slot arrays
+        // and the parallel override arrays. Empty newStatus means "no
+        // override, keep the current status".
+        const aPlayerRequests: { playerId: number; newStatus: string }[] = [];
+        const bPlayerRequests: { playerId: number; newStatus: string }[] = [];
+
+        for (let i = 0; i < adminTradeTeamAPlayerSlots.length; i++) {
+            const aId = adminTradeTeamAPlayerSlots[i];
+            const bId = adminTradeTeamBPlayerSlots[i];
+
+            if (aId !== '') {
+                aPlayerRequests.push({
+                    playerId: Number(aId),
+                    newStatus: adminTradeTeamAPlayerNewStatuses[i] || '',
+                });
+            }
+            if (bId !== '') {
+                bPlayerRequests.push({
+                    playerId: Number(bId),
+                    newStatus: adminTradeTeamBPlayerNewStatuses[i] || '',
+                });
+            }
+        }
+
+        if (
+            aPlayerRequests.length === 0 &&
+            bPlayerRequests.length === 0 &&
+            adminTradeTeamAPickIds.length === 0 &&
+            adminTradeTeamBPickIds.length === 0
+        ) {
+            setAdminTradeError(
+                'Ajoutez au moins un joueur ou un choix de repêchage.',
+            );
+            return null;
+        }
+
+        const effectiveAt = new Date(
+            adminTradeDate + 'T00:00:00Z',
+        ).toISOString();
+
+        const buildPlayerSide = (
+            playerId: number,
+            overrideStatus: string,
+            roster: TeamRoster | null,
+        ): AdminTradePlayerSide | null => {
+            if (!roster) return null;
+            const e = roster.entries.find((x) => x.playerId === playerId);
+            if (!e) return null;
+            return {
+                playerId: e.playerId,
+                nhlPlayerId: e.nhlPlayerId,
+                firstName: e.firstName,
+                lastName: e.lastName,
+                position: e.position,
+                nhlTeamAbbreviation: e.nhlTeamAbbreviation,
+                salary: e.currentContract?.salary ?? e.fantasySalary,
+                yearsRemaining: e.currentContract?.yearsRemaining ?? 1,
+                previousStatus: e.rosterStatus,
+                newStatus: overrideStatus || e.rosterStatus,
+            };
+        };
+
+        const buildPickSide = (
+            id: number,
+            picks: DraftPick[],
+        ): AdminTradePickSide | null => {
+            const p = picks.find((x) => x.id === id);
+            if (!p) return null;
+            return {
+                draftPickId: p.id,
+                draftYear: p.draftYear,
+                round: p.round,
+                originalOwnerFantasyTeamName:
+                    p.originalOwnerFantasyTeamName,
+            };
+        };
+
+        const aPlayers = aPlayerRequests
+            .map((r) =>
+                buildPlayerSide(
+                    r.playerId,
+                    r.newStatus,
+                    adminTradeTeamARoster,
+                ),
+            )
+            .filter((x): x is AdminTradePlayerSide => x != null);
+
+        const bPlayers = bPlayerRequests
+            .map((r) =>
+                buildPlayerSide(
+                    r.playerId,
+                    r.newStatus,
+                    adminTradeTeamBRoster,
+                ),
+            )
+            .filter((x): x is AdminTradePlayerSide => x != null);
+
+        const aPicks = adminTradeTeamAPickIds
+            .map((id) => buildPickSide(id, adminTradeTeamAPicks))
+            .filter((x): x is AdminTradePickSide => x != null);
+
+        const bPicks = adminTradeTeamBPickIds
+            .map((id) => buildPickSide(id, adminTradeTeamBPicks))
+            .filter((x): x is AdminTradePickSide => x != null);
+
+        return {
+            teamAId: teamA.id,
+            teamAName: teamA.name,
+            teamBId: teamB.id,
+            teamBName: teamB.name,
+            effectiveAt,
+            note: adminTradeNote.trim() || null,
+            teamASentPlayers: aPlayers,
+            teamBSentPlayers: bPlayers,
+            teamASentPicks: aPicks,
+            teamBSentPicks: bPicks,
+        };
+    }
+
+    function submitAdminTrade() {
+        const preview = buildAdminTradePreview();
+        if (!preview) return;
+        setAdminTradePreview(preview);
+        setAdminTradePreviewOpen(true);
+    }
+
+    async function confirmAdminTrade() {
+        if (!adminTradePreview) return;
+
+        setAdminTradeSubmitting(true);
+        setAdminTradeError(null);
+
+        try {
+            const payload: FinalizeAdminTradeRequest = {
+                teamAId: adminTradePreview.teamAId,
+                teamBId: adminTradePreview.teamBId,
+                effectiveAt: adminTradePreview.effectiveAt,
+                note: adminTradePreview.note,
+                teamASendingPlayers:
+                    adminTradePreview.teamASentPlayers.map((p) => ({
+                        playerId: p.playerId,
+                        newStatus:
+                            p.newStatus !== p.previousStatus
+                                ? p.newStatus
+                                : null,
+                    })),
+                teamBSendingPlayers:
+                    adminTradePreview.teamBSentPlayers.map((p) => ({
+                        playerId: p.playerId,
+                        newStatus:
+                            p.newStatus !== p.previousStatus
+                                ? p.newStatus
+                                : null,
+                    })),
+                teamASendingDraftPickIds:
+                    adminTradePreview.teamASentPicks.map(
+                        (p) => p.draftPickId,
+                    ),
+                teamBSendingDraftPickIds:
+                    adminTradePreview.teamBSentPicks.map(
+                        (p) => p.draftPickId,
+                    ),
+            };
+
+            const result = await finalizeAdminTrade(payload);
+
+            setAdminTradeSuccess(result.message);
+            setAdminTradePreviewOpen(false);
+            setAdminTradePreview(null);
+            setAdminTradeTeamAPlayerSlots(['']);
+            setAdminTradeTeamBPlayerSlots(['']);
+            setAdminTradeTeamAPickIds([]);
+            setAdminTradeTeamBPickIds([]);
+            setAdminTradeNote('');
+
+            await loadAdminTradeHistory();
+
+            if (adminTradeTeamAId) {
+                getTeamRoster(Number(adminTradeTeamAId))
+                    .then((r) => setAdminTradeTeamARoster(r))
+                    .catch(() => undefined);
+                getTeamDraftPicks(Number(adminTradeTeamAId))
+                    .then((p) => setAdminTradeTeamAPicks(p))
+                    .catch(() => undefined);
+            }
+
+            if (adminTradeTeamBId) {
+                getTeamRoster(Number(adminTradeTeamBId))
+                    .then((r) => setAdminTradeTeamBRoster(r))
+                    .catch(() => undefined);
+                getTeamDraftPicks(Number(adminTradeTeamBId))
+                    .then((p) => setAdminTradeTeamBPicks(p))
+                    .catch(() => undefined);
+            }
+        } catch (err) {
+            setAdminTradeError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setAdminTradeSubmitting(false);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Batch status change state
+    // ---------------------------------------------------------------
+    const [showStatusChangeForm, setShowStatusChangeForm] =
+        useState(false);
+    const [statusChangeTeamId, setStatusChangeTeamId] = useState('');
+    const [statusChangeDate, setStatusChangeDate] = useState(
+        todayLocalDateInputValue().slice(0, 10),
+    );
+    const [statusChangeA, setStatusChangeA] = useState<
+        'Active' | 'Bench' | 'Prospect'
+    >('Active');
+    const [statusChangeB, setStatusChangeB] = useState<
+        'Active' | 'Bench' | 'Prospect'
+    >('Bench');
+    const [statusChangePairs, setStatusChangePairs] = useState<
+        { aId: string; bId: string }[]
+    >([{ aId: '', bId: '' }]);
+    const [statusChangeNote, setStatusChangeNote] = useState('');
+    const [statusChangeTeamRoster, setStatusChangeTeamRoster] =
+        useState<TeamRoster | null>(null);
+
+    const [statusChangePreviewOpen, setStatusChangePreviewOpen] =
+        useState(false);
+    const [statusChangePreview, setStatusChangePreview] =
+        useState<StatusChangePreview | null>(null);
+    const [statusChangeSubmitting, setStatusChangeSubmitting] =
+        useState(false);
+    const [statusChangeError, setStatusChangeError] =
+        useState<string | null>(null);
+    const [statusChangeSuccess, setStatusChangeSuccess] =
+        useState<string | null>(null);
+
+    const [statusChangeHistory, setStatusChangeHistory] = useState<
+        StatusChangeHistoryDto[]
+    >([]);
+    const [statusChangeHistoryLoading, setStatusChangeHistoryLoading] =
+        useState(false);
+    const [showStatusChangeHistory, setShowStatusChangeHistory] =
+        useState(false);
+
+    const [statusChangeDateEditFor, setStatusChangeDateEditFor] =
+        useState<number | null>(null);
+    const [statusChangeDateEditValue, setStatusChangeDateEditValue] =
+        useState('');
+    const [statusChangeDateEditReason, setStatusChangeDateEditReason] =
+        useState('');
+    const [statusChangeDateEditBusy, setStatusChangeDateEditBusy] =
+        useState(false);
+    const [statusChangeDateEditError, setStatusChangeDateEditError] =
+        useState<string | null>(null);
+
+    const [statusChangeRevertFor, setStatusChangeRevertFor] =
+        useState<number | null>(null);
+    const [
+        statusChangeRevertConfirmInput,
+        setStatusChangeRevertConfirmInput,
+    ] = useState('');
+    const [statusChangeRevertBusy, setStatusChangeRevertBusy] =
+        useState(false);
+    const [statusChangeRevertError, setStatusChangeRevertError] =
+        useState<string | null>(null);
+
+    useEffect(() => {
+        void loadStatusChangeHistory();
+    }, []);
+
+    useEffect(() => {
+        if (!statusChangeTeamId || statusChangeDate.trim() === '') {
+            setStatusChangeTeamRoster(null);
+            setStatusChangePairs([{ aId: '', bId: '' }]);
+            return;
+        }
+
+        let cancelled = false;
+
+        getTeamRosterAtDate(
+            Number(statusChangeTeamId),
+            statusChangeDate,
+        )
+            .then((r) => {
+                if (cancelled) return;
+                setStatusChangeTeamRoster(r);
+                setStatusChangePairs([{ aId: '', bId: '' }]);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setStatusChangeTeamRoster(null);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [statusChangeTeamId, statusChangeDate]);
+
+    async function loadStatusChangeHistory() {
+        setStatusChangeHistoryLoading(true);
+        try {
+            const rows = await getStatusChangeHistory();
+            setStatusChangeHistory(rows);
+        } catch {
+            setStatusChangeHistory([]);
+        } finally {
+            setStatusChangeHistoryLoading(false);
+        }
+    }
+
+    function addStatusChangePair() {
+        setStatusChangePairs((prev) => [
+            ...prev,
+            { aId: '', bId: '' },
+        ]);
+    }
+
+    function removeStatusChangePair(index: number) {
+        setStatusChangePairs((prev) =>
+            prev.length > 1 ? prev.filter((_, i) => i !== index) : prev,
+        );
+    }
+
+    function setStatusChangePairA(index: number, value: string) {
+        setStatusChangePairs((prev) =>
+            prev.map((p, i) => (i === index ? { ...p, aId: value } : p)),
+        );
+    }
+
+    function setStatusChangePairB(index: number, value: string) {
+        setStatusChangePairs((prev) =>
+            prev.map((p, i) => (i === index ? { ...p, bId: value } : p)),
+        );
+    }
+
+    function buildStatusChangePreview(): StatusChangePreview | null {
+        setStatusChangeError(null);
+        setStatusChangeSuccess(null);
+
+        const team = teams.find(
+            (t) => String(t.id) === statusChangeTeamId,
+        );
+
+        if (!team) {
+            setStatusChangeError('Choisissez une équipe.');
+            return null;
+        }
+
+        if (statusChangeA === statusChangeB) {
+            setStatusChangeError(
+                'Status 1 et Status 2 doivent être différents.',
+            );
+            return null;
+        }
+
+        if (statusChangeDate.trim() === '') {
+            setStatusChangeError(
+                "Choisissez la date d'entrée en vigueur.",
+            );
+            return null;
+        }
+
+        if (!statusChangeTeamRoster) {
+            setStatusChangeError("Chargement de l'équipe en cours...");
+            return null;
+        }
+
+        const filledPairs = statusChangePairs.filter(
+            (p) => p.aId !== '' && p.bId !== '',
+        );
+
+        if (
+            filledPairs.length !==
+            statusChangePairs.filter(
+                (p) => p.aId !== '' || p.bId !== '',
+            ).length
+        ) {
+            setStatusChangeError(
+                'Chaque slot doit avoir deux joueurs, ou aucun.',
+            );
+            return null;
+        }
+
+        if (filledPairs.length === 0) {
+            setStatusChangeError(
+                'Ajoutez au moins une paire de joueurs.',
+            );
+            return null;
+        }
+
+        const effectiveAt = new Date(
+            statusChangeDate + 'T00:00:00Z',
+        ).toISOString();
+
+        const pairs: StatusChangePair[] = filledPairs.map(
+            (p, idx) => {
+                const eA = statusChangeTeamRoster.entries.find(
+                    (e) => String(e.playerId) === p.aId,
+                );
+                const eB = statusChangeTeamRoster.entries.find(
+                    (e) => String(e.playerId) === p.bId,
+                );
+
+                const buildSide = (
+                    e: typeof eA,
+                    prevStatus: string,
+                    newStatus: string,
+                ): AdminStatusChangePlayerSide => ({
+                    playerId: e!.playerId,
+                    nhlPlayerId: e!.nhlPlayerId,
+                    firstName: e!.firstName,
+                    lastName: e!.lastName,
+                    position: e!.position,
+                    nhlTeamAbbreviation: e!.nhlTeamAbbreviation,
+                    previousStatusName: prevStatus,
+                    newStatusName: newStatus,
+                });
+
+                return {
+                    slotIndex: idx,
+                    statusASide: buildSide(
+                        eA,
+                        statusChangeA,
+                        statusChangeB,
+                    ),
+                    statusBSide: buildSide(
+                        eB,
+                        statusChangeB,
+                        statusChangeA,
+                    ),
+                };
+            },
+        );
+
+        return {
+            fantasyTeamId: team.id,
+            fantasyTeamName: team.name,
+            statusAName: statusChangeA,
+            statusBName: statusChangeB,
+            effectiveAt,
+            note: statusChangeNote.trim() || null,
+            pairs,
+        };
+    }
+
+    function submitStatusChange() {
+        const preview = buildStatusChangePreview();
+        if (!preview) return;
+        setStatusChangePreview(preview);
+        setStatusChangePreviewOpen(true);
+    }
+
+    async function confirmStatusChange() {
+        if (!statusChangePreview) return;
+
+        setStatusChangeSubmitting(true);
+        setStatusChangeError(null);
+
+        try {
+            const pairs: StatusChangePairRequest[] =
+                statusChangePreview.pairs.map((p) => ({
+                    statusASidePlayerId: p.statusASide.playerId,
+                    statusBSidePlayerId: p.statusBSide.playerId,
+                }));
+
+            const payload: FinalizeStatusChangeRequest = {
+                fantasyTeamId: statusChangePreview.fantasyTeamId,
+                effectiveAt: statusChangePreview.effectiveAt,
+                statusA: statusChangePreview.statusAName,
+                statusB: statusChangePreview.statusBName,
+                note: statusChangePreview.note,
+                pairs,
+            };
+
+            const result = await finalizeStatusChange(payload);
+
+            setStatusChangeSuccess(result.message);
+            setStatusChangePreviewOpen(false);
+            setStatusChangePreview(null);
+            setStatusChangePairs([{ aId: '', bId: '' }]);
+            setStatusChangeNote('');
+
+            await loadStatusChangeHistory();
+
+            if (statusChangeTeamId) {
+                getTeamRoster(Number(statusChangeTeamId))
+                    .then((r) => setStatusChangeTeamRoster(r))
+                    .catch(() => undefined);
+            }
+        } catch (err) {
+            setStatusChangeError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setStatusChangeSubmitting(false);
+        }
+    }
+
+    async function handleChangeStatusChangeDate(id: number) {
+        if (!statusChangeDateEditValue) {
+            setStatusChangeDateEditError('Choisissez une date.');
+            return;
+        }
+
+        setStatusChangeDateEditBusy(true);
+        setStatusChangeDateEditError(null);
+
+        try {
+            const newIso = new Date(
+                statusChangeDateEditValue + 'T00:00:00Z',
+            ).toISOString();
+
+            const result = await changeStatusChangeDate(
+                id,
+                newIso,
+                statusChangeDateEditReason.trim() || null,
+            );
+
+            if (!result.success || !result.statusChangeHistory) {
+                setStatusChangeDateEditError(
+                    result.message || 'Erreur inconnue.',
+                );
+                return;
+            }
+
+            setStatusChangeHistory((prev) =>
+                prev.map((h) =>
+                    h.id === id
+                        ? result.statusChangeHistory!
+                        : h,
+                ),
+            );
+
+            setStatusChangeDateEditFor(null);
+            setStatusChangeDateEditValue('');
+            setStatusChangeDateEditReason('');
+        } catch (err) {
+            setStatusChangeDateEditError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setStatusChangeDateEditBusy(false);
+        }
+    }
+
+    async function handleRevertStatusChange(id: number) {
+        if (statusChangeRevertConfirmInput.trim() !== String(id)) {
+            setStatusChangeRevertError(
+                `Tapez le numéro (${id}) pour confirmer.`,
+            );
+            return;
+        }
+
+        setStatusChangeRevertBusy(true);
+        setStatusChangeRevertError(null);
+
+        try {
+            const result = await revertStatusChange(id);
+
+            setStatusChangeHistory((prev) =>
+                prev.filter((h) => h.id !== id),
+            );
+
+            setStatusChangeRevertFor(null);
+            setStatusChangeRevertConfirmInput('');
+            setStatusChangeSuccess(result.message);
+        } catch (err) {
+            setStatusChangeRevertError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setStatusChangeRevertBusy(false);
+        }
+    }
 
     useEffect(() => {
         let cancelled = false;
@@ -2652,6 +3727,167 @@ export default function AdminPage() {
 
     const assignDisabled = submitting || !selectedPlayer || !fantasyTeamId;
 
+    // ---------------------------------------------------------------
+    // Backups
+    //
+    // Primary use case: pull a fresh pg_dump to the admin's PC so a
+    // VPS wipe cannot take out both the DB and the on-server backups.
+    // A secondary list of historical backups is shown so the admin
+    // can re-download an older one without triggering a new dump.
+    // ---------------------------------------------------------------
+
+    const [backups, setBackups] = useState<BackupFile[]>([]);
+    const [backupsLoading, setBackupsLoading] = useState(false);
+    const [backupsTriggering, setBackupsTriggering] = useState(false);
+    const [backupsError, setBackupsError] = useState<string | null>(null);
+    const [backupsSuccess, setBackupsSuccess] = useState<string | null>(
+        null,
+    );
+
+    async function loadBackups() {
+        setBackupsLoading(true);
+        setBackupsError(null);
+
+        try {
+            setBackups(await listBackups());
+        } catch (err) {
+            setBackupsError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setBackupsLoading(false);
+        }
+    }
+
+    async function handleCreateAndDownloadBackup() {
+        setBackupsTriggering(true);
+        setBackupsError(null);
+        setBackupsSuccess(null);
+
+        try {
+            const result = await triggerBackup();
+
+            setBackupsSuccess(
+                `Sauvegarde créée : ${result.filename}. ` +
+                'Le téléchargement va démarrer.',
+            );
+
+            await loadBackups();
+
+            // Hand the download off to the browser. The server sets
+            // Content-Disposition: attachment so the file saves
+            // instead of rendering, and the browser stays on this
+            // page. Being on a separate request from the trigger
+            // keeps each HTTP call under the ASP.NET request timeout.
+            window.location.href = downloadBackupUrl(result.filename);
+        } catch (err) {
+            setBackupsError(
+                err instanceof Error ? err.message : 'Erreur inconnue.',
+            );
+        } finally {
+            setBackupsTriggering(false);
+        }
+    }
+
+    useEffect(() => {
+        void loadBackups();
+    }, []);
+
+    // ---------------------------------------------------------------
+    // Trade form: projected roster shape per side
+    //
+    // For team A we keep every A player that is NOT in one of A's
+    // outgoing slots, and add every B player that sits in one of B's
+    // slots (their status is what the admin set next to that player in
+    // the B column, or their current B status if no override is set).
+    // The mirror case covers team B.
+    //
+    // Recomputed on every change, so the summary under each column
+    // always reflects "what would happen if I hit Confirmer right now".
+    // ---------------------------------------------------------------
+
+    const teamAProjection = useMemo<ProjectedShape | null>(() => {
+        if (!adminTradeTeamARoster) return null;
+
+        const outgoing = new Set(
+            adminTradeTeamAPlayerSlots
+                .filter((s) => s !== '')
+                .map((s) => Number(s)),
+        );
+
+        const incoming: { position: string; newStatus: string }[] = [];
+
+        if (adminTradeTeamBRoster) {
+            for (let i = 0; i < adminTradeTeamBPlayerSlots.length; i++) {
+                const pid = adminTradeTeamBPlayerSlots[i];
+                if (pid === '') continue;
+
+                const entry = adminTradeTeamBRoster.entries.find(
+                    (e) => String(e.playerId) === pid,
+                );
+                if (!entry) continue;
+
+                const newStatus =
+                    adminTradeTeamBPlayerNewStatuses[i] || entry.rosterStatus;
+
+                incoming.push({ position: entry.position, newStatus });
+            }
+        }
+
+        return computeProjectedShape(
+            adminTradeTeamARoster.entries,
+            outgoing,
+            incoming,
+        );
+    }, [
+        adminTradeTeamARoster,
+        adminTradeTeamBRoster,
+        adminTradeTeamAPlayerSlots,
+        adminTradeTeamBPlayerSlots,
+        adminTradeTeamBPlayerNewStatuses,
+    ]);
+
+    const teamBProjection = useMemo<ProjectedShape | null>(() => {
+        if (!adminTradeTeamBRoster) return null;
+
+        const outgoing = new Set(
+            adminTradeTeamBPlayerSlots
+                .filter((s) => s !== '')
+                .map((s) => Number(s)),
+        );
+
+        const incoming: { position: string; newStatus: string }[] = [];
+
+        if (adminTradeTeamARoster) {
+            for (let i = 0; i < adminTradeTeamAPlayerSlots.length; i++) {
+                const pid = adminTradeTeamAPlayerSlots[i];
+                if (pid === '') continue;
+
+                const entry = adminTradeTeamARoster.entries.find(
+                    (e) => String(e.playerId) === pid,
+                );
+                if (!entry) continue;
+
+                const newStatus =
+                    adminTradeTeamAPlayerNewStatuses[i] || entry.rosterStatus;
+
+                incoming.push({ position: entry.position, newStatus });
+            }
+        }
+
+        return computeProjectedShape(
+            adminTradeTeamBRoster.entries,
+            outgoing,
+            incoming,
+        );
+    }, [
+        adminTradeTeamBRoster,
+        adminTradeTeamARoster,
+        adminTradeTeamBPlayerSlots,
+        adminTradeTeamAPlayerSlots,
+        adminTradeTeamAPlayerNewStatuses,
+    ]);
+
     return (
         <section className='space-y-6'>
             {/* ============================================================
@@ -4336,6 +5572,2739 @@ export default function AdminPage() {
             </div>
 
             {/* ============================================================
+                Créer un échange (commissioner-only trade execution)
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <button
+                    type='button'
+                    onClick={() => setShowAdminTradeForm((v) => !v)}
+                    className='cursor-pointer rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-opacity hover:brightness-110'
+                    style={{
+                        backgroundColor: '#080D1A',
+                        border: '3px solid #00E5FF',
+                        boxShadow: [
+                            'inset 0 0 0 1px rgba(220, 250, 255, 0.95)',
+                            'inset 0 0 12px rgba(0, 229, 255, 0.55)',
+                            'inset 0 0 28px rgba(0, 229, 255, 0.15)',
+                        ].join(', '),
+                    }}
+                >
+                    {showAdminTradeForm
+                        ? '▼ Masquer la création d\'échange'
+                        : '▶ Créer un échange'}
+                </button>
+
+                {showAdminTradeForm && (
+                    <div className='space-y-4 rounded-lg border border-border bg-card p-3'>
+                        <div>
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Date d'entrée en vigueur
+                            </label>
+                            <input
+                                type='date'
+                                value={adminTradeDate}
+                                onChange={(event) =>
+                                    setAdminTradeDate(event.target.value)
+                                }
+                                className={`mt-1 ${selectClass}`}
+                            />
+                            <p className='mt-1 text-xs text-muted-foreground'>
+                                Les changements de statut des joueurs
+                                seront appliqués à cette date.
+                            </p>
+                        </div>
+
+                        <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+                            {/* ---- Team A column ---- */}
+                            <div className='space-y-2 rounded-lg border border-border bg-background p-2'>
+                                <label className='text-sm font-medium text-muted-foreground'>
+                                    Équipe 1
+                                </label>
+                                <select
+                                    value={adminTradeTeamAId}
+                                    onChange={(event) =>
+                                        setAdminTradeTeamAId(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className={selectClass}
+                                >
+                                    <option value=''>— équipe —</option>
+                                    {teams.map((team) => (
+                                        <option
+                                            key={team.id}
+                                            value={team.id}
+                                        >
+                                            {team.name}
+                                        </option>
+                                    ))}
+                                </select>
+
+                                {adminTradeTeamAId !== '' &&
+                                    adminTradeTeamARoster && (
+                                        <>
+                                            {adminTradeTeamAPlayerSlots.map(
+                                                (_slot, index) => {
+                                                    const selectedPlayerId =
+                                                        adminTradeTeamAPlayerSlots[
+                                                        index
+                                                        ];
+
+                                                    const selectedEntry =
+                                                        selectedPlayerId !==
+                                                            ''
+                                                            ? adminTradeTeamARoster.entries.find(
+                                                                (e) =>
+                                                                    String(
+                                                                        e.playerId,
+                                                                    ) ===
+                                                                    selectedPlayerId,
+                                                            )
+                                                            : undefined;
+
+                                                    const currentStatus =
+                                                        selectedEntry?.rosterStatus ??
+                                                        '';
+
+                                                    const effectiveStatus =
+                                                        adminTradeTeamAPlayerNewStatuses[
+                                                        index
+                                                        ] || currentStatus;
+
+                                                    return (
+                                                        <div
+                                                            key={index}
+                                                            className='flex flex-wrap items-center gap-2'
+                                                        >
+                                                            <select
+                                                                value={
+                                                                    adminTradeTeamAPlayerSlots[
+                                                                    index
+                                                                    ]
+                                                                }
+                                                                onChange={(
+                                                                    event,
+                                                                ) =>
+                                                                    setAdminTradeTeamAPlayerSlot(
+                                                                        index,
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    )
+                                                                }
+                                                                className={`${selectClass} flex-1 min-w-[10rem]`}
+                                                            >
+                                                                <option value=''>
+                                                                    — Ajouter un joueur{' '}
+                                                                    {index > 0
+                                                                        ? index +
+                                                                        1
+                                                                        : ''}{' '}
+                                                                    —
+                                                                </option>
+                                                                {(adminTradeTeamARoster?.entries ??
+                                                                    [])
+                                                                    .filter(
+                                                                        (
+                                                                            e,
+                                                                        ) => {
+                                                                            return !adminTradeTeamAPlayerSlots.some(
+                                                                                (
+                                                                                    v,
+                                                                                    i,
+                                                                                ) =>
+                                                                                    i !==
+                                                                                    index &&
+                                                                                    v !==
+                                                                                    '' &&
+                                                                                    Number(
+                                                                                        v,
+                                                                                    ) ===
+                                                                                    e.playerId,
+                                                                            );
+                                                                        },
+                                                                    )
+                                                                    .map(
+                                                                        (
+                                                                            e,
+                                                                        ) => (
+                                                                            <option
+                                                                                key={
+                                                                                    e.playerId
+                                                                                }
+                                                                                value={
+                                                                                    e.playerId
+                                                                                }
+                                                                            >
+                                                                                {
+                                                                                    e.firstName
+                                                                                }{' '}
+                                                                                {
+                                                                                    e.lastName
+                                                                                }{' '}
+                                                                                (
+                                                                                {
+                                                                                    e.position
+                                                                                }
+                                                                                ,{' '}
+                                                                                {
+                                                                                    e.nhlTeamAbbreviation
+                                                                                }
+                                                                                ){' '}
+                                                                                ·{' '}
+                                                                                {
+                                                                                    e.rosterStatus
+                                                                                }
+                                                                            </option>
+                                                                        ),
+                                                                    )}
+                                                            </select>
+
+                                                            {selectedPlayerId !==
+                                                                '' && (
+                                                                    <select
+                                                                        value={
+                                                                            effectiveStatus
+                                                                        }
+                                                                        onChange={(
+                                                                            event,
+                                                                        ) =>
+                                                                            setAdminTradeTeamAPlayerNewStatus(
+                                                                                index,
+                                                                                event
+                                                                                    .target
+                                                                                    .value,
+                                                                            )
+                                                                        }
+                                                                        className={`${selectClass} flex-shrink-0`}
+                                                                        aria-label='Nouveau statut'
+                                                                        title='Statut après échange'
+                                                                    >
+                                                                        <option value='Active'>
+                                                                            Active
+                                                                        </option>
+                                                                        <option value='Bench'>
+                                                                            Bench
+                                                                        </option>
+                                                                        <option value='Prospect'>
+                                                                            Prospect
+                                                                        </option>
+                                                                    </select>
+                                                                )}
+
+                                                            {adminTradeTeamAPlayerSlots.length >
+                                                                1 && (
+                                                                    <button
+                                                                        type='button'
+                                                                        onClick={() =>
+                                                                            removeAdminTradePlayerSlot(
+                                                                                index,
+                                                                            )
+                                                                        }
+                                                                        aria-label='Retirer ce slot'
+                                                                        className='cursor-pointer rounded border border-destructive/40 px-1.5 py-0.5 text-xs text-destructive hover:bg-destructive/10'
+                                                                    >
+                                                                        ×
+                                                                    </button>
+                                                                )}
+                                                        </div>
+                                                    );
+                                                },
+                                            )}
+
+                                        <button
+                                            type='button'
+                                            onClick={
+                                                addAdminTradePlayerSlot
+                                            }
+                                            className='w-full cursor-pointer rounded border border-emerald-500 bg-transparent px-2 py-1 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/10'
+                                        >
+                                            + Ajouter un joueur
+                                        </button>
+
+                                        <button
+                                            type='button'
+                                            onClick={() =>
+                                                setAdminTradePickPopupSide(
+                                                    'A',
+                                                )
+                                            }
+                                            className='w-full cursor-pointer rounded border border-border bg-transparent px-2 py-1 text-xs font-semibold text-foreground transition-colors hover:bg-secondary'
+                                        >
+                                            Ajouter des choix de repêchage
+                                        </button>
+
+                                            {adminTradeTeamAPickIds.length >
+                                                0 && (
+                                                    <ul className='space-y-1'>
+                                                        {adminTradeTeamAPickIds.map(
+                                                            (pickId) => {
+                                                                const pick =
+                                                                    adminTradeTeamAPicks.find(
+                                                                        (p) =>
+                                                                            p.id ===
+                                                                            pickId,
+                                                                    );
+
+                                                                if (!pick)
+                                                                    return null;
+
+                                                                return (
+                                                                    <li
+                                                                        key={
+                                                                            pickId
+                                                                        }
+                                                                        className='flex items-center justify-between gap-2 rounded border border-[#00E5FF]/30 bg-[#00E5FF]/5 px-2 py-1 text-xs text-[#00E5FF]'
+                                                                    >
+                                                                        <span className='truncate'>
+                                                                            {
+                                                                                pick.draftYear
+                                                                            }
+                                                                            , Ronde{' '}
+                                                                            {
+                                                                                pick.round
+                                                                            }
+                                                                            ,{' '}
+                                                                            {
+                                                                                pick.originalOwnerFantasyTeamName
+                                                                            }
+                                                                        </span>
+                                                                        <button
+                                                                            type='button'
+                                                                            onClick={() =>
+                                                                                toggleAdminTradePick(
+                                                                                    'A',
+                                                                                    pickId,
+                                                                                )
+                                                                            }
+                                                                            className='shrink-0 cursor-pointer rounded px-1 text-xs text-destructive hover:bg-destructive/10'
+                                                                        >
+                                                                            ×
+                                                                        </button>
+                                                                    </li>
+                                                                );
+                                                            },
+                                                        )}
+                                                    </ul>
+                                                )}
+
+                                            {teamAProjection && (
+                                                <div
+                                                    className={`mt-3 rounded-lg border p-2 text-xs ${teamAProjection.isValid
+                                                            ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-300'
+                                                            : 'border-amber-500/40 bg-amber-500/5 text-amber-300'
+                                                        }`}
+                                                >
+                                                    <p className='font-semibold'>
+                                                        {teamAProjection.isValid
+                                                            ? '✓ Structure après échange : valide'
+                                                            : '⚠ Structure après échange : non-respectée'}
+                                                    </p>
+                                                    <p className='mt-1 tabular-nums'>
+                                                        Actifs :{' '}
+                                                        {teamAProjection.activeF}F /{' '}
+                                                        {teamAProjection.activeD}D /{' '}
+                                                        {teamAProjection.activeG}G
+                                                        <span className='ml-1 text-[0.65rem] opacity-70'>
+                                                            (12/6/1)
+                                                        </span>
+                                                    </p>
+                                                    <p className='tabular-nums'>
+                                                        Banc :{' '}
+                                                        {teamAProjection.benchF}F /{' '}
+                                                        {teamAProjection.benchD}D /{' '}
+                                                        {teamAProjection.benchG}G
+                                                        <span className='ml-1 text-[0.65rem] opacity-70'>
+                                                            (4/2/1)
+                                                        </span>
+                                                    </p>
+                                                    <p className='tabular-nums'>
+                                                        Prospects :{' '}
+                                                        {teamAProjection.prospects}
+                                                        <span className='ml-1 text-[0.65rem] opacity-70'>
+                                                            (3)
+                                                        </span>
+                                                    </p>
+                                                    {!teamAProjection.isValid && (
+                                                        <p className='mt-1 italic'>
+                                                            L'échange sera quand
+                                                            même appliqué. Corrigez
+                                                            les statuts manuellement
+                                                            après.
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                            </div>
+
+                            {/* ---- Team B column ---- */}
+                            <div className='space-y-2 rounded-lg border border-border bg-background p-2'>
+                                <label className='text-sm font-medium text-muted-foreground'>
+                                    Équipe 2
+                                </label>
+                                <select
+                                    value={adminTradeTeamBId}
+                                    onChange={(event) =>
+                                        setAdminTradeTeamBId(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className={selectClass}
+                                >
+                                    <option value=''>— équipe —</option>
+                                    {teams
+                                        .filter(
+                                            (t) =>
+                                                String(t.id) !==
+                                                adminTradeTeamAId,
+                                        )
+                                        .map((team) => (
+                                            <option
+                                                key={team.id}
+                                                value={team.id}
+                                            >
+                                                {team.name}
+                                            </option>
+                                        ))}
+                                </select>
+
+                                {adminTradeTeamBId !== '' &&
+                                    adminTradeTeamBRoster && (
+                                        <>
+                                            {adminTradeTeamBPlayerSlots.map(
+                                                (_slot, index) => {
+                                                    const selectedPlayerId =
+                                                        adminTradeTeamBPlayerSlots[
+                                                        index
+                                                        ];
+
+                                                    const selectedEntry =
+                                                        selectedPlayerId !==
+                                                            ''
+                                                            ? adminTradeTeamBRoster.entries.find(
+                                                                (e) =>
+                                                                    String(
+                                                                        e.playerId,
+                                                                    ) ===
+                                                                    selectedPlayerId,
+                                                            )
+                                                            : undefined;
+
+                                                    const currentStatus =
+                                                        selectedEntry?.rosterStatus ??
+                                                        '';
+
+                                                    const effectiveStatus =
+                                                        adminTradeTeamBPlayerNewStatuses[
+                                                        index
+                                                        ] || currentStatus;
+
+                                                    return (
+                                                        <div
+                                                            key={index}
+                                                            className='flex flex-wrap items-center gap-2'
+                                                        >
+                                                            <select
+                                                                value={
+                                                                    adminTradeTeamBPlayerSlots[
+                                                                    index
+                                                                    ]
+                                                                }
+                                                                onChange={(
+                                                                    event,
+                                                                ) =>
+                                                                    setAdminTradeTeamBPlayerSlot(
+                                                                        index,
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    )
+                                                                }
+                                                                className={`${selectClass} flex-1 min-w-[10rem]`}
+                                                            >
+                                                                <option value=''>
+                                                                    — Ajouter un joueur{' '}
+                                                                    {index > 0
+                                                                        ? index +
+                                                                        1
+                                                                        : ''}{' '}
+                                                                    —
+                                                                </option>
+                                                                {(adminTradeTeamBRoster?.entries ??
+                                                                    [])
+                                                                    .filter(
+                                                                        (
+                                                                            e,
+                                                                        ) => {
+                                                                            return !adminTradeTeamBPlayerSlots.some(
+                                                                                (
+                                                                                    v,
+                                                                                    i,
+                                                                                ) =>
+                                                                                    i !==
+                                                                                    index &&
+                                                                                    v !==
+                                                                                    '' &&
+                                                                                    Number(
+                                                                                        v,
+                                                                                    ) ===
+                                                                                    e.playerId,
+                                                                            );
+                                                                        },
+                                                                    )
+                                                                    .map(
+                                                                        (
+                                                                            e,
+                                                                        ) => (
+                                                                            <option
+                                                                                key={
+                                                                                    e.playerId
+                                                                                }
+                                                                                value={
+                                                                                    e.playerId
+                                                                                }
+                                                                            >
+                                                                                {
+                                                                                    e.firstName
+                                                                                }{' '}
+                                                                                {
+                                                                                    e.lastName
+                                                                                }{' '}
+                                                                                (
+                                                                                {
+                                                                                    e.position
+                                                                                }
+                                                                                ,{' '}
+                                                                                {
+                                                                                    e.nhlTeamAbbreviation
+                                                                                }
+                                                                                ){' '}
+                                                                                ·{' '}
+                                                                                {
+                                                                                    e.rosterStatus
+                                                                                }
+                                                                            </option>
+                                                                        ),
+                                                                    )}
+                                                            </select>
+
+                                                            {selectedPlayerId !==
+                                                                '' && (
+                                                                    <select
+                                                                        value={
+                                                                            effectiveStatus
+                                                                        }
+                                                                        onChange={(
+                                                                            event,
+                                                                        ) =>
+                                                                            setAdminTradeTeamBPlayerNewStatus(
+                                                                                index,
+                                                                                event
+                                                                                    .target
+                                                                                    .value,
+                                                                            )
+                                                                        }
+                                                                        className={`${selectClass} flex-shrink-0`}
+                                                                        aria-label='Nouveau statut'
+                                                                        title='Statut après échange'
+                                                                    >
+                                                                        <option value='Active'>
+                                                                            Active
+                                                                        </option>
+                                                                        <option value='Bench'>
+                                                                            Bench
+                                                                        </option>
+                                                                        <option value='Prospect'>
+                                                                            Prospect
+                                                                        </option>
+                                                                    </select>
+                                                                )}
+
+                                                            {adminTradeTeamBPlayerSlots.length >
+                                                                1 && (
+                                                                    <button
+                                                                        type='button'
+                                                                        onClick={() =>
+                                                                            removeAdminTradePlayerSlot(
+                                                                                index,
+                                                                            )
+                                                                        }
+                                                                        aria-label='Retirer ce slot'
+                                                                        className='cursor-pointer rounded border border-destructive/40 px-1.5 py-0.5 text-xs text-destructive hover:bg-destructive/10'
+                                                                    >
+                                                                        ×
+                                                                    </button>
+                                                                )}
+                                                        </div>
+                                                    );
+                                                },
+                                            )}
+
+                                        <button
+                                            type='button'
+                                            onClick={
+                                                addAdminTradePlayerSlot
+                                            }
+                                            className='w-full cursor-pointer rounded border border-emerald-500 bg-transparent px-2 py-1 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/10'
+                                        >
+                                            + Ajouter un joueur
+                                        </button>
+
+                                        <button
+                                            type='button'
+                                            onClick={() =>
+                                                setAdminTradePickPopupSide(
+                                                    'B',
+                                                )
+                                            }
+                                            className='w-full cursor-pointer rounded border border-border bg-transparent px-2 py-1 text-xs font-semibold text-foreground transition-colors hover:bg-secondary'
+                                        >
+                                            Ajouter des choix de repêchage
+                                        </button>
+
+                                            {adminTradeTeamBPickIds.length >
+                                                0 && (
+                                                    <ul className='space-y-1'>
+                                                        {adminTradeTeamBPickIds.map(
+                                                            (pickId) => {
+                                                                const pick =
+                                                                    adminTradeTeamBPicks.find(
+                                                                        (p) =>
+                                                                            p.id ===
+                                                                            pickId,
+                                                                    );
+
+                                                                if (!pick)
+                                                                    return null;
+
+                                                                return (
+                                                                    <li
+                                                                        key={
+                                                                            pickId
+                                                                        }
+                                                                        className='flex items-center justify-between gap-2 rounded border border-[#00E5FF]/30 bg-[#00E5FF]/5 px-2 py-1 text-xs text-[#00E5FF]'
+                                                                    >
+                                                                        <span className='truncate'>
+                                                                            {
+                                                                                pick.draftYear
+                                                                            }
+                                                                            , Ronde{' '}
+                                                                            {
+                                                                                pick.round
+                                                                            }
+                                                                            ,{' '}
+                                                                            {
+                                                                                pick.originalOwnerFantasyTeamName
+                                                                            }
+                                                                        </span>
+                                                                        <button
+                                                                            type='button'
+                                                                            onClick={() =>
+                                                                                toggleAdminTradePick(
+                                                                                    'B',
+                                                                                    pickId,
+                                                                                )
+                                                                            }
+                                                                            className='shrink-0 cursor-pointer rounded px-1 text-xs text-destructive hover:bg-destructive/10'
+                                                                        >
+                                                                            ×
+                                                                        </button>
+                                                                    </li>
+                                                                );
+                                                            },
+                                                        )}
+                                                    </ul>
+                                                )}
+
+                                            {teamBProjection && (
+                                                <div
+                                                    className={`mt-3 rounded-lg border p-2 text-xs ${teamBProjection.isValid
+                                                            ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-300'
+                                                            : 'border-amber-500/40 bg-amber-500/5 text-amber-300'
+                                                        }`}
+                                                >
+                                                    <p className='font-semibold'>
+                                                        {teamBProjection.isValid
+                                                            ? '✓ Structure après échange : valide'
+                                                            : '⚠ Structure après échange : non-respectée'}
+                                                    </p>
+                                                    <p className='mt-1 tabular-nums'>
+                                                        Actifs :{' '}
+                                                        {teamBProjection.activeF}F /{' '}
+                                                        {teamBProjection.activeD}D /{' '}
+                                                        {teamBProjection.activeG}G
+                                                        <span className='ml-1 text-[0.65rem] opacity-70'>
+                                                            (12/6/1)
+                                                        </span>
+                                                    </p>
+                                                    <p className='tabular-nums'>
+                                                        Banc :{' '}
+                                                        {teamBProjection.benchF}F /{' '}
+                                                        {teamBProjection.benchD}D /{' '}
+                                                        {teamBProjection.benchG}G
+                                                        <span className='ml-1 text-[0.65rem] opacity-70'>
+                                                            (4/2/1)
+                                                        </span>
+                                                    </p>
+                                                    <p className='tabular-nums'>
+                                                        Prospects :{' '}
+                                                        {teamBProjection.prospects}
+                                                        <span className='ml-1 text-[0.65rem] opacity-70'>
+                                                            (3)
+                                                        </span>
+                                                    </p>
+                                                    {!teamBProjection.isValid && (
+                                                        <p className='mt-1 italic'>
+                                                            L'échange sera quand
+                                                            même appliqué. Corrigez
+                                                            les statuts manuellement
+                                                            après.
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Note (optionnel)
+                            </label>
+                            <input
+                                type='text'
+                                value={adminTradeNote}
+                                maxLength={500}
+                                onChange={(event) =>
+                                    setAdminTradeNote(event.target.value)
+                                }
+                                className={`mt-1 ${selectClass}`}
+                            />
+                        </div>
+
+                        {adminTradeError && (
+                            <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                                {adminTradeError}
+                            </p>
+                        )}
+
+                        {adminTradeSuccess && (
+                            <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                                {adminTradeSuccess}
+                            </p>
+                        )}
+
+                        <div className='flex justify-end'>
+                            <button
+                                type='button'
+                                onClick={submitAdminTrade}
+                                disabled={adminTradeSubmitting}
+                                className={primaryButtonClass}
+                            >
+                                Confirmer
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* ============================================================
+                Trades history (permanent audit trail)
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <button
+                    type='button'
+                    onClick={() =>
+                        setShowAdminTradeHistory((v) => !v)
+                    }
+                    className='cursor-pointer rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-opacity hover:brightness-110'
+                    style={{
+                        backgroundColor: '#080D1A',
+                        border: '3px solid #A855F7',
+                        boxShadow: [
+                            'inset 0 0 0 1px rgba(240, 220, 255, 0.95)',
+                            'inset 0 0 12px rgba(168, 85, 247, 0.55)',
+                            'inset 0 0 28px rgba(168, 85, 247, 0.15)',
+                        ].join(', '),
+                    }}
+                >
+                    {showAdminTradeHistory
+                        ? '▼ Masquer l\'historique'
+                        : '▶ Trades history'}
+                </button>
+
+                {showAdminTradeHistory && (
+                    <div className='space-y-3'>
+                        <div className='flex items-center justify-end'>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    void loadAdminTradeHistory()
+                                }
+                                disabled={adminTradeHistoryLoading}
+                                className={secondaryButtonClass}
+                            >
+                                {adminTradeHistoryLoading
+                                    ? 'Chargement...'
+                                    : 'Rafraîchir'}
+                            </button>
+                        </div>
+
+                        {adminTradeHistoryLoading &&
+                            adminTradeHistory.length === 0 && (
+                                <p className='text-sm text-muted-foreground'>
+                                    Chargement...
+                                </p>
+                            )}
+
+                        {!adminTradeHistoryLoading &&
+                            adminTradeHistory.length === 0 && (
+                                <p className='rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground'>
+                                    Aucun échange enregistré.
+                                </p>
+                            )}
+
+                        {adminTradeHistory.map((trade) => (
+                            <div
+                                key={trade.id}
+                                className='space-y-2 rounded-lg border border-border bg-card p-3'
+                            >
+                                <div className='flex flex-wrap items-baseline justify-between gap-2'>
+                                    <p className='text-sm font-semibold text-foreground'>
+                                        #{trade.id} ·{' '}
+                                        {trade.teamAName}
+                                        {' ⇄ '}
+                                        {trade.teamBName}
+                                    </p>
+                                    <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
+                                        <span>
+                                            Saison {trade.seasonName} ·
+                                            Effectif le{' '}
+                                            {trade.effectiveAt.slice(
+                                                0,
+                                                10,
+                                            )}
+                                        </span>
+                                        {adminTradeDateEditFor !==
+                                            trade.id && (
+                                                <>
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            setAdminTradeDateEditFor(
+                                                                trade.id,
+                                                            );
+                                                            setAdminTradeDateEditValue(
+                                                                trade.effectiveAt.slice(
+                                                                    0,
+                                                                    10,
+                                                                ),
+                                                            );
+                                                            setAdminTradeDateEditReason(
+                                                                '',
+                                                            );
+                                                            setAdminTradeDateEditError(
+                                                                null,
+                                                            );
+                                                        }}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground transition-colors hover:bg-secondary'
+                                                    >
+                                                        Modifier la date
+                                                    </button>
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            setAdminTradeRevertFor(
+                                                                trade.id,
+                                                            );
+                                                            setAdminTradeRevertConfirmInput(
+                                                                '',
+                                                            );
+                                                            setAdminTradeRevertError(
+                                                                null,
+                                                            );
+                                                        }}
+                                                        className='cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive transition-colors hover:bg-destructive/10'
+                                                    >
+                                                        Revertir l'échange
+                                                    </button>
+                                                </>
+                                            )}
+                                    </div>
+                                </div>
+
+                                {adminTradeDateEditFor === trade.id && (
+                                    <div className='space-y-2 rounded border border-[#00E5FF]/30 bg-[#00E5FF]/5 p-2'>
+                                        <p className='text-xs font-semibold uppercase tracking-wider text-[#7DD3FC]'>
+                                            Changer la date d'entrée en
+                                            vigueur
+                                        </p>
+
+                                        <div className='flex flex-wrap items-end gap-2'>
+                                            <div>
+                                                <label className='text-[0.65rem] font-medium text-muted-foreground'>
+                                                    Nouvelle date
+                                                </label>
+                                                <input
+                                                    type='date'
+                                                    value={
+                                                        adminTradeDateEditValue
+                                                    }
+                                                    onChange={(event) =>
+                                                        setAdminTradeDateEditValue(
+                                                            event.target
+                                                                .value,
+                                                        )
+                                                    }
+                                                    className={`mt-0.5 ${selectClass}`}
+                                                />
+                                            </div>
+
+                                            <div className='flex-1 min-w-[12rem]'>
+                                                <label className='text-[0.65rem] font-medium text-muted-foreground'>
+                                                    Raison (optionnel)
+                                                </label>
+                                                <input
+                                                    type='text'
+                                                    value={
+                                                        adminTradeDateEditReason
+                                                    }
+                                                    maxLength={500}
+                                                    onChange={(event) =>
+                                                        setAdminTradeDateEditReason(
+                                                            event.target
+                                                                .value,
+                                                        )
+                                                    }
+                                                    className={`mt-0.5 ${selectClass}`}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {adminTradeDateEditError && (
+                                            <p className='rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive'>
+                                                {adminTradeDateEditError}
+                                            </p>
+                                        )}
+
+                                        <div className='flex justify-end gap-2'>
+                                            <button
+                                                type='button'
+                                                onClick={() => {
+                                                    setAdminTradeDateEditFor(
+                                                        null,
+                                                    );
+                                                    setAdminTradeDateEditValue(
+                                                        '',
+                                                    );
+                                                    setAdminTradeDateEditReason(
+                                                        '',
+                                                    );
+                                                    setAdminTradeDateEditError(
+                                                        null,
+                                                    );
+                                                }}
+                                                disabled={
+                                                    adminTradeDateEditBusy
+                                                }
+                                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                            >
+                                                Annuler
+                                            </button>
+                                            <button
+                                                type='button'
+                                                onClick={() =>
+                                                    void handleChangeTradeDate(
+                                                        trade.id,
+                                                    )
+                                                }
+                                                disabled={
+                                                    adminTradeDateEditBusy
+                                                }
+                                                className='cursor-pointer rounded bg-emerald-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-emerald-500 disabled:opacity-50'
+                                            >
+                                                {adminTradeDateEditBusy
+                                                    ? 'Enregistrement...'
+                                                    : 'Enregistrer'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {trade.note && (
+                                    <p className='rounded border border-[#00A8FF]/25 bg-[#00A8FF]/5 px-2 py-1 text-xs italic text-[#7DD3FC]'>
+                                        « {trade.note} »
+                                    </p>
+                                )}
+
+                                <div className='grid grid-cols-1 gap-2 md:grid-cols-2'>
+                                    <div className='rounded border border-[#00E5FF]/30 bg-[#00E5FF]/5 p-2'>
+                                        <p className='text-[0.65rem] font-semibold uppercase tracking-wider text-[#7DD3FC]'>
+                                            {trade.teamAName} envoie à{' '}
+                                            {trade.teamBName}
+                                        </p>
+
+                                        {trade.teamASentPlayers.length ===
+                                            0 &&
+                                            trade.teamASentPicks.length ===
+                                            0 && (
+                                                <p className='mt-1 text-xs text-muted-foreground'>
+                                                    (rien)
+                                                </p>
+                                            )}
+
+                                        {trade.teamASentPlayers.length >
+                                            0 && (
+                                                <ul className='mt-1 space-y-0.5'>
+                                                    {trade.teamASentPlayers.map(
+                                                        (p) => (
+                                                            <li
+                                                                key={
+                                                                    p.playerId
+                                                                }
+                                                                className='text-xs text-foreground'
+                                                            >
+                                                                {p.firstName}{' '}
+                                                                {p.lastName} (
+                                                                {p.position},{' '}
+                                                                {
+                                                                    p.nhlTeamAbbreviation
+                                                                }
+                                                                ) ·{' '}
+                                                                {(
+                                                                    p.salary /
+                                                                    1_000_000
+                                                                )
+                                                                    .toFixed(2)
+                                                                    .replace(
+                                                                        /\.?0+$/,
+                                                                        '',
+                                                                    )}
+                                                                M ·{' '}
+                                                                {
+                                                                    p.yearsRemaining
+                                                                }{' '}
+                                                                an
+                                                                {p.yearsRemaining >
+                                                                    1
+                                                                    ? 's'
+                                                                    : ''}
+                                                                {p.previousStatus &&
+                                                                    (p.previousStatus ===
+                                                                        p.newStatus ? (
+                                                                        <span className='ml-1 text-muted-foreground'>
+                                                                            ·{' '}
+                                                                            {
+                                                                                p.newStatus
+                                                                            }
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className='ml-1 font-semibold text-[#FFC72C]'>
+                                                                            ·{' '}
+                                                                            {
+                                                                                p.previousStatus
+                                                                            }{' '}
+                                                                            →{' '}
+                                                                            {
+                                                                                p.newStatus
+                                                                            }
+                                                                        </span>
+                                                                    ))}
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
+
+                                        {trade.teamASentPicks.length >
+                                            0 && (
+                                                <ul className='mt-1 space-y-0.5'>
+                                                    {trade.teamASentPicks.map(
+                                                        (p) => (
+                                                            <li
+                                                                key={
+                                                                    p.draftPickId
+                                                                }
+                                                                className='text-xs text-[#FFC72C]'
+                                                            >
+                                                                {
+                                                                    p.draftYear
+                                                                }
+                                                                , Ronde{' '}
+                                                                {p.round},{' '}
+                                                                {
+                                                                    p.originalOwnerFantasyTeamName
+                                                                }
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
+                                    </div>
+
+                                    <div className='rounded border border-[#A855F7]/30 bg-[#A855F7]/5 p-2'>
+                                        <p className='text-[0.65rem] font-semibold uppercase tracking-wider text-[#D8B4FE]'>
+                                            {trade.teamBName} envoie à{' '}
+                                            {trade.teamAName}
+                                        </p>
+
+                                        {trade.teamBSentPlayers.length ===
+                                            0 &&
+                                            trade.teamBSentPicks.length ===
+                                            0 && (
+                                                <p className='mt-1 text-xs text-muted-foreground'>
+                                                    (rien)
+                                                </p>
+                                            )}
+
+                                        {trade.teamBSentPlayers.length >
+                                            0 && (
+                                                <ul className='mt-1 space-y-0.5'>
+                                                    {trade.teamBSentPlayers.map(
+                                                        (p) => (
+                                                            <li
+                                                                key={
+                                                                    p.playerId
+                                                                }
+                                                                className='text-xs text-foreground'
+                                                            >
+                                                                {p.firstName}{' '}
+                                                                {p.lastName} (
+                                                                {p.position},{' '}
+                                                                {
+                                                                    p.nhlTeamAbbreviation
+                                                                }
+                                                                ) ·{' '}
+                                                                {(
+                                                                    p.salary /
+                                                                    1_000_000
+                                                                )
+                                                                    .toFixed(2)
+                                                                    .replace(
+                                                                        /\.?0+$/,
+                                                                        '',
+                                                                    )}
+                                                                M ·{' '}
+                                                                {
+                                                                    p.yearsRemaining
+                                                                }{' '}
+                                                                an
+                                                                {p.yearsRemaining >
+                                                                    1
+                                                                    ? 's'
+                                                                    : ''}
+                                                                {p.previousStatus &&
+                                                                    (p.previousStatus ===
+                                                                        p.newStatus ? (
+                                                                        <span className='ml-1 text-muted-foreground'>
+                                                                            ·{' '}
+                                                                            {
+                                                                                p.newStatus
+                                                                            }
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className='ml-1 font-semibold text-[#FFC72C]'>
+                                                                            ·{' '}
+                                                                            {
+                                                                                p.previousStatus
+                                                                            }{' '}
+                                                                            →{' '}
+                                                                            {
+                                                                                p.newStatus
+                                                                            }
+                                                                        </span>
+                                                                    ))}
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
+
+                                        {trade.teamBSentPicks.length >
+                                            0 && (
+                                                <ul className='mt-1 space-y-0.5'>
+                                                    {trade.teamBSentPicks.map(
+                                                        (p) => (
+                                                            <li
+                                                                key={
+                                                                    p.draftPickId
+                                                                }
+                                                                className='text-xs text-[#FFC72C]'
+                                                            >
+                                                                {
+                                                                    p.draftYear
+                                                                }
+                                                                , Ronde{' '}
+                                                                {p.round},{' '}
+                                                                {
+                                                                    p.originalOwnerFantasyTeamName
+                                                                }
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
+                                    </div>
+                                </div>
+
+                                {trade.dateChanges.length > 0 && (
+                                    <div className='rounded border border-[#FFC72C]/30 bg-[#FFC72C]/5 p-2'>
+                                        <p className='text-[0.65rem] font-semibold uppercase tracking-wider text-[#FFC72C]'>
+                                            Historique des changements
+                                            de date
+                                        </p>
+                                        <ul className='mt-1 space-y-0.5 text-xs'>
+                                            {trade.dateChanges.map(
+                                                (dc) => (
+                                                    <li
+                                                        key={dc.id}
+                                                        className='text-foreground'
+                                                    >
+                                                        <span className='font-mono'>
+                                                            {dc.previousEffectiveAt.slice(
+                                                                0,
+                                                                10,
+                                                            )}
+                                                        </span>
+                                                        {' → '}
+                                                        <span className='font-mono font-semibold'>
+                                                            {dc.newEffectiveAt.slice(
+                                                                0,
+                                                                10,
+                                                            )}
+                                                        </span>
+                                                        <span className='ml-2 text-muted-foreground'>
+                                                            (
+                                                            {new Date(
+                                                                dc.changedAt,
+                                                            ).toLocaleString(
+                                                                'fr-CA',
+                                                            )}
+                                                            )
+                                                        </span>
+                                                        {dc.reason && (
+                                                            <span className='ml-2 italic text-muted-foreground'>
+                                                                «{' '}
+                                                                {
+                                                                    dc.reason
+                                                                }{' '}
+                                                                »
+                                                            </span>
+                                                        )}
+                                                    </li>
+                                                ),
+                                            )}
+                                        </ul>
+                                    </div>
+                                )}
+
+                                <p className='text-[0.65rem] text-muted-foreground'>
+                                    Confirmé le{' '}
+                                    {new Date(
+                                        trade.confirmedAt,
+                                    ).toLocaleString('fr-CA')}
+                                </p>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Pick-selection popup for the trade form */}
+            {adminTradePickPopupSide !== null && (
+                <div
+                    className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
+                    onClick={() =>
+                        setAdminTradePickPopupSide(null)
+                    }
+                    role='dialog'
+                    aria-modal='true'
+                >
+                    <div
+                        className='flex max-h-[70vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)]'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='flex items-center justify-between border-b border-[#00E5FF]/20 px-3 py-2'>
+                            <h3 className='text-sm font-bold uppercase tracking-wider text-white'>
+                                Ajouter des choix de repêchage
+                            </h3>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setAdminTradePickPopupSide(null)
+                                }
+                                className='cursor-pointer rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-red-500'
+                            >
+                                Fermer
+                            </button>
+                        </div>
+
+                        <div className='flex-1 overflow-y-auto'>
+                            {(() => {
+                                const picks =
+                                    adminTradePickPopupSide === 'A'
+                                        ? adminTradeTeamAPicks
+                                        : adminTradeTeamBPicks;
+                                const selected =
+                                    adminTradePickPopupSide === 'A'
+                                        ? adminTradeTeamAPickIds
+                                        : adminTradeTeamBPickIds;
+
+                                if (picks.length === 0) {
+                                    return (
+                                        <p className='px-3 py-4 text-center text-sm text-muted-foreground'>
+                                            Aucun choix disponible pour cette
+                                            équipe.
+                                        </p>
+                                    );
+                                }
+
+                                return (
+                                    <ul className='space-y-0.5 p-2'>
+                                        {picks.map((pick) => {
+                                            const isSelected =
+                                                selected.includes(pick.id);
+
+                                            return (
+                                                <li key={pick.id}>
+                                                    <button
+                                                        type='button'
+                                                        onClick={() =>
+                                                            toggleAdminTradePick(
+                                                                adminTradePickPopupSide,
+                                                                pick.id,
+                                                            )
+                                                        }
+                                                        className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors ${isSelected
+                                                                ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
+                                                                : 'text-foreground hover:bg-[#00E5FF]/10'
+                                                            }`}
+                                                    >
+                                                        <span>
+                                                            {pick.draftYear},
+                                                            Ronde{' '}
+                                                            {pick.round},{' '}
+                                                            {
+                                                                pick.originalOwnerFantasyTeamName
+                                                            }
+                                                        </span>
+                                                        <span className='text-xs'>
+                                                            {isSelected
+                                                                ? '✓'
+                                                                : ''}
+                                                        </span>
+                                                    </button>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                );
+                            })()}
+                        </div>
+
+                        <div className='border-t border-[#00E5FF]/20 px-3 py-2'>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setAdminTradePickPopupSide(null)
+                                }
+                                className='w-full cursor-pointer rounded border border-emerald-500 bg-transparent px-2 py-1.5 text-sm font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/10'
+                            >
+                                Terminé
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Confirm popup for the trade form */}
+            {adminTradePreviewOpen && adminTradePreview !== null && (
+                <div
+                    className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
+                    onClick={() => setAdminTradePreviewOpen(false)}
+                    role='dialog'
+                    aria-modal='true'
+                >
+                    <div
+                        className='flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[#00E5FF]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(0,229,255,0.35),0_8px_24px_rgba(0,0,0,0.6)]'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='flex items-center justify-between border-b border-[#00E5FF]/20 px-3 py-2'>
+                            <h3 className='text-sm font-bold uppercase tracking-wider text-white'>
+                                Confirmer l'échange
+                            </h3>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setAdminTradePreviewOpen(false)
+                                }
+                                className='cursor-pointer rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-red-500'
+                            >
+                                Fermer
+                            </button>
+                        </div>
+
+                        <div className='flex-1 space-y-3 overflow-y-auto px-3 py-3'>
+                            <p className='text-sm text-foreground'>
+                                <span className='font-semibold'>
+                                    Date d'entrée en vigueur :
+                                </span>{' '}
+                                {adminTradePreview.effectiveAt.slice(
+                                    0,
+                                    10,
+                                )}
+                            </p>
+
+                            {adminTradePreview.note && (
+                                <p className='rounded border border-[#00A8FF]/25 bg-[#00A8FF]/5 px-2 py-1 text-xs italic text-[#7DD3FC]'>
+                                    « {adminTradePreview.note} »
+                                </p>
+                            )}
+
+                            <div className='grid grid-cols-1 gap-3 md:grid-cols-2'>
+                                <div className='rounded border border-[#00E5FF]/30 bg-[#00E5FF]/5 p-2'>
+                                    <p className='text-[0.65rem] font-semibold uppercase tracking-wider text-[#7DD3FC]'>
+                                        {adminTradePreview.teamAName}{' '}
+                                        envoie à{' '}
+                                        {adminTradePreview.teamBName}
+                                    </p>
+
+                                    {adminTradePreview.teamASentPlayers
+                                        .length === 0 &&
+                                        adminTradePreview.teamASentPicks
+                                            .length === 0 && (
+                                            <p className='mt-1 text-xs text-muted-foreground'>
+                                                (rien)
+                                            </p>
+                                        )}
+
+                                    {adminTradePreview.teamASentPlayers
+                                        .length > 0 && (
+                                            <ul className='mt-1 space-y-0.5'>
+                                                {adminTradePreview.teamASentPlayers.map(
+                                                    (p) => (
+                                                        <li
+                                                            key={p.playerId}
+                                                            className='text-xs text-foreground'
+                                                        >
+                                                            {p.firstName}{' '}
+                                                            {p.lastName} (
+                                                            {p.position},{' '}
+                                                            {
+                                                                p.nhlTeamAbbreviation
+                                                            }
+                                                            ) ·{' '}
+                                                            {(
+                                                                p.salary /
+                                                                1_000_000
+                                                            )
+                                                                .toFixed(2)
+                                                                .replace(
+                                                                    /\.?0+$/,
+                                                                    '',
+                                                                )}
+                                                            M ·{' '}
+                                                            {
+                                                                p.yearsRemaining
+                                                            }{' '}
+                                                            an
+                                                            {p.yearsRemaining >
+                                                                1
+                                                                ? 's'
+                                                                : ''}
+                                                            {p.previousStatus &&
+                                                                (p.previousStatus ===
+                                                                    p.newStatus ? (
+                                                                    <span className='ml-1 text-muted-foreground'>
+                                                                        ·{' '}
+                                                                        {
+                                                                            p.newStatus
+                                                                        }
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className='ml-1 font-semibold text-[#FFC72C]'>
+                                                                        ·{' '}
+                                                                        {
+                                                                            p.previousStatus
+                                                                        }{' '}
+                                                                        →{' '}
+                                                                        {
+                                                                            p.newStatus
+                                                                        }
+                                                                    </span>
+                                                                ))}
+                                                        </li>
+                                                    ),
+                                                )}
+                                            </ul>
+                                        )}
+
+                                    {adminTradePreview.teamASentPicks
+                                        .length > 0 && (
+                                            <ul className='mt-1 space-y-0.5'>
+                                                {adminTradePreview.teamASentPicks.map(
+                                                    (p) => (
+                                                        <li
+                                                            key={p.draftPickId}
+                                                            className='text-xs text-[#FFC72C]'
+                                                        >
+                                                            {p.draftYear},
+                                                            Ronde {p.round},{' '}
+                                                            {
+                                                                p.originalOwnerFantasyTeamName
+                                                            }
+                                                        </li>
+                                                    ),
+                                                )}
+                                            </ul>
+                                        )}
+                                </div>
+
+                                <div className='rounded border border-[#A855F7]/30 bg-[#A855F7]/5 p-2'>
+                                    <p className='text-[0.65rem] font-semibold uppercase tracking-wider text-[#D8B4FE]'>
+                                        {adminTradePreview.teamBName}{' '}
+                                        envoie à{' '}
+                                        {adminTradePreview.teamAName}
+                                    </p>
+
+                                    {adminTradePreview.teamBSentPlayers
+                                        .length === 0 &&
+                                        adminTradePreview.teamBSentPicks
+                                            .length === 0 && (
+                                            <p className='mt-1 text-xs text-muted-foreground'>
+                                                (rien)
+                                            </p>
+                                        )}
+
+                                    {adminTradePreview.teamBSentPlayers
+                                        .length > 0 && (
+                                            <ul className='mt-1 space-y-0.5'>
+                                                {adminTradePreview.teamBSentPlayers.map(
+                                                    (p) => (
+                                                        <li
+                                                            key={p.playerId}
+                                                            className='text-xs text-foreground'
+                                                        >
+                                                            {p.firstName}{' '}
+                                                            {p.lastName} (
+                                                            {p.position},{' '}
+                                                            {
+                                                                p.nhlTeamAbbreviation
+                                                            }
+                                                            ) ·{' '}
+                                                            {(
+                                                                p.salary /
+                                                                1_000_000
+                                                            )
+                                                                .toFixed(2)
+                                                                .replace(
+                                                                    /\.?0+$/,
+                                                                    '',
+                                                                )}
+                                                            M ·{' '}
+                                                            {
+                                                                p.yearsRemaining
+                                                            }{' '}
+                                                            an
+                                                            {p.yearsRemaining >
+                                                                1
+                                                                ? 's'
+                                                                : ''}
+                                                            {p.previousStatus &&
+                                                                (p.previousStatus ===
+                                                                    p.newStatus ? (
+                                                                    <span className='ml-1 text-muted-foreground'>
+                                                                        ·{' '}
+                                                                        {
+                                                                            p.newStatus
+                                                                        }
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className='ml-1 font-semibold text-[#FFC72C]'>
+                                                                        ·{' '}
+                                                                        {
+                                                                            p.previousStatus
+                                                                        }{' '}
+                                                                        →{' '}
+                                                                        {
+                                                                            p.newStatus
+                                                                        }
+                                                                    </span>
+                                                                ))}
+                                                        </li>
+                                                    ),
+                                                )}
+                                            </ul>
+                                        )}
+
+                                    {adminTradePreview.teamBSentPicks
+                                        .length > 0 && (
+                                            <ul className='mt-1 space-y-0.5'>
+                                                {adminTradePreview.teamBSentPicks.map(
+                                                    (p) => (
+                                                        <li
+                                                            key={p.draftPickId}
+                                                            className='text-xs text-[#FFC72C]'
+                                                        >
+                                                            {p.draftYear},
+                                                            Ronde {p.round},{' '}
+                                                            {
+                                                                p.originalOwnerFantasyTeamName
+                                                            }
+                                                        </li>
+                                                    ),
+                                                )}
+                                            </ul>
+                                        )}
+                                </div>
+                            </div>
+
+                            {adminTradeError && (
+                                <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                                    {adminTradeError}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className='flex justify-end gap-2 border-t border-[#00E5FF]/20 px-3 py-2'>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setAdminTradePreviewOpen(false)
+                                }
+                                disabled={adminTradeSubmitting}
+                                className='cursor-pointer rounded border border-border px-3 py-1.5 text-sm text-foreground hover:bg-secondary disabled:opacity-50'
+                            >
+                                Annuler
+                            </button>
+                            <button
+                                type='button'
+                                onClick={() => void confirmAdminTrade()}
+                                disabled={adminTradeSubmitting}
+                                className='cursor-pointer rounded bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-black hover:bg-emerald-500 disabled:opacity-50'
+                            >
+                                {adminTradeSubmitting
+                                    ? 'Enregistrement...'
+                                    : 'Confirmer'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Revert-trade confirmation popup */}
+            {adminTradeRevertFor !== null && (
+                <div
+                    className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
+                    onClick={() => {
+                        if (adminTradeRevertBusy) return;
+                        setAdminTradeRevertFor(null);
+                        setAdminTradeRevertConfirmInput('');
+                        setAdminTradeRevertError(null);
+                    }}
+                    role='dialog'
+                    aria-modal='true'
+                >
+                    <div
+                        className='flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-destructive/60 bg-[#0F1626] shadow-[0_0_20px_rgba(220,38,38,0.5),0_8px_24px_rgba(0,0,0,0.6)]'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='flex items-center justify-between border-b border-destructive/40 px-3 py-2'>
+                            <h3 className='text-sm font-bold uppercase tracking-wider text-destructive'>
+                                Revertir l'échange #{adminTradeRevertFor}
+                            </h3>
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    if (adminTradeRevertBusy) return;
+                                    setAdminTradeRevertFor(null);
+                                    setAdminTradeRevertConfirmInput('');
+                                    setAdminTradeRevertError(null);
+                                }}
+                                disabled={adminTradeRevertBusy}
+                                className='cursor-pointer rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-red-500 disabled:opacity-50'
+                            >
+                                Fermer
+                            </button>
+                        </div>
+
+                        <div className='flex-1 space-y-3 overflow-y-auto px-3 py-3 text-sm text-foreground'>
+                            <p className='font-semibold text-destructive'>
+                                Cette action est irréversible.
+                            </p>
+
+                            <p>Revertir l'échange va :</p>
+
+                            <ul className='ml-4 list-disc space-y-1 text-xs'>
+                                <li>
+                                    Déplacer chaque joueur échangé vers
+                                    son équipe d'origine.
+                                </li>
+                                <li>
+                                    Déplacer chaque choix de repêchage
+                                    échangé vers son propriétaire
+                                    d'origine.
+                                </li>
+                                <li>
+                                    Supprimer définitivement toutes les
+                                    lignes d'historique de statut
+                                    créées par cet échange.
+                                </li>
+                                <li>
+                                    Supprimer définitivement l'échange
+                                    de cette liste.
+                                </li>
+                                <li>
+                                    Recalculer les totaux de la saison
+                                    comme si l'échange n'avait jamais
+                                    eu lieu.
+                                </li>
+                            </ul>
+
+                            <p className='rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive'>
+                                Note : les offres du marché qui ont été
+                                supprimées automatiquement lors de la
+                                création de l'échange ne seront pas
+                                restaurées.
+                            </p>
+
+                            <p className='text-xs'>
+                                Pour confirmer, tapez le numéro de
+                                l'échange ({adminTradeRevertFor})
+                                ci-dessous.
+                            </p>
+
+                            <input
+                                type='text'
+                                value={adminTradeRevertConfirmInput}
+                                onChange={(event) =>
+                                    setAdminTradeRevertConfirmInput(
+                                        event.target.value,
+                                    )
+                                }
+                                placeholder={String(adminTradeRevertFor)}
+                                disabled={adminTradeRevertBusy}
+                                className={`${selectClass} text-center font-mono`}
+                            />
+
+                            {adminTradeRevertError && (
+                                <p className='rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive'>
+                                    {adminTradeRevertError}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className='flex justify-end gap-2 border-t border-destructive/40 px-3 py-2'>
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    if (adminTradeRevertBusy) return;
+                                    setAdminTradeRevertFor(null);
+                                    setAdminTradeRevertConfirmInput('');
+                                    setAdminTradeRevertError(null);
+                                }}
+                                disabled={adminTradeRevertBusy}
+                                className='cursor-pointer rounded border border-border px-3 py-1.5 text-sm text-foreground hover:bg-secondary disabled:opacity-50'
+                            >
+                                Annuler
+                            </button>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    void handleRevertTrade(
+                                        adminTradeRevertFor,
+                                    )
+                                }
+                                disabled={
+                                    adminTradeRevertBusy ||
+                                    adminTradeRevertConfirmInput.trim() !==
+                                    String(adminTradeRevertFor)
+                                }
+                                className='cursor-pointer rounded bg-destructive px-3 py-1.5 text-sm font-semibold text-destructive-foreground hover:brightness-110 disabled:opacity-50'
+                            >
+                                {adminTradeRevertBusy
+                                    ? 'Revert en cours...'
+                                    : "Revertir l'échange"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ============================================================
+                Changer des statuts (commissioner-only batch swap)
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <button
+                    type='button'
+                    onClick={() => setShowStatusChangeForm((v) => !v)}
+                    className='cursor-pointer rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-opacity hover:brightness-110'
+                    style={{
+                        backgroundColor: '#080D1A',
+                        border: '3px solid #22C55E',
+                        boxShadow: [
+                            'inset 0 0 0 1px rgba(220, 255, 230, 0.95)',
+                            'inset 0 0 12px rgba(34, 197, 94, 0.55)',
+                            'inset 0 0 28px rgba(34, 197, 94, 0.15)',
+                        ].join(', '),
+                    }}
+                >
+                    {showStatusChangeForm
+                        ? '▼ Masquer les changements de statut'
+                        : '▶ Changer des statuts'}
+                </button>
+
+                {showStatusChangeForm && (
+                    <div className='space-y-4 rounded-lg border border-border bg-card p-3'>
+                        <div className='grid grid-cols-1 gap-3 md:grid-cols-3'>
+                            <div>
+                                <label className='text-sm font-medium text-muted-foreground'>
+                                    Équipe
+                                </label>
+                                <select
+                                    value={statusChangeTeamId}
+                                    onChange={(event) =>
+                                        setStatusChangeTeamId(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className={`mt-1 ${selectClass}`}
+                                >
+                                    <option value=''>— équipe —</option>
+                                    {teams.map((team) => (
+                                        <option
+                                            key={team.id}
+                                            value={team.id}
+                                        >
+                                            {team.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className='text-sm font-medium text-muted-foreground'>
+                                    Date d'entrée en vigueur
+                                </label>
+                                <input
+                                    type='date'
+                                    value={statusChangeDate}
+                                    onChange={(event) =>
+                                        setStatusChangeDate(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className={`mt-1 ${selectClass}`}
+                                />
+                            </div>
+
+                            <div />
+
+                            <div>
+                                <label className='text-sm font-medium text-muted-foreground'>
+                                    Status 1
+                                </label>
+                                <select
+                                    value={statusChangeA}
+                                    onChange={(event) =>
+                                        setStatusChangeA(
+                                            event.target.value as
+                                            | 'Active'
+                                            | 'Bench'
+                                            | 'Prospect',
+                                        )
+                                    }
+                                    className={`mt-1 ${selectClass}`}
+                                >
+                                    <option value='Active'>Active</option>
+                                    <option value='Bench'>Bench</option>
+                                    <option value='Prospect'>
+                                        Prospect
+                                    </option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className='text-sm font-medium text-muted-foreground'>
+                                    Status 2
+                                </label>
+                                <select
+                                    value={statusChangeB}
+                                    onChange={(event) =>
+                                        setStatusChangeB(
+                                            event.target.value as
+                                            | 'Active'
+                                            | 'Bench'
+                                            | 'Prospect',
+                                        )
+                                    }
+                                    className={`mt-1 ${selectClass}`}
+                                >
+                                    <option value='Active'>Active</option>
+                                    <option value='Bench'>Bench</option>
+                                    <option value='Prospect'>
+                                        Prospect
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+
+                        {statusChangeTeamId !== '' &&
+                            statusChangeTeamRoster && (
+                                <div className='space-y-2'>
+                                    {statusChangePairs.map(
+                                        (_pair, index) => {
+                                            const aId =
+                                                statusChangePairs[
+                                                    index
+                                                ].aId;
+                                            const bId =
+                                                statusChangePairs[
+                                                    index
+                                                ].bId;
+
+                                            const aOptions =
+                                                statusChangeTeamRoster.entries.filter(
+                                                    (e) =>
+                                                        e.rosterStatus ===
+                                                        statusChangeA &&
+                                                        !statusChangePairs.some(
+                                                            (p, i) =>
+                                                                i !==
+                                                                index &&
+                                                                p.aId ===
+                                                                String(
+                                                                    e.playerId,
+                                                                ),
+                                                        ),
+                                                );
+
+                                            const bOptions =
+                                                statusChangeTeamRoster.entries.filter(
+                                                    (e) =>
+                                                        e.rosterStatus ===
+                                                        statusChangeB &&
+                                                        !statusChangePairs.some(
+                                                            (p, i) =>
+                                                                i !==
+                                                                index &&
+                                                                p.bId ===
+                                                                String(
+                                                                    e.playerId,
+                                                                ),
+                                                        ),
+                                                );
+
+                                            return (
+                                                <div
+                                                    key={index}
+                                                    className='flex flex-wrap items-center gap-2 rounded border border-border bg-background p-2'
+                                                >
+                                                    <div className='flex-1 min-w-[12rem]'>
+                                                        <label className='text-xs text-muted-foreground'>
+                                                            {statusChangeA}
+                                                        </label>
+                                                        <select
+                                                            value={aId}
+                                                            onChange={(e) =>
+                                                                setStatusChangePairA(
+                                                                    index,
+                                                                    e
+                                                                        .target
+                                                                        .value,
+                                                                )
+                                                            }
+                                                            className={`mt-0.5 ${selectClass}`}
+                                                        >
+                                                            <option value=''>
+                                                                —
+                                                                Choisir
+                                                                —
+                                                            </option>
+                                                            {aOptions.map(
+                                                                (e) => (
+                                                                    <option
+                                                                        key={
+                                                                            e.playerId
+                                                                        }
+                                                                        value={
+                                                                            e.playerId
+                                                                        }
+                                                                    >
+                                                                        {
+                                                                            e.firstName
+                                                                        }{' '}
+                                                                        {
+                                                                            e.lastName
+                                                                        }{' '}
+                                                                        (
+                                                                        {
+                                                                            e.position
+                                                                        }
+                                                                        )
+                                                                    </option>
+                                                                ),
+                                                            )}
+                                                        </select>
+                                                    </div>
+
+                                                    <span className='pt-4 text-lg text-muted-foreground'>
+                                                        ⇄
+                                                    </span>
+
+                                                    <div className='flex-1 min-w-[12rem]'>
+                                                        <label className='text-xs text-muted-foreground'>
+                                                            {statusChangeB}
+                                                        </label>
+                                                        <select
+                                                            value={bId}
+                                                            onChange={(e) =>
+                                                                setStatusChangePairB(
+                                                                    index,
+                                                                    e
+                                                                        .target
+                                                                        .value,
+                                                                )
+                                                            }
+                                                            className={`mt-0.5 ${selectClass}`}
+                                                        >
+                                                            <option value=''>
+                                                                —
+                                                                Choisir
+                                                                —
+                                                            </option>
+                                                            {bOptions.map(
+                                                                (e) => (
+                                                                    <option
+                                                                        key={
+                                                                            e.playerId
+                                                                        }
+                                                                        value={
+                                                                            e.playerId
+                                                                        }
+                                                                    >
+                                                                        {
+                                                                            e.firstName
+                                                                        }{' '}
+                                                                        {
+                                                                            e.lastName
+                                                                        }{' '}
+                                                                        (
+                                                                        {
+                                                                            e.position
+                                                                        }
+                                                                        )
+                                                                    </option>
+                                                                ),
+                                                            )}
+                                                        </select>
+                                                    </div>
+
+                                                    {statusChangePairs.length >
+                                                        1 && (
+                                                            <button
+                                                                type='button'
+                                                                onClick={() =>
+                                                                    removeStatusChangePair(
+                                                                        index,
+                                                                    )
+                                                                }
+                                                                aria-label='Retirer cette paire'
+                                                                className='mt-4 shrink-0 cursor-pointer rounded border border-destructive/40 px-1.5 py-0.5 text-xs text-destructive hover:bg-destructive/10'
+                                                            >
+                                                                ×
+                                                            </button>
+                                                        )}
+                                                </div>
+                                            );
+                                        },
+                                    )}
+
+                                    <button
+                                        type='button'
+                                        onClick={addStatusChangePair}
+                                        className='w-full cursor-pointer rounded border border-emerald-500 bg-transparent px-2 py-1 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/10'
+                                    >
+                                        + Ajouter une paire
+                                    </button>
+                                </div>
+                            )}
+
+                        <div>
+                            <label className='text-sm font-medium text-muted-foreground'>
+                                Note (optionnel)
+                            </label>
+                            <input
+                                type='text'
+                                value={statusChangeNote}
+                                maxLength={500}
+                                onChange={(event) =>
+                                    setStatusChangeNote(
+                                        event.target.value,
+                                    )
+                                }
+                                className={`mt-1 ${selectClass}`}
+                            />
+                        </div>
+
+                        {statusChangeError && (
+                            <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                                {statusChangeError}
+                            </p>
+                        )}
+
+                        {statusChangeSuccess && (
+                            <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                                {statusChangeSuccess}
+                            </p>
+                        )}
+
+                        <div className='flex justify-end'>
+                            <button
+                                type='button'
+                                onClick={submitStatusChange}
+                                disabled={statusChangeSubmitting}
+                                className={primaryButtonClass}
+                            >
+                                Confirmer
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* ============================================================
+                Status changes history
+                ============================================================ */}
+            <div className='max-w-4xl space-y-3'>
+                <button
+                    type='button'
+                    onClick={() =>
+                        setShowStatusChangeHistory((v) => !v)
+                    }
+                    className='cursor-pointer rounded-lg px-4 py-2 text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-opacity hover:brightness-110'
+                    style={{
+                        backgroundColor: '#080D1A',
+                        border: '3px solid #F59E0B',
+                        boxShadow: [
+                            'inset 0 0 0 1px rgba(255, 245, 220, 0.95)',
+                            'inset 0 0 12px rgba(245, 158, 11, 0.55)',
+                            'inset 0 0 28px rgba(245, 158, 11, 0.15)',
+                        ].join(', '),
+                    }}
+                >
+                    {showStatusChangeHistory
+                        ? "▼ Masquer l'historique"
+                        : '▶ Status changes history'}
+                </button>
+
+                {showStatusChangeHistory && (
+                    <div className='space-y-3'>
+                        <div className='flex items-center justify-end'>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    void loadStatusChangeHistory()
+                                }
+                                disabled={statusChangeHistoryLoading}
+                                className={secondaryButtonClass}
+                            >
+                                {statusChangeHistoryLoading
+                                    ? 'Chargement...'
+                                    : 'Rafraîchir'}
+                            </button>
+                        </div>
+
+                        {statusChangeHistoryLoading &&
+                            statusChangeHistory.length === 0 && (
+                                <p className='text-sm text-muted-foreground'>
+                                    Chargement...
+                                </p>
+                            )}
+
+                        {!statusChangeHistoryLoading &&
+                            statusChangeHistory.length === 0 && (
+                                <p className='rounded-lg border border-border bg-card px-3 py-4 text-sm text-muted-foreground'>
+                                    Aucun changement de statut
+                                    enregistré.
+                                </p>
+                            )}
+
+                        {statusChangeHistory.map((h) => (
+                            <div
+                                key={h.id}
+                                className='space-y-2 rounded-lg border border-border bg-card p-3'
+                            >
+                                <div className='flex flex-wrap items-baseline justify-between gap-2'>
+                                    <p className='text-sm font-semibold text-foreground'>
+                                        #{h.id} · {h.fantasyTeamName} ·{' '}
+                                        {h.statusAName} ↔ {h.statusBName}
+                                    </p>
+                                    <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
+                                        <span>
+                                            Saison {h.seasonName} ·
+                                            Effectif le{' '}
+                                            {h.effectiveAt.slice(0, 10)}
+                                        </span>
+                                        {statusChangeDateEditFor !==
+                                            h.id && (
+                                                <>
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            setStatusChangeDateEditFor(
+                                                                h.id,
+                                                            );
+                                                            setStatusChangeDateEditValue(
+                                                                h.effectiveAt.slice(
+                                                                    0,
+                                                                    10,
+                                                                ),
+                                                            );
+                                                            setStatusChangeDateEditReason(
+                                                                '',
+                                                            );
+                                                            setStatusChangeDateEditError(
+                                                                null,
+                                                            );
+                                                        }}
+                                                        className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary'
+                                                    >
+                                                        Modifier la date
+                                                    </button>
+                                                    <button
+                                                        type='button'
+                                                        onClick={() => {
+                                                            setStatusChangeRevertFor(
+                                                                h.id,
+                                                            );
+                                                            setStatusChangeRevertConfirmInput(
+                                                                '',
+                                                            );
+                                                            setStatusChangeRevertError(
+                                                                null,
+                                                            );
+                                                        }}
+                                                        className='cursor-pointer rounded border border-destructive/40 px-2 py-0.5 text-xs font-semibold text-destructive hover:bg-destructive/10'
+                                                    >
+                                                        Revertir
+                                                    </button>
+                                                </>
+                                            )}
+                                    </div>
+                                </div>
+
+                                {statusChangeDateEditFor === h.id && (
+                                    <div className='space-y-2 rounded border border-[#22C55E]/30 bg-[#22C55E]/5 p-2'>
+                                        <p className='text-xs font-semibold uppercase tracking-wider text-[#22C55E]'>
+                                            Changer la date
+                                        </p>
+
+                                        <div className='flex flex-wrap items-end gap-2'>
+                                            <div>
+                                                <label className='text-[0.65rem] font-medium text-muted-foreground'>
+                                                    Nouvelle date
+                                                </label>
+                                                <input
+                                                    type='date'
+                                                    value={
+                                                        statusChangeDateEditValue
+                                                    }
+                                                    onChange={(event) =>
+                                                        setStatusChangeDateEditValue(
+                                                            event.target
+                                                                .value,
+                                                        )
+                                                    }
+                                                    className={`mt-0.5 ${selectClass}`}
+                                                />
+                                            </div>
+
+                                            <div className='flex-1 min-w-[12rem]'>
+                                                <label className='text-[0.65rem] font-medium text-muted-foreground'>
+                                                    Raison (optionnel)
+                                                </label>
+                                                <input
+                                                    type='text'
+                                                    value={
+                                                        statusChangeDateEditReason
+                                                    }
+                                                    maxLength={500}
+                                                    onChange={(event) =>
+                                                        setStatusChangeDateEditReason(
+                                                            event.target
+                                                                .value,
+                                                        )
+                                                    }
+                                                    className={`mt-0.5 ${selectClass}`}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {statusChangeDateEditError && (
+                                            <p className='rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive'>
+                                                {
+                                                    statusChangeDateEditError
+                                                }
+                                            </p>
+                                        )}
+
+                                        <div className='flex justify-end gap-2'>
+                                            <button
+                                                type='button'
+                                                onClick={() => {
+                                                    setStatusChangeDateEditFor(
+                                                        null,
+                                                    );
+                                                    setStatusChangeDateEditValue(
+                                                        '',
+                                                    );
+                                                    setStatusChangeDateEditReason(
+                                                        '',
+                                                    );
+                                                    setStatusChangeDateEditError(
+                                                        null,
+                                                    );
+                                                }}
+                                                disabled={
+                                                    statusChangeDateEditBusy
+                                                }
+                                                className='cursor-pointer rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-secondary disabled:opacity-50'
+                                            >
+                                                Annuler
+                                            </button>
+                                            <button
+                                                type='button'
+                                                onClick={() =>
+                                                    void handleChangeStatusChangeDate(
+                                                        h.id,
+                                                    )
+                                                }
+                                                disabled={
+                                                    statusChangeDateEditBusy
+                                                }
+                                                className='cursor-pointer rounded bg-emerald-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-emerald-500 disabled:opacity-50'
+                                            >
+                                                {statusChangeDateEditBusy
+                                                    ? 'Enregistrement...'
+                                                    : 'Enregistrer'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {h.note && (
+                                    <p className='rounded border border-[#00A8FF]/25 bg-[#00A8FF]/5 px-2 py-1 text-xs italic text-[#7DD3FC]'>
+                                        « {h.note} »
+                                    </p>
+                                )}
+
+                                <div className='space-y-1'>
+                                    {h.pairs.map((pair) => (
+                                        <div
+                                            key={pair.slotIndex}
+                                            className='grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded border border-border/50 bg-background px-2 py-1 text-xs'
+                                        >
+                                            <span className='min-w-0 truncate text-foreground'>
+                                                {
+                                                    pair.statusASide
+                                                        .firstName
+                                                }{' '}
+                                                {pair.statusASide.lastName}{' '}
+                                                (
+                                                {
+                                                    pair.statusASide
+                                                        .position
+                                                }
+                                                ) ·{' '}
+                                                {
+                                                    pair.statusASide
+                                                        .previousStatusName
+                                                }{' '}
+                                                →{' '}
+                                                {
+                                                    pair.statusASide
+                                                        .newStatusName
+                                                }
+                                            </span>
+                                            <span
+                                                aria-hidden='true'
+                                                className='shrink-0 text-[#7DD3FC]'
+                                            >
+                                                ⇄
+                                            </span>
+                                            <span className='min-w-0 truncate text-right text-foreground'>
+                                                {
+                                                    pair.statusBSide
+                                                        .firstName
+                                                }{' '}
+                                                {pair.statusBSide.lastName}{' '}
+                                                (
+                                                {
+                                                    pair.statusBSide
+                                                        .position
+                                                }
+                                                ) ·{' '}
+                                                {
+                                                    pair.statusBSide
+                                                        .previousStatusName
+                                                }{' '}
+                                                →{' '}
+                                                {
+                                                    pair.statusBSide
+                                                        .newStatusName
+                                                }
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {h.dateChanges.length > 0 && (
+                                    <div className='rounded border border-[#FFC72C]/30 bg-[#FFC72C]/5 p-2'>
+                                        <p className='text-[0.65rem] font-semibold uppercase tracking-wider text-[#FFC72C]'>
+                                            Historique des changements
+                                            de date
+                                        </p>
+                                        <ul className='mt-1 space-y-0.5 text-xs'>
+                                            {h.dateChanges.map((dc) => (
+                                                <li
+                                                    key={dc.id}
+                                                    className='text-foreground'
+                                                >
+                                                    <span className='font-mono'>
+                                                        {dc.previousEffectiveAt.slice(
+                                                            0,
+                                                            10,
+                                                        )}
+                                                    </span>
+                                                    {' → '}
+                                                    <span className='font-mono font-semibold'>
+                                                        {dc.newEffectiveAt.slice(
+                                                            0,
+                                                            10,
+                                                        )}
+                                                    </span>
+                                                    <span className='ml-2 text-muted-foreground'>
+                                                        (
+                                                        {new Date(
+                                                            dc.changedAt,
+                                                        ).toLocaleString(
+                                                            'fr-CA',
+                                                        )}
+                                                        )
+                                                    </span>
+                                                    {dc.reason && (
+                                                        <span className='ml-2 italic text-muted-foreground'>
+                                                            «{' '}
+                                                            {dc.reason}{' '}
+                                                            »
+                                                        </span>
+                                                    )}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+
+                                <p className='text-[0.65rem] text-muted-foreground'>
+                                    Confirmé le{' '}
+                                    {new Date(
+                                        h.confirmedAt,
+                                    ).toLocaleString('fr-CA')}
+                                </p>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Preview popup for status change */}
+            {statusChangePreviewOpen && statusChangePreview !== null && (
+                <div
+                    className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
+                    onClick={() => setStatusChangePreviewOpen(false)}
+                    role='dialog'
+                    aria-modal='true'
+                >
+                    <div
+                        className='flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[#22C55E]/50 bg-[#0F1626] shadow-[0_0_20px_rgba(34,197,94,0.35),0_8px_24px_rgba(0,0,0,0.6)]'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='flex items-center justify-between border-b border-[#22C55E]/20 px-3 py-2'>
+                            <h3 className='text-sm font-bold uppercase tracking-wider text-white'>
+                                Confirmer le changement de statut
+                            </h3>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setStatusChangePreviewOpen(false)
+                                }
+                                className='cursor-pointer rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-red-500'
+                            >
+                                Fermer
+                            </button>
+                        </div>
+
+                        <div className='flex-1 space-y-3 overflow-y-auto px-3 py-3'>
+                            <p className='text-sm text-foreground'>
+                                <span className='font-semibold'>
+                                    Équipe :
+                                </span>{' '}
+                                {statusChangePreview.fantasyTeamName}
+                            </p>
+
+                            <p className='text-sm text-foreground'>
+                                <span className='font-semibold'>
+                                    Swap :
+                                </span>{' '}
+                                {statusChangePreview.statusAName}{' '}
+                                ⇄{' '}
+                                {statusChangePreview.statusBName}
+                            </p>
+
+                            <p className='text-sm text-foreground'>
+                                <span className='font-semibold'>
+                                    Date d'entrée en vigueur :
+                                </span>{' '}
+                                {statusChangePreview.effectiveAt.slice(
+                                    0,
+                                    10,
+                                )}
+                            </p>
+
+                            {statusChangePreview.note && (
+                                <p className='rounded border border-[#00A8FF]/25 bg-[#00A8FF]/5 px-2 py-1 text-xs italic text-[#7DD3FC]'>
+                                    « {statusChangePreview.note} »
+                                </p>
+                            )}
+
+                            <div className='space-y-1'>
+                                {statusChangePreview.pairs.map(
+                                    (pair) => (
+                                        <div
+                                            key={pair.slotIndex}
+                                            className='grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded border border-border/50 bg-background px-2 py-1 text-xs'
+                                        >
+                                            <span className='min-w-0 truncate text-foreground'>
+                                                {
+                                                    pair.statusASide
+                                                        .firstName
+                                                }{' '}
+                                                {pair.statusASide.lastName}{' '}
+                                                (
+                                                {
+                                                    pair.statusASide
+                                                        .position
+                                                }
+                                                ) ·{' '}
+                                                {
+                                                    pair.statusASide
+                                                        .previousStatusName
+                                                }{' '}
+                                                →{' '}
+                                                {
+                                                    pair.statusASide
+                                                        .newStatusName
+                                                }
+                                            </span>
+                                            <span
+                                                aria-hidden='true'
+                                                className='shrink-0 text-[#7DD3FC]'
+                                            >
+                                                ⇄
+                                            </span>
+                                            <span className='min-w-0 truncate text-right text-foreground'>
+                                                {
+                                                    pair.statusBSide
+                                                        .firstName
+                                                }{' '}
+                                                {pair.statusBSide.lastName}{' '}
+                                                (
+                                                {
+                                                    pair.statusBSide
+                                                        .position
+                                                }
+                                                ) ·{' '}
+                                                {
+                                                    pair.statusBSide
+                                                        .previousStatusName
+                                                }{' '}
+                                                →{' '}
+                                                {
+                                                    pair.statusBSide
+                                                        .newStatusName
+                                                }
+                                            </span>
+                                        </div>
+                                    ),
+                                )}
+                            </div>
+
+                            {statusChangeError && (
+                                <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                                    {statusChangeError}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className='flex justify-end gap-2 border-t border-[#22C55E]/20 px-3 py-2'>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    setStatusChangePreviewOpen(false)
+                                }
+                                disabled={statusChangeSubmitting}
+                                className='cursor-pointer rounded border border-border px-3 py-1.5 text-sm text-foreground hover:bg-secondary disabled:opacity-50'
+                            >
+                                Annuler
+                            </button>
+                            <button
+                                type='button'
+                                onClick={() => void confirmStatusChange()}
+                                disabled={statusChangeSubmitting}
+                                className='cursor-pointer rounded bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-black hover:bg-emerald-500 disabled:opacity-50'
+                            >
+                                {statusChangeSubmitting
+                                    ? 'Enregistrement...'
+                                    : 'Confirmer'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Revert status change confirmation popup */}
+            {statusChangeRevertFor !== null && (
+                <div
+                    className='fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4'
+                    onClick={() => {
+                        if (statusChangeRevertBusy) return;
+                        setStatusChangeRevertFor(null);
+                        setStatusChangeRevertConfirmInput('');
+                        setStatusChangeRevertError(null);
+                    }}
+                    role='dialog'
+                    aria-modal='true'
+                >
+                    <div
+                        className='flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-destructive/60 bg-[#0F1626] shadow-[0_0_20px_rgba(220,38,38,0.5),0_8px_24px_rgba(0,0,0,0.6)]'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='flex items-center justify-between border-b border-destructive/40 px-3 py-2'>
+                            <h3 className='text-sm font-bold uppercase tracking-wider text-destructive'>
+                                Revertir le changement #{statusChangeRevertFor}
+                            </h3>
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    if (statusChangeRevertBusy) return;
+                                    setStatusChangeRevertFor(null);
+                                    setStatusChangeRevertConfirmInput('');
+                                    setStatusChangeRevertError(null);
+                                }}
+                                disabled={statusChangeRevertBusy}
+                                className='cursor-pointer rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-black hover:bg-red-500 disabled:opacity-50'
+                            >
+                                Fermer
+                            </button>
+                        </div>
+
+                        <div className='flex-1 space-y-3 overflow-y-auto px-3 py-3 text-sm text-foreground'>
+                            <p className='font-semibold text-destructive'>
+                                Cette action est irréversible.
+                            </p>
+
+                            <p>Revertir ce changement va :</p>
+
+                            <ul className='ml-4 list-disc space-y-1 text-xs'>
+                                <li>
+                                    Remettre chaque joueur à son statut
+                                    d'origine.
+                                </li>
+                                <li>
+                                    Supprimer définitivement toutes les
+                                    lignes d'historique de statut créées
+                                    par ce changement.
+                                </li>
+                                <li>
+                                    Supprimer définitivement ce
+                                    changement de cette liste.
+                                </li>
+                                <li>
+                                    Recalculer les totaux de la saison
+                                    comme si ce changement n'avait
+                                    jamais eu lieu.
+                                </li>
+                            </ul>
+
+                            <p className='text-xs'>
+                                Pour confirmer, tapez le numéro (
+                                {statusChangeRevertFor}) ci-dessous.
+                            </p>
+
+                            <input
+                                type='text'
+                                value={statusChangeRevertConfirmInput}
+                                onChange={(event) =>
+                                    setStatusChangeRevertConfirmInput(
+                                        event.target.value,
+                                    )
+                                }
+                                placeholder={String(
+                                    statusChangeRevertFor,
+                                )}
+                                disabled={statusChangeRevertBusy}
+                                className={`${selectClass} text-center font-mono`}
+                            />
+
+                            {statusChangeRevertError && (
+                                <p className='rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive'>
+                                    {statusChangeRevertError}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className='flex justify-end gap-2 border-t border-destructive/40 px-3 py-2'>
+                            <button
+                                type='button'
+                                onClick={() => {
+                                    if (statusChangeRevertBusy) return;
+                                    setStatusChangeRevertFor(null);
+                                    setStatusChangeRevertConfirmInput('');
+                                    setStatusChangeRevertError(null);
+                                }}
+                                disabled={statusChangeRevertBusy}
+                                className='cursor-pointer rounded border border-border px-3 py-1.5 text-sm text-foreground hover:bg-secondary disabled:opacity-50'
+                            >
+                                Annuler
+                            </button>
+                            <button
+                                type='button'
+                                onClick={() =>
+                                    void handleRevertStatusChange(
+                                        statusChangeRevertFor,
+                                    )
+                                }
+                                disabled={
+                                    statusChangeRevertBusy ||
+                                    statusChangeRevertConfirmInput.trim() !==
+                                    String(statusChangeRevertFor)
+                                }
+                                className='cursor-pointer rounded bg-destructive px-3 py-1.5 text-sm font-semibold text-destructive-foreground hover:brightness-110 disabled:opacity-50'
+                            >
+                                {statusChangeRevertBusy
+                                    ? 'Revert en cours...'
+                                    : 'Revertir'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ============================================================
                 Transfert de choix de repêchage
                 ============================================================ */}
             <div className='max-w-3xl space-y-3'>
@@ -5780,6 +9749,111 @@ export default function AdminPage() {
                         ? 'Préparation du fichier...'
                         : 'Télécharger ROSTERS'}
                 </button>
+            </div>
+
+            {/* ============================================================
+                Sauvegardes de la base de données
+                ============================================================ */}
+            <div className='max-w-2xl space-y-3'>
+                <h3 className='text-lg font-semibold text-foreground'>
+                    Sauvegardes de la base de données
+                </h3>
+
+                <p className='text-sm text-muted-foreground'>
+                    Téléchargez une copie complète de la base de données
+                    au format <span className='font-mono'>pg_dump</span>{' '}
+                    (binaire compressé) pour la conserver sur votre PC.
+                    Conservez cette copie hors du serveur pour vous
+                    protéger contre une perte du VPS. Pour restaurer,
+                    utilisez{' '}
+                    <span className='font-mono'>
+                        pg_restore --clean --if-exists
+                    </span>.
+                </p>
+
+                {backupsError && (
+                    <p className='rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+                        {backupsError}
+                    </p>
+                )}
+
+                {backupsSuccess && (
+                    <p className='rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400'>
+                        {backupsSuccess}
+                    </p>
+                )}
+
+                <button
+                    type='button'
+                    onClick={() => void handleCreateAndDownloadBackup()}
+                    disabled={backupsTriggering}
+                    className={primaryButtonClass}
+                >
+                    {backupsTriggering
+                        ? 'Sauvegarde en cours...'
+                        : 'Créer et télécharger une sauvegarde fraîche'}
+                </button>
+
+                {backupsTriggering && (
+                    <p className='text-xs text-muted-foreground'>
+                        L'opération prend généralement de 30 à 60 secondes.
+                        Ne fermez pas cette page.
+                    </p>
+                )}
+
+                {backupsLoading && backups.length === 0 && (
+                    <p className='text-sm text-muted-foreground'>
+                        Chargement...
+                    </p>
+                )}
+
+                {!backupsLoading && backups.length === 0 && !backupsError && (
+                    <p className='text-sm text-muted-foreground'>
+                        Aucune sauvegarde pour le moment.
+                    </p>
+                )}
+
+                {backups.length > 0 && (
+                    <ul className='space-y-2'>
+                        {backups.map((b) => {
+                            const sizeMb = b.sizeBytes / (1024 * 1024);
+
+                            const createdAt = new Date(
+                                b.createdAtUtc,
+                            ).toLocaleString('fr-CA', {
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                            });
+
+                            return (
+                                <li
+                                    key={b.filename}
+                                    className='flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm'
+                                >
+                                    <div className='min-w-0 flex-1'>
+                                        <p className='truncate font-mono text-xs text-foreground'>
+                                            {b.filename}
+                                        </p>
+                                        <p className='mt-0.5 text-xs text-muted-foreground'>
+                                            {sizeMb.toFixed(2)} Mo ·{' '}
+                                            {createdAt}
+                                        </p>
+                                    </div>
+
+                                    <a
+                                        href={downloadBackupUrl(b.filename)}
+                                        className='shrink-0 cursor-pointer rounded border border-border px-3 py-1 text-xs font-semibold text-foreground transition-colors hover:bg-secondary'
+                                    >
+                                        Télécharger
+                                    </a>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
             </div>
 
             {/* Appearance settings (hidden behind a toggle) */}

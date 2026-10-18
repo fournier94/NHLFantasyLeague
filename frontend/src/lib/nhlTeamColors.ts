@@ -1,60 +1,74 @@
-﻿/**
- * Primary NHL team colors used for the neon glow around team logos,
- * player card backgrounds, row tints, and anywhere else the app
- * needs to identify a team by color.
- */
-export const NHL_TEAM_COLORS: Record<string, string> = {
-    MTL: '#AF1E2D',
-    TOR: '#003E7E',
+﻿export const NHL_TEAM_COLORS: Record<string, string> = {
+    ANA: '#FC4C02',
     BOS: '#FFB81C',
     BUF: '#003087',
+    CGY: '#D2001C',
+    CAR: '#CC0000',
+    CHI: '#CF0A2C',
+    COL: '#6F263D',
+    CBJ: '#002654',
+    DAL: '#006847',
     DET: '#CE1126',
+    EDM: '#041E42',
     FLA: '#C8102E',
-    TBL: '#002868',
-    OTT: '#C52032',
-    NYR: '#0038A8',
-    NYI: '#00539B',
+    LAK: '#000000',
+    MIN: '#154734',
+    MTL: '#AF1E2D',
+    NSH: '#FFB81C',
     NJD: '#CE1126',
+    NYI: '#00539B',
+    NYR: '#0038A8',
+    OTT: '#C52032',
     PHI: '#F74902',
     PIT: '#FCB514',
-    WSH: '#C8102E',
-    CAR: '#CC0000',
-    CBJ: '#002654',
-    CHI: '#CF0A2C',
-    DAL: '#006847',
-    MIN: '#154734',
-    NSH: '#FFB81C',
-    STL: '#002F87',
-    COL: '#6F263D',
-    UTA: '#010101',
-    WPG: '#041E42',
-    ANA: '#FC4C02',
-    CGY: '#C8102E',
-    EDM: '#041E42',
-    LAK: '#111111',
     SJS: '#006D75',
+    SEA: '#001628',
+    STL: '#002F87',
+    TBL: '#002868',
+    TOR: '#003E7E',
+    UTA: '#69B3E7',
     VAN: '#00205B',
     VGK: '#B4975A',
-    SEA: '#001628',
+    WSH: '#C8102E',
+    WPG: '#041E42',
 };
 
-/**
- * Aura-only color overrides. Used by `getNhlTeamAuraColor` when the
- * base team color in NHL_TEAM_COLORS produces an aura that is too
- * dark / washed out to read on the dark UI, or when the aura should
- * be a different hue than the team's primary color.
- *
- * Strength adjustments are made by blending the hex toward white
- * (add strength) or black (reduce strength). The glow radius and
- * alpha are unchanged by these tweaks: a "reduce 20% strength" entry
- * is a 20% darker color at the same radius and opacity as before.
- *
- * Teams not listed here fall back to their NHL_TEAM_COLORS entry.
- * Changing a value here does NOT change the base team color used
- * for card backgrounds, row tints, or any other non-aura surface.
- */
+export const NHL_TEAM_TEXT_COLORS: Record<string, string> = {
+    ANA: '#000000',
+    BOS: '#000000',
+    BUF: '#FFB81C',
+    CGY: '#FAAF19',
+    CAR: '#FFFFFF',
+    CHI: '#000000',
+    COL: '#FFFFFF',
+    CBJ: '#CE1126',
+    DAL: '#FFFFFF',
+    DET: '#FFFFFF',
+    EDM: '#FF4C00',
+    FLA: '#041E42',
+    LAK: '#A2AAAD',
+    MIN: '#c7102c',
+    MTL: '#192168',
+    NSH: '#041E42',
+    NJD: '#FFFFFF',
+    NYI: '#F47D30',
+    NYR: '#FFFFFF',
+    OTT: '#000000',
+    PHI: '#000000',
+    PIT: '#000000',
+    SJS: '#000000',
+    SEA: '#99D9D9',
+    STL: '#FFB81C',
+    TBL: '#FFFFFF',
+    TOR: '#FFFFFF',
+    UTA: '#000000',
+    VAN: '#FFFFFF',
+    VGK: '#000000',
+    WSH: '#FFFFFF',
+    WPG: '#FFFFFF',
+};
+
 export const NHL_TEAM_AURA_COLORS: Record<string, string> = {
-    // Brighter aura variants (base color unchanged).
     TBL: '#4A90E2',
     MIN: '#2E9E6A',
     DAL: '#009A63',
@@ -66,9 +80,7 @@ export const NHL_TEAM_AURA_COLORS: Record<string, string> = {
     CBJ: '#3A78C8',
     EDM: '#D1501A',
     WPG: '#4A90E2',
-    SJS: '#338A91',   // new: #006D75 @ +20%
-
-    // Full aura-only overrides (base color unchanged).
+    SJS: '#338A91',
     STL: '#E3A312',
     BUF: '#CC9316',
     NYI: '#FC4C02',
@@ -89,12 +101,15 @@ export function getNhlTeamColor(
     );
 }
 
-/**
- * Returns the color to use for team-tinted auras (glows, text
- * shadows, drop-shadows, radial gradients). Falls back to the base
- * team color when no aura override exists, and to the league cyan
- * when neither is known.
- */
+export function getNhlTeamTextColor(
+    abbreviation: string | null | undefined,
+): string {
+    return (
+        NHL_TEAM_TEXT_COLORS[abbreviation?.toUpperCase() ?? ''] ??
+        '#FFFFFF'
+    );
+}
+
 export function getNhlTeamAuraColor(
     abbreviation: string | null | undefined,
 ): string {
@@ -107,17 +122,6 @@ export function getNhlTeamAuraColor(
     );
 }
 
-/**
- * Converts a hex color like "#AF1E2D" to an "hsl(H, S%, L%)" string,
- * with the saturation scaled by `saturationScale`.
- *
- *   saturationScale = 1    -> original color
- *   saturationScale = 0.5  -> half the saturation
- *   saturationScale = 0    -> grayscale
- *
- * The hue and lightness are preserved, so a red team stays red, just
- * muted, and a blue team stays blue.
- */
 export function desaturateHex(
     hex: string,
     saturationScale: number,

@@ -225,6 +225,12 @@ builder.Services.AddScoped<CapFreezeContractService>();
 builder.Services.AddScoped<CapFreezeSyncService>();
 
 // ---------------------------------------------------------------------
+// Backup service (commissioner-triggered pg_dump download)
+// ---------------------------------------------------------------------
+
+builder.Services.AddScoped<BackupService>();
+
+// ---------------------------------------------------------------------
 // League, roster, marketplace and auth services
 // ---------------------------------------------------------------------
 

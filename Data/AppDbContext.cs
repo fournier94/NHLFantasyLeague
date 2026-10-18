@@ -146,6 +146,33 @@ namespace NhlFantasyLeague.api.Data
             TradeOfferResponseRemovedPicks
         { get; set; }
 
+        /// <summary>
+        /// Permanent audit records of commissioner-executed trades.
+        /// Each row freezes the full content of one trade as jsonb,
+        /// so the league can reconstruct any trade even if the rest
+        /// of the DB is lost. Never deleted.
+        /// </summary>
+        public DbSet<TradeHistory> TradeHistories { get; set; }
+
+        /// <summary>
+        /// Per-trade audit log of every effective-date change.
+        /// Append-only; never deleted.
+        /// </summary>
+        public DbSet<TradeDateChange> TradeDateChanges { get; set; }
+
+        /// <summary>
+        /// Permanent audit records of commissioner-executed batch
+        /// status changes. Each row freezes the swap content as
+        /// jsonb for reconstruction.
+        /// </summary>
+        public DbSet<StatusChangeHistory> StatusChangeHistories { get; set; }
+
+        /// <summary>
+        /// Per-status-change audit log of every effective-date change.
+        /// Append-only; never deleted manually.
+        /// </summary>
+        public DbSet<StatusChangeDateChange> StatusChangeDateChanges { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Identity first, so all its table config is registered.
@@ -175,14 +202,14 @@ namespace NhlFantasyLeague.api.Data
       .Property(u => u.PlayerPageStyle)
       .HasConversion<string>();
 
-            // Default both contract checkboxes to true for all users.
+            // Default both contract checkboxes to false for all users.
             modelBuilder.Entity<ApplicationUser>()
                 .Property(u => u.ShowContractsStats)
-                .HasDefaultValue(true);
+                .HasDefaultValue(false);
 
             modelBuilder.Entity<ApplicationUser>()
                 .Property(u => u.ShowContractsRoster)
-                .HasDefaultValue(true);
+                .HasDefaultValue(false);
 
             // -----------------------------------------------------------------
             // Existing model configuration, unchanged below.
@@ -890,6 +917,128 @@ namespace NhlFantasyLeague.api.Data
                     p.DraftPickId
                 })
                 .IsUnique();
+
+            // -----------------------------------------------------------------
+            // TradeHistory (commissioner audit)
+            // -----------------------------------------------------------------
+
+            // Restrict on all three FKs: a season or a fantasy team that
+            // has ever been part of a recorded trade cannot be deleted.
+            // The trade history is the league's permanent audit trail;
+            // a silent FK cascade would erase it.
+            modelBuilder.Entity<TradeHistory>()
+                .HasOne(h => h.Season)
+                .WithMany()
+                .HasForeignKey(h => h.SeasonId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<TradeHistory>()
+                .HasOne(h => h.TeamA)
+                .WithMany()
+                .HasForeignKey(h => h.TeamAId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<TradeHistory>()
+                .HasOne(h => h.TeamB)
+                .WithMany()
+                .HasForeignKey(h => h.TeamBId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Reading the history: filter by season, order by ConfirmedAt.
+            modelBuilder.Entity<TradeHistory>()
+                .HasIndex(h => new { h.SeasonId, h.ConfirmedAt });
+
+            modelBuilder.Entity<TradeHistory>()
+      .Property(h => h.Note)
+      .HasMaxLength(500);
+
+            // One TradeHistory has many TradeDateChange rows. Cascade
+            // delete is never used in practice (TradeHistory is
+            // permanent), but the FK relationship has to exist so EF
+            // can order inserts and includes correctly.
+            modelBuilder.Entity<TradeDateChange>()
+                .HasOne(dc => dc.TradeHistory)
+                .WithMany(h => h.DateChanges)
+                .HasForeignKey(dc => dc.TradeHistoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TradeDateChange>()
+                .Property(dc => dc.Reason)
+                .HasMaxLength(500);
+
+            modelBuilder.Entity<TradeDateChange>()
+                .HasIndex(dc => new { dc.TradeHistoryId, dc.ChangedAt });
+
+            // RosterStatusHistory.TradeHistoryId is nullable: every
+            // non-trade history row leaves it null, and only the rows
+            // written by FinalizeTradeAsync carry a value. Restrict on
+            // the FK because deleting a TradeHistory would erase the
+            // audit trail; we never delete trades.
+            modelBuilder.Entity<RosterStatusHistory>()
+       .HasOne(h => h.TradeHistory)
+       .WithMany()
+       .HasForeignKey(h => h.TradeHistoryId)
+       .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<RosterStatusHistory>()
+                .HasIndex(h => h.TradeHistoryId);
+
+            // -----------------------------------------------------------------
+            // StatusChangeHistory / StatusChangeDateChange
+            // -----------------------------------------------------------------
+
+            modelBuilder.Entity<StatusChangeHistory>()
+                .HasOne(h => h.Season)
+                .WithMany()
+                .HasForeignKey(h => h.SeasonId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<StatusChangeHistory>()
+                .HasOne(h => h.FantasyTeam)
+                .WithMany()
+                .HasForeignKey(h => h.FantasyTeamId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<StatusChangeHistory>()
+                .Property(h => h.StatusAName)
+                .HasMaxLength(20);
+
+            modelBuilder.Entity<StatusChangeHistory>()
+                .Property(h => h.StatusBName)
+                .HasMaxLength(20);
+
+            modelBuilder.Entity<StatusChangeHistory>()
+                .Property(h => h.Note)
+                .HasMaxLength(500);
+
+            modelBuilder.Entity<StatusChangeHistory>()
+                .HasIndex(h => new { h.SeasonId, h.ConfirmedAt });
+
+            modelBuilder.Entity<StatusChangeDateChange>()
+                .HasOne(dc => dc.StatusChangeHistory)
+                .WithMany(h => h.DateChanges)
+                .HasForeignKey(dc => dc.StatusChangeHistoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<StatusChangeDateChange>()
+                .Property(dc => dc.Reason)
+                .HasMaxLength(500);
+
+            modelBuilder.Entity<StatusChangeDateChange>()
+                .HasIndex(dc => new { dc.StatusChangeHistoryId, dc.ChangedAt });
+
+            // Nullable FK on RosterStatusHistory. Restrict, because the
+            // linked history rows must be deleted before the
+            // StatusChangeHistory row can be deleted (RevertStatusChangeAsync
+            // handles this order).
+            modelBuilder.Entity<RosterStatusHistory>()
+                .HasOne(h => h.StatusChangeHistory)
+                .WithMany()
+                .HasForeignKey(h => h.StatusChangeHistoryId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<RosterStatusHistory>()
+                .HasIndex(h => h.StatusChangeHistoryId);
         }
     }
 }

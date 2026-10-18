@@ -25,6 +25,11 @@
       - ASPNETCORE_ENVIRONMENT=Production
     ports:
       - "5000:8080"
+    volumes:
+      # The backup directory is shared with the host so the admin's
+      # downloaded backups survive a container rebuild, and so the
+      # optional host-level cron job can write to the same folder.
+      - ./backups:/backups
 
   web:
     build:

@@ -222,12 +222,20 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<bool>("ShowContractsRoster")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
-                        .HasDefaultValue(true);
+                        .HasDefaultValue(false);
 
                     b.Property<bool>("ShowContractsStats")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
-                        .HasDefaultValue(true);
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("StatistiquesPlayerFilter")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("StatistiquesStandingsView")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<bool>("TwoFactorEnabled")
                         .HasColumnType("boolean");
@@ -1543,9 +1551,19 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Property<int>("SeasonId")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("StatusChangeHistoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("TradeHistoryId")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.HasIndex("FantasyTeamId");
+
+                    b.HasIndex("StatusChangeHistoryId");
+
+                    b.HasIndex("TradeHistoryId");
 
                     b.HasIndex("SeasonId", "EffectiveAt");
 
@@ -1629,6 +1647,84 @@ namespace NhlFantasyLeague.api.Migrations
                         .IsUnique();
 
                     b.ToTable("SeasonStandings");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.StatusChangeDateChange", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("NewEffectiveAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("PreviousEffectiveAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("StatusChangeHistoryId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StatusChangeHistoryId", "ChangedAt");
+
+                    b.ToTable("StatusChangeDateChanges");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.StatusChangeHistory", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("ConfirmedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("EffectiveAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FantasyTeamId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("SeasonId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("StatusAName")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("StatusBName")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FantasyTeamId");
+
+                    b.HasIndex("SeasonId", "ConfirmedAt");
+
+                    b.ToTable("StatusChangeHistories");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.SystemEventLog", b =>
@@ -1721,6 +1817,79 @@ namespace NhlFantasyLeague.api.Migrations
                     b.HasIndex("ToFantasyTeamId");
 
                     b.ToTable("Trades");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeDateChange", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("NewEffectiveAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("PreviousEffectiveAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("TradeHistoryId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TradeHistoryId", "ChangedAt");
+
+                    b.ToTable("TradeDateChanges");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeHistory", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("ConfirmedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("EffectiveAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("SeasonId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<int>("TeamAId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TeamBId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TeamAId");
+
+                    b.HasIndex("TeamBId");
+
+                    b.HasIndex("SeasonId", "ConfirmedAt");
+
+                    b.ToTable("TradeHistories");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeItem", b =>
@@ -2492,11 +2661,25 @@ namespace NhlFantasyLeague.api.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("NhlFantasyLeague.api.Models.StatusChangeHistory", "StatusChangeHistory")
+                        .WithMany()
+                        .HasForeignKey("StatusChangeHistoryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("NhlFantasyLeague.api.Models.TradeHistory", "TradeHistory")
+                        .WithMany()
+                        .HasForeignKey("TradeHistoryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("FantasyTeam");
 
                     b.Navigation("Player");
 
                     b.Navigation("Season");
+
+                    b.Navigation("StatusChangeHistory");
+
+                    b.Navigation("TradeHistory");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Season", b =>
@@ -2529,6 +2712,36 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Navigation("Season");
                 });
 
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.StatusChangeDateChange", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.StatusChangeHistory", "StatusChangeHistory")
+                        .WithMany("DateChanges")
+                        .HasForeignKey("StatusChangeHistoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("StatusChangeHistory");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.StatusChangeHistory", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "FantasyTeam")
+                        .WithMany()
+                        .HasForeignKey("FantasyTeamId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
+                        .WithMany()
+                        .HasForeignKey("SeasonId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("FantasyTeam");
+
+                    b.Navigation("Season");
+                });
+
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Trade", b =>
                 {
                     b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "FromFantasyTeam")
@@ -2554,6 +2767,44 @@ namespace NhlFantasyLeague.api.Migrations
                     b.Navigation("Season");
 
                     b.Navigation("ToFantasyTeam");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeDateChange", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.TradeHistory", "TradeHistory")
+                        .WithMany("DateChanges")
+                        .HasForeignKey("TradeHistoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TradeHistory");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeHistory", b =>
+                {
+                    b.HasOne("NhlFantasyLeague.api.Models.Season", "Season")
+                        .WithMany()
+                        .HasForeignKey("SeasonId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "TeamA")
+                        .WithMany()
+                        .HasForeignKey("TeamAId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NhlFantasyLeague.api.Models.FantasyTeam", "TeamB")
+                        .WithMany()
+                        .HasForeignKey("TeamBId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Season");
+
+                    b.Navigation("TeamA");
+
+                    b.Navigation("TeamB");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeItem", b =>
@@ -2814,6 +3065,16 @@ namespace NhlFantasyLeague.api.Migrations
             modelBuilder.Entity("NhlFantasyLeague.api.Models.Player", b =>
                 {
                     b.Navigation("Contracts");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.StatusChangeHistory", b =>
+                {
+                    b.Navigation("DateChanges");
+                });
+
+            modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeHistory", b =>
+                {
+                    b.Navigation("DateChanges");
                 });
 
             modelBuilder.Entity("NhlFantasyLeague.api.Models.TradeOffer", b =>

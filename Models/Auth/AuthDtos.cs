@@ -37,6 +37,8 @@ namespace NhlFantasyLeague.api.Models.Auth
 
         public bool ShowContractsStats { get; set; }
         public bool ShowContractsRoster { get; set; }
+        public string StatistiquesPlayerFilter { get; set; } = "rostered";
+        public string StatistiquesStandingsView { get; set; } = "division";
     }
 
     public class SetPlayerPageStyleRequest
@@ -49,6 +51,8 @@ namespace NhlFantasyLeague.api.Models.Auth
     {
         public bool? ShowContractsStats { get; set; }
         public bool? ShowContractsRoster { get; set; }
+        public string? StatistiquesPlayerFilter { get; set; }
+        public string? StatistiquesStandingsView { get; set; }
     }
 
     public class AdminUserRowDto

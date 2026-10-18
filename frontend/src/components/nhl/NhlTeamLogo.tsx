@@ -44,6 +44,12 @@ export const NhlTeamLogo = memo(function NhlTeamLogo({
         return null;
     }
 
+    // Tampa Bay Lightning's primary logo is dark blue. On our dark
+    // backgrounds, it blends in. We apply a CSS filter to force all
+    // visible pixels to pure white so it reads perfectly everywhere
+    // (lineups, standings, game day, etc.).
+    const filter = abbr === 'TBL' ? 'brightness(0) invert(1)' : undefined;
+
     const style: React.CSSProperties = fillHeight
         ? {
             display: 'block',
@@ -53,6 +59,7 @@ export const NhlTeamLogo = memo(function NhlTeamLogo({
             maxHeight: '100%',
             flexShrink: 0,
             objectFit: 'contain',
+            filter,
         }
         : {
             display: 'block',
@@ -62,6 +69,7 @@ export const NhlTeamLogo = memo(function NhlTeamLogo({
             minHeight: size,
             flexShrink: 0,
             objectFit: 'contain',
+            filter,
         };
 
     return (

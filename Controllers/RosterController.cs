@@ -134,10 +134,49 @@ namespace NhlFantasyLeague.api.Controllers
         /// <returns>The team roster, or 404 when the team or season does not exist.</returns>
         [HttpGet("team/{fantasyTeamId}")]
         public async Task<IActionResult> GetTeamRoster(
-            int fantasyTeamId,
-            [FromQuery] int? seasonId)
+       int fantasyTeamId,
+       [FromQuery] int? seasonId)
         {
             var roster = await _rosterAdminService.GetTeamRosterAsync(fantasyTeamId, seasonId);
+
+            if (roster == null)
+            {
+                return NotFound();
+            }
+
+            return Ok(roster);
+        }
+
+        /// <summary>
+        /// Returns the fantasy team's roster as it stood on a specific
+        /// calendar date (ET, day precision). Used by the "Créer un
+        /// échange" and "Changer des statuts" admin forms so the
+        /// dropdowns reflect the players who were actually on that
+        /// team at the chosen date, not today's roster.
+        /// </summary>
+        [HttpGet("team/{fantasyTeamId:int}/at-date")]
+        public async Task<IActionResult> GetTeamRosterAtDate(
+            int fantasyTeamId,
+            [FromQuery] string date,
+            [FromQuery] int? seasonId,
+            CancellationToken ct = default)
+        {
+            if (!DateOnly.TryParseExact(
+                    date,
+                    "yyyy-MM-dd",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var parsed))
+            {
+                return BadRequest(new
+                {
+                    message = "Date must be in yyyy-MM-dd format."
+                });
+            }
+
+            var roster = await _rosterAdminService
+                .GetTeamRosterAtDateAsync(
+                    fantasyTeamId, parsed, seasonId, ct);
 
             if (roster == null)
             {

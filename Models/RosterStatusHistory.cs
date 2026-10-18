@@ -48,5 +48,28 @@
         /// "traded from Mathieu". Purely informational.
         /// </summary>
         public string? Note { get; set; }
+
+        /// <summary>
+        /// When non-null, this row was created by a recorded trade
+        /// (see FinalizeTradeAsync) and is owned by that TradeHistory
+        /// record. Used to identify exactly which history rows to move
+        /// when the trade's effective date is corrected later.
+        ///
+        /// Rows without this value come from every other path
+        /// (assign, swap, set-status, release, manual history edits,
+        /// auto-backfill) and are never touched by trade date changes.
+        /// </summary>
+        public int? TradeHistoryId { get; set; }
+        public TradeHistory? TradeHistory { get; set; }
+
+        /// <summary>
+        /// When non-null, this row was created by a recorded batch
+        /// status change (see FinalizeStatusChangeAsync) and is owned
+        /// by that StatusChangeHistory record. Used to identify exactly
+        /// which history rows to move when the status change's
+        /// effective date is corrected, or to delete on revert.
+        /// </summary>
+        public int? StatusChangeHistoryId { get; set; }
+        public StatusChangeHistory? StatusChangeHistory { get; set; }
     }
 }

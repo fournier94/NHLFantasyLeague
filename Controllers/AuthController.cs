@@ -211,6 +211,16 @@ namespace NhlFantasyLeague.api.Controllers
                 user.ShowContractsRoster = request.ShowContractsRoster.Value;
             }
 
+            if (!string.IsNullOrWhiteSpace(request.StatistiquesPlayerFilter))
+            {
+                user.StatistiquesPlayerFilter = request.StatistiquesPlayerFilter;
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.StatistiquesStandingsView))
+            {
+                user.StatistiquesStandingsView = request.StatistiquesStandingsView;
+            }
+
             await _userManager.UpdateAsync(user);
 
             return Ok(await BuildAuthUserAsync(user));
@@ -238,7 +248,9 @@ namespace NhlFantasyLeague.api.Controllers
                 IsCommissioner = await _authService.IsCommissionerAsync(user),
                 PlayerPageStyle = user.PlayerPageStyle.ToString(),
                 ShowContractsStats = user.ShowContractsStats,
-                ShowContractsRoster = user.ShowContractsRoster
+                ShowContractsRoster = user.ShowContractsRoster,
+                StatistiquesPlayerFilter = user.StatistiquesPlayerFilter,
+                StatistiquesStandingsView = user.StatistiquesStandingsView
             };
         }
     }

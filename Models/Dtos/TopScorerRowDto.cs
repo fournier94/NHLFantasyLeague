@@ -29,7 +29,7 @@
         /// /mon-equipe?teamId={FantasyTeamId}, comme sur la
         /// ClassementPage.
         /// </summary>
-        public int FantasyTeamId { get; set; }
+        public int? FantasyTeamId { get; set; }
 
         public string? FantasyTeamName { get; set; }
 

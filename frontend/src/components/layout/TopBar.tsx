@@ -82,7 +82,6 @@ const GOLD = '#FFC72C';
 const GAMEDAY_CYAN = '#00E5FF';
 const SEARCH_WHITE = '#FFFFFF';
 const MARKETPLACE_VIOLET = '#A855F7';
-const STATS_ORANGE = '#F97316';
 
 /**
  * Green used for the marketplace badge when only "Voir les offres"
@@ -629,6 +628,15 @@ export function TopBar() {
                     <Link
                         to='/statistiques'
                         aria-label='Statistiques'
+                        onClick={(e) => {
+                            if (location.pathname === '/statistiques') {
+                                e.preventDefault();
+                                navigate('/statistiques', {
+                                    state: { resetTab: Date.now() },
+                                    replace: true,
+                                });
+                            }
+                        }}
                         className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/statistiques'
                             ? 'text-primary'
                             : 'text-foreground'

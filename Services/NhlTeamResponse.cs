@@ -78,10 +78,10 @@ namespace NhlFantasyLeague.api.Services
 
         // ---- Goals ----
 
-        [JsonPropertyName("goalsFor")]
+        [JsonPropertyName("goalFor")]
         public int GoalsFor { get; set; }
 
-        [JsonPropertyName("goalsAgainst")]
+        [JsonPropertyName("goalAgainst")]
         public int GoalsAgainst { get; set; }
 
         [JsonPropertyName("goalDifferential")]
@@ -230,10 +230,10 @@ namespace NhlFantasyLeague.api.Services
         [JsonPropertyName("pointPctg")]
         public decimal PointPctg { get; set; }
 
-        [JsonPropertyName("goalsFor")]
+        [JsonPropertyName("goalFor")]
         public int GoalsFor { get; set; }
 
-        [JsonPropertyName("goalsAgainst")]
+        [JsonPropertyName("goalAgainst")]
         public int GoalsAgainst { get; set; }
 
         [JsonPropertyName("goalsForPerGame")]

@@ -793,7 +793,8 @@ export default function MonEquipePage() {
         'lineup' | 'cap' | 'draft'
     >('lineup');
 
-    const showContracts = user?.showContractsRoster ?? true;
+    // Default to false (unticked) when no preference is saved.
+    const showContracts = user?.showContractsRoster ?? false;
 
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
 

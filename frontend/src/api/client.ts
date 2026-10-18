@@ -290,6 +290,8 @@ export interface AuthUser {
     playerPageStyle: PlayerPageStyle;
     showContractsStats: boolean;
     showContractsRoster: boolean;
+    statistiquesPlayerFilter: string;
+    statistiquesStandingsView: string;
 }
 
 export interface LoginRequest {
@@ -346,7 +348,7 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
 export const setPlayerPageStyle = (style: PlayerPageStyle) =>
     apiPost<AuthUser>('/Auth/player-page-style', { style });
 
-export const updatePreferences = (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean }) =>
+export const updatePreferences = (prefs: { showContractsStats?: boolean; showContractsRoster?: boolean; statistiquesPlayerFilter?: string; statistiquesStandingsView?: string }) =>
     apiPost<AuthUser>('/Auth/preferences', prefs);
 
 // ---------------------------------------------------------------------
@@ -392,6 +394,92 @@ export interface FantasyTeam {
 
 export const getLeague = () => apiGet<League>('/League');
 export const getLeagueTeams = () => apiGet<FantasyTeam[]>('/League/teams');
+
+// ---------------------------------------------------------------------
+// NHL standings (real NHL team standings by conference / division)
+//
+// Read-only. Every authenticated user can access this, unlike the
+// admin-only NhlTeamController endpoints. Powers the "Équipes"
+// section of the Statistiques page.
+// ---------------------------------------------------------------------
+
+/** One row of /api/NhlStandings/team-season-stats. */
+export interface NhlTeamStandingsRow {
+    id: number;
+    nhlTeamId: number;
+
+    teamName: string;
+    teamCommonName: string;
+    teamPlaceName: string;
+    teamAbbreviation: string;
+    teamLogoUrl: string | null;
+
+    conferenceName: string | null;
+    divisionName: string | null;
+
+    nhlSeasonCode: number;
+    gameTypeId: number;
+
+    gamesPlayed: number;
+    wins: number;
+    losses: number;
+    otLosses: number;
+    ties: number;
+    points: number;
+    pointPctg: number;
+    gamesRemaining: number;
+
+    goalsFor: number;
+    goalsAgainst: number;
+    goalDifferential: number;
+
+    l10Wins: number;
+    l10Losses: number;
+    l10OtLosses: number;
+
+    streakCode: string | null;
+    streakCount: number;
+
+    leagueSequence: number;
+    conferenceSequence: number;
+    divisionSequence: number;
+    wildcardSequence: number;
+
+    clinchIndicator: string | null;
+    wildcardIndicator: boolean;
+
+    powerPlayPct: number;
+    penaltyKillPct: number;
+    faceoffWinPct: number;
+
+    lastUpdatedUtc: string;
+}
+
+/**
+ * Returns NHL team standings for one season and game type.
+ *
+ * Cached client-side for 60 seconds. The underlying data is only
+ * written once per day (daily team stats refresh at 07:00 ET) plus
+ * a handful of post-game write passes, so a minute of staleness is
+ * well within the noise.
+ */
+export function getNhlStandings(
+    seasonCode?: number,
+    gameTypeId: number = 2,
+): Promise<NhlTeamStandingsRow[]> {
+    const params = new URLSearchParams();
+
+    if (seasonCode != null) {
+        params.set('seasonCode', String(seasonCode));
+    }
+
+    params.set('gameTypeId', String(gameTypeId));
+
+    return apiGet<NhlTeamStandingsRow[]>(
+        `/NhlStandings/team-season-stats?${params.toString()}`,
+        { cacheTtlMs: 60_000 },
+    );
+}
 
 // ---------------------------------------------------------------------
 // Roster types
@@ -516,6 +604,27 @@ export const getTeamRoster = (fantasyTeamId: number) =>
     apiGet<TeamRoster>(`/Roster/team/${fantasyTeamId}`, {
         cacheTtlMs: 5_000,
     });
+
+/**
+ * Fetches the fantasy team's roster as it stood on a specific
+ * calendar date (ET, day precision). Used by the admin trade and
+ * status change forms so the dropdowns show the players who were
+ * actually on that team at the chosen date, not today's roster.
+ *
+ * Not cached: the result changes with every roster mutation and
+ * the date varies per request.
+ */
+export function getTeamRosterAtDate(
+    fantasyTeamId: number,
+    date: string,
+): Promise<TeamRoster> {
+    const params = new URLSearchParams();
+    params.set('date', date);
+    return apiGet<TeamRoster>(
+        `/Roster/team/${fantasyTeamId}/at-date?${params.toString()}`,
+        { cacheTtlMs: 0 },
+    );
+}
 
 /** One row from GET /api/Roster/ownership. */
 export interface PlayerOwnership {
@@ -963,8 +1072,7 @@ export interface TopScorerRow {
      * pour construire le lien /mon-equipe?teamId={id} sur le
      * nom de l'équipe.
      */
-    fantasyTeamId: number;
-
+    fantasyTeamId: number | null;
     fantasyTeamName: string | null;
 
     gamesPlayed: number;
@@ -1014,9 +1122,9 @@ export interface TopScorerRow {
     fantasyPoints: number | null;
 }
 
-export function getTopScorers(): Promise<TopScorerRow[]> {
+export function getTopScorers(playerFilter: string = 'rostered'): Promise<TopScorerRow[]> {
     return apiGet<TopScorerRow[]>(
-        '/Statistiques/top-scorers',
+        `/Statistiques/top-scorers?playerFilter=${playerFilter}`,
         { cacheTtlMs: 30_000 },
     );
 }
@@ -1518,6 +1626,43 @@ export function deleteManualContract(
     return apiDelete<{ message: string }>(
         `/CapFreezeContract/capfreeze/manual-contracts/contract/${playerContractId}`,
     );
+}
+
+// ---------------------------------------------------------------------
+// Database backups (commissioner only)
+//
+// pg_dump custom-format files. Restorable with `pg_restore`. The
+// admin page lists what is on the server, can trigger a fresh dump,
+// and can download any of them.
+// ---------------------------------------------------------------------
+
+export interface BackupFile {
+    filename: string;
+    sizeBytes: number;
+    createdAtUtc: string;
+}
+
+export function listBackups(): Promise<BackupFile[]> {
+    return apiGet<BackupFile[]>(
+        '/AdminBackup/list',
+        { cacheTtlMs: 0 },
+    );
+}
+
+export function triggerBackup(): Promise<{ filename: string }> {
+    return apiPost<{ filename: string }>(
+        '/AdminBackup/trigger',
+        {},
+    );
+}
+
+/**
+ * URL of the download endpoint. Returned as a plain string so the
+ * caller can put it on an <a href> (which lets the browser handle
+ * the stream and the save dialog) or assign it to window.location.
+ */
+export function downloadBackupUrl(filename: string): string {
+    return `/api/AdminBackup/download/${encodeURIComponent(filename)}`;
 }
 
 // ---------------------------------------------------------------------
@@ -2627,6 +2772,278 @@ export function deleteAcceptedTrade(
 ): Promise<{ message: string }> {
     return apiDelete<{ message: string }>(
         `/Marketplace/admin/accepted-trades/${responseId}`,
+    );
+}
+
+// ---------------------------------------------------------------------
+// Admin trades (commissioner only)
+//
+// Direct trade execution from the admin page. Unlike the marketplace,
+// this is used by the commissioner to record a trade the two managers
+// have already agreed on, with a chosen effective date. The finalize
+// endpoint applies all the moves + pick transfers in one transaction
+// and persists an immutable TradeHistory snapshot that can be used
+// to reconstruct the trade even if the rest of the DB is lost.
+// ---------------------------------------------------------------------
+
+export interface AdminTradePlayerSide {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    nhlTeamAbbreviation: string;
+    salary: number;
+    yearsRemaining: number;
+
+    /**
+     * Status the player held on his old team before the trade.
+     * Empty string for snapshots written before the status-override
+     * feature shipped.
+     */
+    previousStatus: string;
+
+    /**
+     * Status the player holds on his new team after the trade.
+     * Equal to previousStatus when the admin did not change the
+     * status as part of the trade. Empty for old snapshots.
+     */
+    newStatus: string;
+}
+
+export interface AdminTradePickSide {
+    draftPickId: number;
+    draftYear: number;
+    round: number;
+    originalOwnerFantasyTeamName: string;
+}
+
+export interface TradePlayerRequest {
+    playerId: number;
+    /** New status on the destination team, or null for no change. */
+    newStatus: string | null;
+}
+
+export interface FinalizeAdminTradeRequest {
+    teamAId: number;
+    teamBId: number;
+    /** UTC ISO instant (day precision applied server-side). */
+    effectiveAt: string;
+    note?: string | null;
+    teamASendingPlayers: TradePlayerRequest[];
+    teamBSendingPlayers: TradePlayerRequest[];
+    teamASendingDraftPickIds: number[];
+    teamBSendingDraftPickIds: number[];
+}
+
+export interface TradeHistoryDto {
+    id: number;
+    seasonId: number;
+    seasonName: string;
+    teamAId: number;
+    teamAName: string;
+    teamBId: number;
+    teamBName: string;
+    effectiveAt: string;
+    confirmedAt: string;
+    note: string | null;
+    teamASentPlayers: AdminTradePlayerSide[];
+    teamBSentPlayers: AdminTradePlayerSide[];
+    teamASentPicks: AdminTradePickSide[];
+    teamBSentPicks: AdminTradePickSide[];
+
+    /**
+     * Chronological audit trail of every date change made on this
+     * trade (oldest first). Empty when the trade was never re-dated.
+     */
+    dateChanges: TradeDateChangeDto[];
+}
+
+export interface FinalizeAdminTradeResult {
+    success: boolean;
+    message: string;
+    tradeHistory: TradeHistoryDto | null;
+}
+
+export function finalizeAdminTrade(
+    request: FinalizeAdminTradeRequest,
+): Promise<FinalizeAdminTradeResult> {
+    return apiPost<FinalizeAdminTradeResult>(
+        '/AdminTrade/finalize',
+        request,
+    );
+}
+
+export function getAdminTradeHistory(
+    seasonId?: number,
+): Promise<TradeHistoryDto[]> {
+    const query = seasonId != null ? `?seasonId=${seasonId}` : '';
+    return apiGet<TradeHistoryDto[]>(
+        `/AdminTrade/history${query}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
+/** One date change entry on a trade's audit trail. */
+export interface TradeDateChangeDto {
+    id: number;
+    previousEffectiveAt: string;
+    newEffectiveAt: string;
+    changedAt: string;
+    reason: string | null;
+}
+
+export interface ChangeAdminTradeDateResult {
+    success: boolean;
+    message: string;
+    tradeHistory: TradeHistoryDto | null;
+}
+
+export function changeAdminTradeDate(
+    tradeId: number,
+    newEffectiveAtIso: string,
+    reason: string | null,
+): Promise<ChangeAdminTradeDateResult> {
+    return apiPatch<ChangeAdminTradeDateResult>(
+        `/AdminTrade/history/${tradeId}/date`,
+        {
+            newEffectiveAt: newEffectiveAtIso,
+            reason,
+        },
+    );
+}
+
+/**
+ * Hard-deletes a recorded trade. Players and picks move back to
+ * their original teams, every trade-related RosterStatusHistory row
+ * is deleted, and a recompute is queued so season totals are
+ * rebuilt as if the trade never happened.
+ *
+ * Refused by the backend if any traded player or pick has had
+ * downstream changes since the trade.
+ */
+export function revertAdminTrade(
+    tradeId: number,
+): Promise<{ success: boolean; message: string }> {
+    return apiDelete<{ success: boolean; message: string }>(
+        `/AdminTrade/history/${tradeId}`,
+    );
+}
+
+// ---------------------------------------------------------------------
+// Admin status changes (commissioner only)
+//
+// Batch swap of RosterStatus on a single fantasy team. Mirrors the
+// admin trade flow but stays within one team: the admin selects two
+// statuses (e.g. Active and Bench), picks paired players on each
+// side, confirms, and every A-side player gets StatusB while every
+// B-side player gets StatusA.
+// ---------------------------------------------------------------------
+
+export interface AdminStatusChangePlayerSide {
+    playerId: number;
+    nhlPlayerId: number;
+    firstName: string;
+    lastName: string;
+    position: string;
+    nhlTeamAbbreviation: string;
+    previousStatusName: string;
+    newStatusName: string;
+}
+
+export interface StatusChangePair {
+    slotIndex: number;
+    statusASide: AdminStatusChangePlayerSide;
+    statusBSide: AdminStatusChangePlayerSide;
+}
+
+export interface StatusChangePairRequest {
+    statusASidePlayerId?: number | null;
+    statusBSidePlayerId?: number | null;
+}
+
+export interface FinalizeStatusChangeRequest {
+    fantasyTeamId: number;
+    effectiveAt: string;
+    statusA: string;
+    statusB: string;
+    note?: string | null;
+    pairs: StatusChangePairRequest[];
+}
+
+export interface StatusChangeDateChangeDto {
+    id: number;
+    previousEffectiveAt: string;
+    newEffectiveAt: string;
+    changedAt: string;
+    reason: string | null;
+}
+
+export interface StatusChangeHistoryDto {
+    id: number;
+    seasonId: number;
+    seasonName: string;
+    fantasyTeamId: number;
+    fantasyTeamName: string;
+    statusAName: string;
+    statusBName: string;
+    effectiveAt: string;
+    confirmedAt: string;
+    note: string | null;
+    pairs: StatusChangePair[];
+    dateChanges: StatusChangeDateChangeDto[];
+}
+
+export interface FinalizeStatusChangeResult {
+    success: boolean;
+    message: string;
+    statusChangeHistory: StatusChangeHistoryDto | null;
+}
+
+export interface ChangeStatusChangeDateResult {
+    success: boolean;
+    message: string;
+    statusChangeHistory: StatusChangeHistoryDto | null;
+}
+
+export function finalizeStatusChange(
+    request: FinalizeStatusChangeRequest,
+): Promise<FinalizeStatusChangeResult> {
+    return apiPost<FinalizeStatusChangeResult>(
+        '/AdminStatusChange/finalize',
+        request,
+    );
+}
+
+export function getStatusChangeHistory(
+    seasonId?: number,
+): Promise<StatusChangeHistoryDto[]> {
+    const query = seasonId != null ? `?seasonId=${seasonId}` : '';
+    return apiGet<StatusChangeHistoryDto[]>(
+        `/AdminStatusChange/history${query}`,
+        { cacheTtlMs: 0 },
+    );
+}
+
+export function changeStatusChangeDate(
+    statusChangeId: number,
+    newEffectiveAtIso: string,
+    reason: string | null,
+): Promise<ChangeStatusChangeDateResult> {
+    return apiPatch<ChangeStatusChangeDateResult>(
+        `/AdminStatusChange/history/${statusChangeId}/date`,
+        {
+            newEffectiveAt: newEffectiveAtIso,
+            reason,
+        },
+    );
+}
+
+export function revertStatusChange(
+    statusChangeId: number,
+): Promise<{ success: boolean; message: string }> {
+    return apiDelete<{ success: boolean; message: string }>(
+        `/AdminStatusChange/history/${statusChangeId}`,
     );
 }
 

@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Models;
+using NhlFantasyLeague.api.Models.Dtos;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Services;
 using System.Net.Http;
@@ -21,15 +22,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         // =================================================================
         // Arena lookup
-        //
-        // The NHL does not expose arena names on any modern endpoint.
-        // The old statsapi.web.nhl.com/api/v1/teams had a `venue.name`
-        // field, but it has been deprecated and no longer returns
-        // reliable data. This dictionary is the only non-API source
-        // of truth for the daily sync.
-        //
-        // Update it when a team relocates or opens a new building.
-        // The sync writes both ArenaName and ArenaCity onto NhlTeam.
         // =================================================================
 
         private static readonly Dictionary<string, (string Arena, string City)>
@@ -73,12 +65,6 @@ namespace NhlFantasyLeague.api.Services.NHL
         // Standings
         // =================================================================
 
-        /// <summary>
-        /// One row per team from /v1/standings/now. This is the
-        /// single richest endpoint we use: it carries every team's
-        /// identity fields, record, goals, splits, streak, ranks,
-        /// and clinch indicators in one call.
-        /// </summary>
         public async Task<List<NhlTeamResponse>> GetTeamsAsync()
         {
             var url = "https://api-web.nhle.com/v1/standings/now";
@@ -96,11 +82,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         // =================================================================
         // Team metadata (/stats/rest/en/team)
-        //
-        // Gives the numeric NHL team id and franchise id. The
-        // standings endpoint only returns the three-letter tri-code,
-        // not the numeric id, so this is the only way to map between
-        // the two.
         // =================================================================
 
         public async Task<List<NhlTeamMetadata>> GetTeamMetadataAsync()
@@ -120,10 +101,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         // =================================================================
         // Team summary (/stats/rest/en/team/summary)
-        //
-        // Season-level aggregates the standings endpoint does not
-        // carry: PP%, PK%, faceoff%, shots/game, penalty minutes per
-        // game. One call, one row per team, current season only.
         // =================================================================
 
         public async Task<List<NhlTeamSummary>> FetchTeamSummariesAsync()
@@ -131,12 +108,10 @@ namespace NhlFantasyLeague.api.Services.NHL
             var url =
                 "https://api.nhle.com/stats/rest/en/team/summary" +
                 "?isAggregate=false&isGame=false&sort=%5B%7B%22property%22" +
+                "%3A%22seasonId%22%2C%22direction%22%3A%22DESC%22%7D%2C%7B%22property%22" +
                 "%3A%22points%22%2C%22direction%22%3A%22DESC%22%7D%5D" +
-                "&start=0&limit=-1&factCayenneExp=gamesPlayed%3E%3D0" +
-                "&cayenneExp=gameTypeId%3D2%20and%20seasonId%3C%3D" +
-                GetCurrentNhlSeasonId() +
-                "%20and%20seasonId%3E%3D" +
-                GetCurrentNhlSeasonId();
+                "&start=0&limit=40&factCayenneExp=gamesPlayed%3E%3D0" +
+                "&cayenneExp=gameTypeId%3D2";
 
             var response = await _httpClient
                 .GetFromJsonAsync<NhlTeamSummaryResponse>(url);
@@ -147,18 +122,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
 
             return response.Data;
-        }
-
-        /// <summary>
-        /// Maps our internal NhlSeasonCode (e.g. 20262027) to the
-        /// NHL Stats API season id (e.g. 20262027). The two happen
-        /// to be identical for the 2026-2027 season, but this
-        /// indirection exists so a future season code change only
-        /// has one place to update.
-        /// </summary>
-        private static int GetCurrentNhlSeasonId()
-        {
-            return NhlFantasyLeague.api.Constants.SeasonCodes.Current;
         }
 
         // =================================================================
@@ -182,24 +145,13 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         // =================================================================
         // Initial bootstrap: sync NhlTeams identity only
-        //
-        // Kept for the very first setup and the weekly deep refresh.
-        // The daily job uses SyncTeamSeasonStatsAsync instead, which
-        // refreshes identity AND season stats in one pass.
         // =================================================================
 
         public async Task<List<NhlTeam>> SyncTeamsAsync()
         {
-            // Get the current NHL teams.
             var currentTeams = await GetTeamsAsync();
-
-            // Get NHL team metadata, which contains numeric team IDs.
             var teamMetadata = await GetTeamMetadataAsync();
 
-            // SAFETY: NHL always has 32 teams. Anything below 30 means
-            // the API returned a partial response (rate limit, network
-            // truncation, upstream bug). Refuse to sync rather than
-            // deleting teams that simply weren't in the response.
             if (currentTeams.Count < 30)
             {
                 throw new InvalidOperationException(
@@ -272,13 +224,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             var existingTeams = await _dbContext.NhlTeams
                 .ToListAsync();
 
-            // Remove teams that are not part of the current NHL.
-            //
-            // This removes historical teams such as the Quebec
-            // Nordiques if they exist from an earlier test. Existing
-            // players referencing those teams are protected by the
-            // FK's Restrict behaviour, so a team with players is
-            // never deleted.
             foreach (var existingTeam in existingTeams)
             {
                 if (!currentNhlTeamIds.Contains(existingTeam.NhlTeamId))
@@ -353,11 +298,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             return savedTeams;
         }
 
-        /// <summary>
-        /// Sets ArenaName and ArenaCity from the static dictionary,
-        /// using the team's abbreviation as the key. No-op when the
-        /// abbreviation is missing from the dictionary.
-        /// </summary>
         private static void ApplyArena(NhlTeam team)
         {
             if (string.IsNullOrWhiteSpace(team.Abbreviation))
@@ -374,22 +314,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             }
         }
 
-        /// <summary>
-        /// Returns the team's place/city name. Prefers the API value;
-        /// falls back to "Name minus CommonName" when the API value
-        /// is blank.
-        ///
-        /// The NHL's standings endpoint does not populate
-        /// teamPlaceNameWithPreposition reliably, which left
-        /// PlaceName empty and broke the two-line team name on the
-        /// Game Day banner. Deriving the place from the full name and
-        /// the nickname is guaranteed to work for every NHL club:
-        ///
-        ///   "Carolina Hurricanes"  - "Hurricanes"    -> "Carolina"
-        ///   "Montréal Canadiens"   - "Canadiens"     -> "Montréal"
-        ///   "Vegas Golden Knights" - "Golden Knights" -> "Vegas"
-        ///   "Tampa Bay Lightning"  - "Lightning"     -> "Tampa Bay"
-        /// </summary>
         private static string ResolvePlaceName(
             string? apiPlaceName,
             string? fullName,
@@ -420,20 +344,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
         // =================================================================
         // Daily sync: identity + season stats
-        //
-        // Called by the daily team stats job. Makes three HTTP calls
-        // total (standings, team metadata, team summary, franchises)
-        // and writes:
-        //   - NhlTeam identity fields (name, abbrev, conference,
-        //     division, arena, franchise id, official site url).
-        //   - NhlTeamSeasonStat rows for the given season and game
-        //     type (default: 2 = regular season).
-        //
-        // Idempotent: safe to run twice on the same day. The
-        // NhlTeamSeasonStat upsert is by (team, season, game type).
-        //
-        // The method does NOT touch NhlTeam.Players, Player, or any
-        // other player-level data. It is purely team-level.
         // =================================================================
 
         public async Task<NhlTeamStatsSyncResult> SyncTeamSeasonStatsAsync(
@@ -447,14 +357,8 @@ namespace NhlFantasyLeague.api.Services.NHL
                 GameTypeId = gameTypeId
             };
 
-            // ---- Fetch -------------------------------------------------
-
             var standings = await GetTeamsAsync();
 
-            // SAFETY: partial-response guard, same rule as
-            // SyncTeamsAsync. Anything below 30 teams means the
-            // standings endpoint returned truncated data and we
-            // refuse to write.
             if (standings.Count < 30)
             {
                 result.Error =
@@ -480,8 +384,6 @@ namespace NhlFantasyLeague.api.Services.NHL
             result.FranchiseRows = franchises.Count;
             result.SummaryRows = summaries.Count;
 
-            // ---- Index everything ---------------------------------------
-
             var metadataByAbbreviation = teamMetadata
                 .Where(t => !string.IsNullOrWhiteSpace(t.TriCode))
                 .GroupBy(t => t.TriCode)
@@ -490,24 +392,16 @@ namespace NhlFantasyLeague.api.Services.NHL
                     g => g.First(),
                     StringComparer.OrdinalIgnoreCase);
 
-            // Franchises are keyed by their most recent team id, so
-            // the lookup matches a team's numeric NHL id.
             var franchiseByMostRecentTeamId = franchises
                 .Where(f => f.MostRecentTeamId.HasValue)
                 .GroupBy(f => f.MostRecentTeamId!.Value)
                 .ToDictionary(g => g.Key, g => g.First());
 
-            // Team summaries keyed by tri-code. The summary endpoint
-            // returns a row per team per season; we only request the
-            // current season, so one row per team.
-            var summaryByAbbreviation = summaries
-                .Where(s => !string.IsNullOrWhiteSpace(s.TeamAbbrev))
-                .GroupBy(
-                    s => s.TeamAbbrev,
-                    StringComparer.OrdinalIgnoreCase)
+            // THE FIX: Group by TeamId and take the first to prevent duplicate key crashes
+            // caused by the API returning both 2026 and 2025 seasons in the same payload.
+            var summaryByTeamId = summaries
+                .GroupBy(s => s.TeamId)
                 .ToDictionary(g => g.Key, g => g.First());
-
-            // ---- Load existing rows -------------------------------------
 
             var existingTeams = await _dbContext.NhlTeams
                 .ToListAsync(ct);
@@ -526,8 +420,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
             var now = DateTime.UtcNow;
 
-            // ---- Upsert -------------------------------------------------
-
             foreach (var standing in standings)
             {
                 var abbreviation = standing.TeamAbbrev.Default;
@@ -539,8 +431,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                     result.SkippedNoMetadata++;
                     continue;
                 }
-
-                // ---- NhlTeam identity ------------------------------
 
                 if (!existingTeamsByNhlId.TryGetValue(
                         metadata.Id,
@@ -586,8 +476,6 @@ namespace NhlFantasyLeague.api.Services.NHL
 
                 ApplyArena(team);
 
-                // ---- NhlTeamSeasonStat -----------------------------
-
                 if (!existingStatsByTeamId.TryGetValue(
                         metadata.Id,
                         out var stat))
@@ -608,7 +496,6 @@ namespace NhlFantasyLeague.api.Services.NHL
                     result.StatsUpdated++;
                 }
 
-                // Record (from standings)
                 stat.GamesPlayed = standing.GamesPlayed;
                 stat.Wins = standing.Wins;
                 stat.Losses = standing.Losses;
@@ -646,14 +533,9 @@ namespace NhlFantasyLeague.api.Services.NHL
                 stat.ShootoutWins = standing.ShootoutWins;
                 stat.ShootoutLosses = standing.ShootoutLosses;
 
-                // Team summary (PP%, PK%, faceoff%, shots/game).
-                // Missing summary rows leave the fields at their
-                // previous value rather than zeroing them, so a
-                // transient summary-endpoint failure does not wipe
-                // good data.
-                if (summaryByAbbreviation.TryGetValue(
-                        abbreviation,
-                        out var summary))
+                // THE FIX: We lookup the summary using the NHL Team ID (metadata.Id),
+                // not the abbreviation.
+                if (summaryByTeamId.TryGetValue(metadata.Id, out var summary))
                 {
                     stat.PowerPlayPct = summary.PowerPlayPct;
                     stat.PowerPlayNetPct = summary.PowerPlayNetPct;
