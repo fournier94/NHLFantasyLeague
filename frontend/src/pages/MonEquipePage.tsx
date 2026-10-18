@@ -541,8 +541,16 @@ const LineupRow = memo(function LineupRow({
             // alignées verticalement avec les headers au-dessus.
             //
             // min-h-[40px] sur les écrans >= 400px, min-h-[38px] en
-            // dessous.
-            className='grid min-h-[40px] max-[399px]:min-h-[38px] w-full items-center gap-x-0.5 border-b py-1 pl-1 pr-2 text-[0.9rem] tabular-nums transition-[filter] duration-150 hover:brightness-110 min-[400px]:gap-x-1'
+            // dessous quand "Contrats" est coché (deux lignes par
+            // joueur : nom + contrat).
+            //
+            // Quand "Contrats" est décoché, une seule ligne par
+            // joueur, donc min-h réduit à 32px (>= 400px) / 30px
+            // (< 400px) pour des rangées plus compactes.
+            className={`grid w-full items-center gap-x-0.5 border-b py-1 pl-1 pr-2 text-[0.9rem] tabular-nums transition-[filter] duration-150 hover:brightness-110 min-[400px]:gap-x-1 ${showContracts
+                    ? 'min-h-[40px] max-[399px]:min-h-[38px]'
+                    : 'min-h-[32px] max-[399px]:min-h-[30px]'
+                }`}
             style={{
                 gridTemplateColumns: LINEUP_GRID_COLUMNS,
                 borderLeft: '6px solid transparent',
@@ -567,8 +575,13 @@ const LineupRow = memo(function LineupRow({
                         height: '100%',
                         aspectRatio: '1 / 1',
                         flexShrink: 0,
+                        // translateX(1px) est placé AVANT le scale() dans
+                        // la chaîne de transform, donc appliqué APRÈS le
+                        // scale (CSS applique de droite à gauche). Le
+                        // déplacement visuel est exactement 1px vers la
+                        // droite, quel que soit le facteur de scale.
                         transform:
-                            'scale(var(--lineup-logo-scale, 1.25))',
+                            'translateX(2px) scale(var(--lineup-logo-scale, 1.25))',
                         transformOrigin: 'center',
                     }}
                 >

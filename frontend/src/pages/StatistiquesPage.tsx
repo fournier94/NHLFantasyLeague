@@ -1074,23 +1074,22 @@ function PlayerFilterDropdown({ value, onChange }: { value: string, onChange: (v
  * Bouton "Filtres" qui ouvre le modal des filtres avancés.
  *
  * Même technique visuelle que les boutons `PositionFilterButton`
- * juste au-dessus : le bouton garde TOUJOURS la même couleur bleue
- * (#3B82F6), qu'il y ait des filtres actifs ou non. Il n'y a plus
- * de vert "filtres actifs" — l'intensité de l'aura bleue est ce qui
- * distingue les deux états :
+ * juste au-dessus, MAIS en blanc dans les deux états. La couleur
+ * du texte et de l'aura est toujours `#FFFFFF`; c'est l'intensité
+ * de l'aura et l'opacité de la bordure qui distinguent les états :
  *
- *   - Inactif : bordure à ~62% d'opacité, aura à 0.16 d'opacité.
+ *   - Inactif : bordure blanche à ~62% d'opacité, aura à 0.16
+ *               d'opacité (halo très discret).
  *   - Hover   : bordure à ~95%, aura un peu plus prononcée, bouton
  *               qui se soulève de 1px (même comportement que les
  *               boutons de position).
- *   - Actif   : bordure pleine, aura multi-couches complète
+ *   - Actif   : bordure blanche pleine, aura multi-couches complète
  *               (tight / medium / wide + filament inset blanc),
  *               identique à l'état actif des boutons de position.
  *
  * L'état actif lit donc comme "ce bouton a quelque chose à
- * signaler" tout en restant dans la même famille chromatique que
- * le bouton inactif, ce qui est exactement ce que les boutons de
- * position font (bleu "Défenseurs", cyan "Tous", etc.).
+ * signaler" sans introduire de teinte différente : c'est le blanc
+ * qui s'allume, pas une autre couleur.
  */
 function FiltersButton({
     hasActiveFilters,
@@ -1101,8 +1100,10 @@ function FiltersButton({
 }) {
     const [hovered, setHovered] = useState(false);
 
-    // Blue when active, white when inactive.
-    const color = hasActiveFilters ? '#3B82F6' : '#FFFFFF';
+    // White in both states. The active state is distinguished by
+    // the brightness of the border and the intensity of the glow
+    // stack, not by a hue change.
+    const color = '#FFFFFF';
 
     const hexToRgba = (hex: string, alpha: number) => {
         const clean = hex.replace('#', '');
@@ -1905,29 +1906,77 @@ const DIVISION_ORDER = [
 ];
 
 const TEAM_STANDINGS_GRID =
-    '18px minmax(0, 1fr) 22px 22px 22px 26px 28px 32px';
+    '18px 72px 12px repeat(5, 28px) 46px repeat(3, 38px) repeat(5, 50px)';
 
-function compareStandings(
+type TeamSortKey =
+    | 'name'
+    | 'gp'
+    | 'wins'
+    | 'losses'
+    | 'otLosses'
+    | 'points'
+    | 'pct'
+    | 'diff'
+    | 'bp'
+    | 'bc'
+    | 'an'
+    | 'dn'
+    | 'mj'
+    | 'seq'
+    | '10d';
+
+function getSeqWeight(c: string | null, count: number) {
+    if (!c) return 0;
+    if (c === 'W') return count * 10 + 3;
+    if (c === 'OT') return count * 10 + 2;
+    if (c === 'L') return count * 10 + 1;
+    return 0;
+}
+
+function compareTeams(
     a: NhlTeamStandingsRow,
     b: NhlTeamStandingsRow,
+    key: TeamSortKey,
+    dir: 'asc' | 'desc'
 ): number {
-    if (b.points !== a.points) return b.points - a.points;
-    if (b.wins !== a.wins) return b.wins - a.wins;
-
-    if (b.goalDifferential !== a.goalDifferential) {
-        return b.goalDifferential - a.goalDifferential;
+    let cmp = 0;
+    switch (key) {
+        case 'name': cmp = a.teamAbbreviation.localeCompare(b.teamAbbreviation); break;
+        case 'gp': cmp = a.gamesPlayed - b.gamesPlayed; break;
+        case 'wins': cmp = a.wins - b.wins; break;
+        case 'losses': cmp = a.losses - b.losses; break;
+        case 'otLosses': cmp = a.otLosses - b.otLosses; break;
+        case 'points': cmp = a.points - b.points; break;
+        case 'pct': cmp = a.pointPctg - b.pointPctg; break;
+        case 'diff': cmp = a.goalDifferential - b.goalDifferential; break;
+        case 'bp': cmp = a.goalsFor - b.goalsFor; break;
+        case 'bc': cmp = a.goalsAgainst - b.goalsAgainst; break;
+        case 'an': cmp = a.powerPlayPct - b.powerPlayPct; break;
+        case 'dn': cmp = a.penaltyKillPct - b.penaltyKillPct; break;
+        case 'mj': cmp = a.faceoffWinPct - b.faceoffWinPct; break;
+        case 'seq': cmp = getSeqWeight(a.streakCode, a.streakCount) - getSeqWeight(b.streakCode, b.streakCount); break;
+        case '10d': cmp = (a.l10Wins * 2 + a.l10OtLosses) - (b.l10Wins * 2 + b.l10OtLosses); break;
     }
 
-    if (a.gamesPlayed !== b.gamesPlayed) {
-        return a.gamesPlayed - b.gamesPlayed;
+    if (cmp === 0) {
+        if (b.points !== a.points) return b.points - a.points;
+        if (b.wins !== a.wins) return b.wins - a.wins;
+        if (b.goalDifferential !== a.goalDifferential) return b.goalDifferential - a.goalDifferential;
+        if (a.gamesPlayed !== b.gamesPlayed) return a.gamesPlayed - b.gamesPlayed;
+        return a.teamAbbreviation.localeCompare(b.teamAbbreviation);
     }
 
-    return a.teamAbbreviation.localeCompare(b.teamAbbreviation);
+    return dir === 'asc' ? cmp : -cmp;
 }
 
 function formatDiff(diff: number): string {
     if (diff > 0) return `+${diff}`;
     return String(diff);
+}
+
+function formatPct(val: number): string {
+    if (val === 0) return '0.0';
+    return (val <= 1 ? val * 100 : val).toFixed(1);
 }
 
 interface StandingsGroup {
@@ -1939,13 +1988,17 @@ interface StandingsGroup {
 function groupStandings(
     rows: NhlTeamStandingsRow[],
     view: StandingsView,
+    sortKey: TeamSortKey,
+    sortDir: 'asc' | 'desc'
 ): StandingsGroup[] {
+    const sorter = (a: NhlTeamStandingsRow, b: NhlTeamStandingsRow) => compareTeams(a, b, sortKey, sortDir);
+
     if (view === 'league') {
         return [
             {
                 key: 'league',
                 label: 'LNH',
-                teams: Array.from(rows).sort(compareStandings),
+                teams: Array.from(rows).sort(sorter),
             },
         ];
     }
@@ -1986,9 +2039,42 @@ function groupStandings(
         .map(([rawKey, teams]) => ({
             key: rawKey,
             label: labels[rawKey] ?? rawKey,
-            teams: Array.from(teams).sort(compareStandings),
+            teams: Array.from(teams).sort(sorter),
         }));
 }
+
+const SortableStandingsHeader = memo(function SortableStandingsHeader({
+    label,
+    sortKey,
+    activeSortKey,
+    sortDirection,
+    onSort,
+    className = '',
+}: {
+    label: string;
+    sortKey: TeamSortKey;
+    activeSortKey: TeamSortKey;
+    sortDirection: 'asc' | 'desc';
+    onSort: (key: TeamSortKey) => void;
+    className?: string;
+}) {
+    const active = activeSortKey === sortKey;
+    return (
+        <button
+            type='button'
+            onClick={() => onSort(sortKey)}
+            className={`flex cursor-pointer select-none flex-col items-center justify-center border-0 bg-transparent p-0 font-black uppercase transition-colors hover:text-white ${className}`}
+        >
+            <span className='leading-none'>{label}</span>
+            <span
+                className='mt-0.5 flex h-[0.6rem] items-end justify-center text-[0.55rem] leading-none'
+                aria-hidden='true'
+            >
+                {active && (sortDirection === 'asc' ? '▲' : '▼')}
+            </span>
+        </button>
+    );
+});
 
 const NhlStandingsTable = memo(function NhlStandingsTable({
     view,
@@ -1998,6 +2084,18 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
     const [rows, setRows] = useState<NhlTeamStandingsRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+
+    const [sortKey, setSortKey] = useState<TeamSortKey>('points');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+    const handleSort = (key: TeamSortKey) => {
+        if (key === sortKey) {
+            setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortKey(key);
+            setSortDir(key === 'name' ? 'asc' : 'desc');
+        }
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -2031,8 +2129,8 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
     }, []);
 
     const groups = useMemo(
-        () => groupStandings(rows, view),
-        [rows, view],
+        () => groupStandings(rows, view, sortKey, sortDir),
+        [rows, view, sortKey, sortDir],
     );
 
     if (loading) {
@@ -2067,86 +2165,125 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
                         {group.label}
                     </h3>
 
-                    <div className='w-full overflow-hidden'>
-                        {/* Header Row */}
-                        <div
-                            className='grid w-full items-center py-2 px-3 text-[0.8rem] font-black uppercase leading-none sm:text-[0.85rem]'
-                            style={{
-                                gridTemplateColumns: TEAM_STANDINGS_GRID,
-                                columnGap: '0.3rem',
-                                border: '2px solid #FFFFFF',
-                            }}
-                        >
-                            <div className='text-center text-white'>#</div>
-                            <div className='pl-1 text-white tracking-wider'>Équipe</div>
-                            <div className='text-center text-white'>GP</div>
-                            <div className='text-center text-white'>V</div>
-                            <div className='text-center text-white'>D</div>
-                            <div className='text-center text-white'>DP</div>
-                            <div className='text-center text-white'>PTS</div>
-                            <div className='text-center text-white'>DIFF</div>
-                        </div>
+                    <div className='w-full overflow-x-auto pb-2'>
+                        <div className='w-max mx-auto'>
+                            {/* Header Row */}
+                            <div
+                                className='grid w-full items-center py-2 px-3 text-[0.8rem] font-black uppercase leading-none sm:text-[0.85rem]'
+                                style={{
+                                    gridTemplateColumns: TEAM_STANDINGS_GRID,
+                                    columnGap: '2px',
+                                    border: '2px solid #FFFFFF',
+                                    backgroundColor: '#050A16',
+                                }}
+                            >
+                                <div />
+                                <SortableStandingsHeader label='Équipe' sortKey='name' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='pl-1 tracking-wider whitespace-nowrap' />
+                                <div />
+                                <SortableStandingsHeader label='GP' sortKey='gp' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='V' sortKey='wins' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='D' sortKey='losses' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='DP' sortKey='otLosses' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='PTS' sortKey='points' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='%' sortKey='pct' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='DIFF' sortKey='diff' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='BP' sortKey='bp' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='BC' sortKey='bc' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='AN%' sortKey='an' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='DN%' sortKey='dn' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='MJ%' sortKey='mj' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='SÉQ' sortKey='seq' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                                <SortableStandingsHeader label='10D' sortKey='10d' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
+                            </div>
 
-                        {/* Data Rows */}
-                        <div>
-                            {group.teams.map((team, index) => (
-                                <div
-                                    key={team.id}
-                                    className='grid items-center py-2 px-3 text-[1.05rem] font-bold tabular-nums leading-none transition-[filter] duration-150 hover:brightness-110'
-                                    style={{
-                                        gridTemplateColumns: TEAM_STANDINGS_GRID,
-                                        backgroundColor: getNhlTeamColor(team.teamAbbreviation),
-                                        color: getNhlTeamTextColor(team.teamAbbreviation),
-                                        columnGap: '0.3rem',
-                                        border: '2px solid transparent',
-                                        contentVisibility: 'auto',
-                                        containIntrinsicSize: '40px',
-                                    } as React.CSSProperties}
-                                >
-                                    <div className='text-center'>
-                                        {index + 1}
-                                    </div>
-
-                                    <div className='flex min-w-0 items-center gap-3 pl-2'>
-                                        <div
-                                            style={{
-                                                width: 20,
-                                                height: 20,
-                                                flexShrink: 0,
-                                                transform: 'scale(2)',
-                                                transformOrigin: 'center',
-                                            }}
-                                        >
-                                            <NhlTeamLogo
-                                                abbreviation={team.teamAbbreviation}
-                                                size={20}
-                                            />
+                            {/* Data Rows */}
+                            <div>
+                                {group.teams.map((team, index) => (
+                                    <div
+                                        key={team.id}
+                                        className='grid items-center py-2 px-3 text-[0.95rem] font-bold tabular-nums leading-none transition-[filter] duration-150 hover:brightness-110'
+                                        style={{
+                                            gridTemplateColumns: TEAM_STANDINGS_GRID,
+                                            backgroundColor: getNhlTeamColor(team.teamAbbreviation),
+                                            backgroundImage: 'linear-gradient(to right, transparent 240px, rgba(0,0,0,0.15) 240px, rgba(0,0,0,0.15) 268px, transparent 268px)',
+                                            color: getNhlTeamTextColor(team.teamAbbreviation),
+                                            columnGap: '2px',
+                                            border: '2px solid transparent',
+                                            contentVisibility: 'auto',
+                                            containIntrinsicSize: '40px',
+                                        } as React.CSSProperties}
+                                    >
+                                        <div className='flex justify-center items-center'>
+                                            {index + 1}
                                         </div>
-                                        <span className='truncate'>
-                                            {team.teamAbbreviation}
-                                        </span>
-                                    </div>
 
-                                    <div className='text-center'>
-                                        {team.gamesPlayed}
+                                        <div className='flex min-w-0 items-center gap-2 pl-1 whitespace-nowrap'>
+                                            <div
+                                                style={{
+                                                    width: 20,
+                                                    height: 20,
+                                                    flexShrink: 0,
+                                                    transform: 'scale(1.5)',
+                                                    transformOrigin: 'center',
+                                                }}
+                                            >
+                                                <NhlTeamLogo
+                                                    abbreviation={team.teamAbbreviation}
+                                                    size={20}
+                                                />
+                                            </div>
+                                            <span className='truncate'>
+                                                {team.teamAbbreviation}
+                                            </span>
+                                        </div>
+
+                                        <div />
+
+                                        <div className='flex justify-center items-center'>
+                                            {team.gamesPlayed}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.wins}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.losses}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.otLosses}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.points}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {formatPct(team.pointPctg)}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {formatDiff(team.goalDifferential)}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.goalsFor}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.goalsAgainst}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {formatPct(team.powerPlayPct)}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {formatPct(team.penaltyKillPct)}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {formatPct(team.faceoffWinPct)}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.streakCode ? `${team.streakCode}${team.streakCount}` : '—'}
+                                        </div>
+                                        <div className='flex justify-center items-center'>
+                                            {team.l10Wins}-{team.l10Losses}-{team.l10OtLosses}
+                                        </div>
                                     </div>
-                                    <div className='text-center'>
-                                        {team.wins}
-                                    </div>
-                                    <div className='text-center'>
-                                        {team.losses}
-                                    </div>
-                                    <div className='text-center'>
-                                        {team.otLosses}
-                                    </div>
-                                    <div className='text-center'>
-                                        {team.points}
-                                    </div>
-                                    <div className='text-center'>
-                                        {formatDiff(team.goalDifferential)}
-                                    </div>
-                                </div>
-                            ))}
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </div>
