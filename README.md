@@ -1,4 +1,5 @@
-﻿# Ligue de Mousse
+﻿[![build](https://github.com/fournier94/NHLFantasyLeague/actions/workflows/build.yml/badge.svg)](https://github.com/fournier94/NHLFantasyLeague/actions/workflows/build.yml)
+# Ligue de Mousse
 
 **Démo en ligne VERSION MOBILE SEULEMENT (la version desktop n'est pas présentement prise en compte lors du développement) → [liguedemousse.com](https://liguedemousse.com)** (consultable sans compte).
 

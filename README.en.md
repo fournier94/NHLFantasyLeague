@@ -1,4 +1,4 @@
-﻿
+﻿[![build](https://github.com/fournier94/NHLFantasyLeague/actions/workflows/build.yml/badge.svg)](https://github.com/fournier94/NHLFantasyLeague/actions/workflows/build.yml)
 ---
 
 ## `README.en.md` (English)
