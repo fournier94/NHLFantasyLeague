@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.cs   text diff=csharp
+*.ts   text diff=typescript
+*.tsx  text diff=typescript
+*.json text
+*.md   text
+*.png  binary
+*.jpg  binary
+*.svg  text
+
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
