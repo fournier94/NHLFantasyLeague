@@ -20,8 +20,8 @@ import {
 } from '@/lib/gameDayRestoration';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import {
-    getNhlTeamAuraColor,
     getNhlTeamColor,
+    getNhlTeamTextColor,
 } from '@/lib/nhlTeamColors';
 import { useAura } from '@/lib/auraContext';
 import {
@@ -583,136 +583,103 @@ function TeamSide({
     commonName,
     record,
     fillColor,
-    stripColor,
-    side,
+    secondaryColor,
     dimmed = false,
     active = false,
     onLogoClick,
+    nhlTeamId,
+    onTeamPageClick,
 }: {
     abbreviation: string;
     placeName: string;
     commonName: string;
     record: string | null;
     fillColor: string;
-    stripColor: string;
-    side: 'away' | 'home';
+    secondaryColor: string;
     dimmed?: boolean;
-    /**
-     * True when the card is expanded and this side is the one the
-     * user is currently looking at. Adds a +15% saturation filter
-     * on top of the team-color fill so the active side reads as
-     * slightly richer than its sibling. Mutually exclusive with
-     * `dimmed` — when the card is expanded, exactly one side is
-     * active and the other is dimmed.
-     */
     active?: boolean;
-    /**
-     * When provided, the team logo becomes clickable and navigates
-     * to that team's detail page. Only set on unstarted games
-     * (FUT / PRE), so the click does not fight the boxscore expand
-     * behaviour that clickable cards have.
-     */
     onLogoClick?: () => void;
+    nhlTeamId: number;
+    onTeamPageClick: (nhlTeamId: number) => void;
 }) {
-    const isAway = side === 'away';
-    const accentSide: 'left' | 'right' = isAway ? 'left' : 'right';
-
     // Black palette used when this side is the "inactive" side of an
-    // expanded game card. Both values are opaque hex; they are run
-    // through the same `99` alpha suffix below, so they end up at
-    // the same visual weight as the team colors they replace.
-    // Sitting over the navy PANEL_BG at ~60% alpha, this reads as a
-    // dark, neutral block with no team hue.
+    // expanded game card.
     const DIMMED_FILL = '#000000';
-    const DIMMED_STRIP = '#000000';
 
     const effectiveFill = dimmed ? DIMMED_FILL : fillColor;
-    const effectiveStrip = dimmed ? DIMMED_STRIP : stripColor;
 
-    // Solid fill. The two-hex-digit suffix on the six-digit hex sets
-    // the alpha: 99 is ~60%, which reads as a solid color while
-    // keeping the panel dark enough for the white text on top.
-    // Raise to CC (~80%) or drop the suffix entirely for a fully
-    // opaque, brighter side.
+    // Solid fill with approximately 60% opacity.
     const solidTeamColor = `${effectiveFill}99`;
 
-    // Very subtle vertical shade so the panel doesn't read as flat.
-    // Top and bottom are slightly darker than the center; the effect
-    // is almost invisible but gives the panel a physical feel. It is
-    // painted on top of the solid fill.
+    // Subtle vertical shade.
     const verticalShade =
         'linear-gradient(180deg, ' +
         'rgba(0, 0, 0, 0.18) 0%, ' +
         'rgba(0, 0, 0, 0) 45%, ' +
         'rgba(0, 0, 0, 0.22) 100%)';
 
-    // Saturation boost applied to the currently-viewed side. +15%
-    // is deliberately subtle — enough to make the active team color
-    // read as slightly richer than its sibling, not enough to look
-    // like a different color. Suppressed when the side is dimmed,
-    // because dimming and boosting at the same time is contradictory.
+    // Slight saturation boost for the active team.
     const saturationFilter =
         active && !dimmed ? 'saturate(1.15)' : undefined;
 
+    // ================================================================
+    // PAGE D'ÉQUIPE BUTTON — DESIGN #1
+    // Double border + visible inner glow
+    // ================================================================
+
+    // Keep the team's color in the button while darkening the surface
+    // enough for the border and text to stand out.
+    const buttonBg = dimmed
+        ? 'rgba(17, 17, 17, 0.96)'
+        : `${secondaryColor}A6`;
+
+    const buttonText = dimmed
+        ? '#AAAAAA'
+        : fillColor;
+
+    // Outer border uses the team's secondary color.
+    const buttonBorder = dimmed
+        ? '#666666'
+        : secondaryColor;
+
+    // A separate, light inset line makes the double-border effect
+    // visible even when the team color is similar to the background.
+    const buttonShadow = dimmed
+        ? [
+            'inset 0 0 0 1px rgba(255, 255, 255, 0.14)',
+            'inset 0 0 7px rgba(255, 255, 255, 0.04)',
+        ].join(', ')
+        : [
+            // Inner light-colored line: the second border.
+            'inset 0 0 0 1px rgba(255, 255, 255, 0.72)',
+
+            // Colored light inside the button.
+            `inset 0 0 7px ${secondaryColor}`,
+
+            // Darken the center slightly so the text stays readable.
+            'inset 0 0 3px 1px rgba(0, 0, 0, 0.55)',
+
+            // Restrained colored glow around the outside.
+            `0 0 5px ${secondaryColor}`,
+        ].join(', ');
+
     return (
         <div
-            className='relative flex min-w-0 flex-col items-center justify-center overflow-hidden px-3 pt-2 pb-4 text-center transition-[filter] duration-200'
+            className='relative flex min-w-0 flex-col items-center justify-center overflow-hidden pt-2 pb-8 text-center transition-[filter] duration-200'
             style={{
                 backgroundColor: PANEL_BG,
                 backgroundImage: [
                     verticalShade,
-                    // A uniform fill. Repeating the same color at
-                    // both ends of a linear-gradient gives a flat,
-                    // gradient-free fill that sits on top of
-                    // PANEL_BG and underneath the vertical shade.
                     `linear-gradient(${solidTeamColor}, ${solidTeamColor})`,
                 ].join(', '),
                 filter: saturationFilter,
             }}
         >
-            {/* Contained-filament neon accent strip on the outer edge.
-                Two stacked layers at the same size and position:
-                a thick accent "tube" and a thin near-white "filament"
-                running through its center. Nothing extends outside
-                the strip's own bounding box.
-
-                Uses `effectiveStrip` (the aura-override variant when
-                the side is active, grey when it is dimmed), NOT
-                `fillColor`, so the strip stays visible for teams
-                whose base color is nearly black. */}
+            {/* Team logo and information */}
             <div
-                aria-hidden='true'
-                className='pointer-events-none absolute inset-y-5 w-[3px] rounded-full'
-                style={{
-                    [accentSide]: 4,
-                    backgroundColor: effectiveStrip,
-                    zIndex: 2,
-                }}
-            >
-                <div
-                    aria-hidden='true'
-                    className='absolute inset-y-0 left-1/2 w-[1px] -translate-x-1/2 rounded-full'
-                    style={{ backgroundColor: '#FFFDF0' }}
-                />
-            </div>
-
-            {/* Content, lifted above the strip so it stays sharp. */}
-            <div
-                className='relative flex flex-col items-center'
+                className='relative flex flex-col items-center px-3'
                 style={{ zIndex: 3 }}
             >
-                {/* When this side is the inactive one on an expanded
-                card, the logo is desaturated to match the dimmed
-                background. filter applies to the whole subtree,
-                so wrapping the logo is enough — no changes to the
-                NhlTeamLogo component are needed. 0.2 = 20%
-                saturation = 80% reduction.
-
-                When onLogoClick is set (unstarted games only), the
-                wrapper becomes a clickable target. The click is
-                stopped here so the outer game card's onClick never
-                fires, and the wrapper gets cursor-pointer plus
-                hover/press feedback so the tap reads as intentional. */}
                 <div
                     onClick={
                         onLogoClick
@@ -724,7 +691,8 @@ function TeamSide({
                     }
                     className={cn(
                         'relative scale-[1.35]',
-                        onLogoClick && 'cursor-pointer hover:scale-[1.45] active:scale-[1.25]'
+                        onLogoClick &&
+                        'cursor-pointer hover:scale-[1.45] active:scale-[1.25]'
                     )}
                     style={{
                         filter: dimmed ? 'saturate(0.2)' : undefined,
@@ -733,30 +701,24 @@ function TeamSide({
                 >
                     <NhlTeamLogo
                         abbreviation={abbreviation}
-                        size={60}
+                        size={48}
                     />
                 </div>
 
                 <div
-                    // mt-2 removed. The logo is 12px taller than before,
-                    // so removing this 8px margin pulls the place name
-                    // back up to its original vertical position relative
-                    // to the top of the panel. Without this, the text
-                    // would sit 12px lower than it did before the logo
-                    // resize.
                     className='truncate text-[0.62rem] uppercase tracking-[0.22em] text-white/80'
-                    style={{ textShadow: '0 1px 2px rgba(0, 0, 0, 0.55)' }}
+                    style={{
+                        textShadow: '0 1px 2px rgba(0, 0, 0, 0.55)',
+                    }}
                 >
                     {placeName}
                 </div>
 
                 <div
-                    // Reduced from text-[1rem] to text-[0.8rem] (20%
-                    // smaller). Combined with the padding change above,
-                    // this keeps the panel height identical despite the
-                    // larger logo.
                     className='truncate text-[0.8rem] font-bold uppercase leading-tight tracking-wide text-white'
-                    style={{ textShadow: '0 1px 3px rgba(0, 0, 0, 0.6)' }}
+                    style={{
+                        textShadow: '0 1px 3px rgba(0, 0, 0, 0.6)',
+                    }}
                 >
                     {commonName}
                 </div>
@@ -767,6 +729,43 @@ function TeamSide({
                     </div>
                 )}
             </div>
+
+            {/* Page d'équipe — double border + inner glow */}
+            <button
+                type='button'
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onTeamPageClick(nhlTeamId);
+                }}
+                className={cn(
+                    'absolute bottom-0 left-0 right-0 w-full',
+                    'box-border py-1.5',
+                    'text-[0.6rem] font-bold uppercase tracking-wider',
+                    'transition-[background-color,box-shadow,filter,transform] duration-200',
+                    !dimmed &&
+                    'hover:brightness-125 active:scale-[0.98]'
+                )}
+                style={{
+                    backgroundColor: buttonBg,
+                    color: buttonText,
+
+                    // First border: colored outer frame.
+                    border: `1px solid ${buttonBorder}`,
+
+                    // Second border and both glow layers.
+                    boxShadow: buttonShadow,
+
+                    // Keep the existing glass effect.
+                    backdropFilter: 'blur(8px)',
+                    WebkitBackdropFilter: 'blur(8px)',
+
+                    // Ensure the button and its borders remain visible.
+                    position: 'absolute',
+                    zIndex: 5,
+                }}
+            >
+                Page d'équipe
+            </button>
         </div>
     );
 }
@@ -824,12 +823,14 @@ function GameCard({
     const awayFillColor =
         GAMECARD_FILL_OVERRIDES[game.awayAbbreviation.toUpperCase()] ??
         getNhlTeamColor(game.awayAbbreviation);
-    const awayStripColor = getNhlTeamAuraColor(game.awayAbbreviation);
 
     const homeFillColor =
         GAMECARD_FILL_OVERRIDES[game.homeAbbreviation.toUpperCase()] ??
         getNhlTeamColor(game.homeAbbreviation);
-    const homeStripColor = getNhlTeamAuraColor(game.homeAbbreviation);
+
+    // Secondary colors (used for the "Page d'équipe" button background)
+    const awaySecondaryColor = getNhlTeamTextColor(game.awayAbbreviation);
+    const homeSecondaryColor = getNhlTeamTextColor(game.homeAbbreviation);
 
     // When this card is expanded, whichever side is NOT currently
     // being viewed is greyed out. This tells the user at a glance
@@ -1150,11 +1151,12 @@ function GameCard({
                     commonName={game.awayCommonName}
                     record={game.awayRecord}
                     fillColor={awayFillColor}
-                    stripColor={awayStripColor}
-                    side='away'
+                    secondaryColor={awaySecondaryColor}
                     dimmed={awayDimmed}
                     active={expandedSide === 'away'}
                     onLogoClick={handleAwayLogoClick}
+                    nhlTeamId={game.awayNhlTeamId}
+                    onTeamPageClick={onTeamLogoClick}
                 />
 
                 {/* Center column. Neutral navy with only the cyan
@@ -1268,11 +1270,12 @@ function GameCard({
                     commonName={game.homeCommonName}
                     record={game.homeRecord}
                     fillColor={homeFillColor}
-                    stripColor={homeStripColor}
-                    side='home'
+                    secondaryColor={homeSecondaryColor}
                     dimmed={homeDimmed}
                     active={expandedSide === 'home'}
                     onLogoClick={handleHomeLogoClick}
+                    nhlTeamId={game.homeNhlTeamId}
+                    onTeamPageClick={onTeamLogoClick}
                 />
             </div>
 
