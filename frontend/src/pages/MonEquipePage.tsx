@@ -1456,30 +1456,34 @@ export default function MonEquipePage() {
                         the picker above them stay exactly where they
                         were. Same white-on-white styling as before:
                         checkbox border, checkmark and label text are
-                        all white; dims to white/80 on hover. */}
-                    <label className="self-start translate-y-1.5 ml-1 flex items-center gap-2 cursor-pointer text-[0.7rem] font-semibold text-white select-none transition-colors hover:text-white/80">
-                        <div className="relative flex items-center justify-center">
-                            <input
-                                type="checkbox"
-                                checked={showContracts}
-                                onChange={(e) => void updatePreferences({ showContractsRoster: e.target.checked })}
-                                className="peer sr-only"
-                            />
-                            <div className="h-4 w-4 rounded border border-white/50 bg-[#050A18] transition-colors peer-checked:border-white peer-checked:bg-white/20" />
-                            <svg
-                                className="absolute h-3 w-3 text-white opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="3"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            >
-                                <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                        </div>
-                        <span>Contrats</span>
-                    </label>
+                        all white; dims to white/80 on hover.
+                        
+                        Only visible when the "Lineup" tab is active. */}
+                    {activeView === 'lineup' && (
+                        <label className="self-start translate-y-1.5 ml-1 flex items-center gap-2 cursor-pointer text-[0.7rem] font-semibold text-white select-none transition-colors hover:text-white/80">
+                            <div className="relative flex items-center justify-center">
+                                <input
+                                    type="checkbox"
+                                    checked={showContracts}
+                                    onChange={(e) => void updatePreferences({ showContractsRoster: e.target.checked })}
+                                    className="peer sr-only"
+                                />
+                                <div className="h-4 w-4 rounded border border-white/50 bg-[#050A18] transition-colors peer-checked:border-white peer-checked:bg-white/20" />
+                                <svg
+                                    className="absolute h-3 w-3 text-white opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="3"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                >
+                                    <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                            </div>
+                            <span>Contrats</span>
+                        </label>
+                    )}
                 </div>
             </div>
 
