@@ -1,4 +1,6 @@
-﻿# Visual Studio
+# =============================================================
+# Visual Studio / .NET
+# =============================================================
 .vs/
 *.user
 *.suo
@@ -14,16 +16,95 @@ packages/
 TestResults/
 *.trx
 
+# =============================================================
 # ASP.NET / local development
+#
+# appsettings.json is deliberately NOT ignored — it ships empty
+# secret slots (Auth:InviteCode = "", etc.) that are filled from
+# environment variables in production. Local override files
+# (appsettings.Local.json, appsettings.Production.Local.json, …)
+# are ignored because they hold the actual secret values on a
+# developer's machine.
+# =============================================================
 appsettings.Development.json
+appsettings.Local.json
+appsettings.*.Local.json
+appsettings.Production.json
+appsettings.Staging.json
 
+# =============================================================
+# Docker / deployment
+#
+# The real docker-compose.yml (on the server, never in git)
+# contains POSTGRES_PASSWORD and the invite code. Only the
+# sanitized docker-compose.example.yml ships in the repo.
+# =============================================================
+docker-compose.yml
+docker-compose.*.yml
+!docker-compose.example.yml
+
+# Environment variable files read by docker-compose and by the
+# ASP.NET runtime. Commit .env.example if you ever add one.
+.env
+.env.*
+!.env.example
+
+# =============================================================
+# Database backups
+#
+# pg_dump files contain every user's password hash and the full
+# league dataset. backups/ is the folder docker-compose mounts
+# at /backups on the api container, so a local compose run would
+# fill it with dumps.
+# =============================================================
+backups/
+*.dump
+*.sql
+*.sql.gz
+*.pgdump
+*.bak
+
+# =============================================================
+# TLS certificates / keys
+#
+# Certbot writes these on the server. If you ever copy them down
+# for safekeeping, they must never go back up to GitHub.
+# =============================================================
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+
+# =============================================================
 # OS files
+# =============================================================
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# --- Node / frontend ---
+# =============================================================
+# Editor / temp files
+# =============================================================
+.idea/
+.swp
+.swo
+*~
+
+# =============================================================
+# Node / frontend (safety net — frontend/.gitignore already
+# covers everything below for the frontend subdirectory; the
+# root patterns catch stray files at the repo root)
+# =============================================================
 node_modules/
-frontend/node_modules/
+*.log
+logs/
 frontend/dist/
-*.local
-.env.local
+frontend/dist-ssr/
+frontend/coverage/
+
+# =============================================================
+# TypeScript / Vite
+# =============================================================
+*.tsbuildinfo
+.vite/
