@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
@@ -13,22 +14,11 @@ namespace NhlFantasyLeague.api.Controllers
     ///
     /// Pour l'instant : "Meilleurs pointeurs" (tous les joueurs
     /// appartenant à une équipe fantasy de la ligue).
-    ///
-    /// Un seul appel remplace les 13 appels que la page faisait
-    /// auparavant (1 × getLeagueTeams + 12 × getTeamRoster), et
-    /// chaque ligne ne contient que les colonnes dont le tableau
-    /// a besoin.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class StatistiquesController : ControllerBase
     {
-        /// <summary>
-        /// TTL du cache. 30 secondes, comme StandingsController :
-        /// pendant une soirée de matchs les utilisateurs rafraîchissent
-        /// souvent, et 30 s transforme 20 chargements/minute en 2.
-        /// Hors des heures de match, rien ne change de toute façon.
-        /// </summary>
         private static readonly TimeSpan CacheTtl =
             TimeSpan.FromSeconds(30);
 
@@ -43,27 +33,11 @@ namespace NhlFantasyLeague.api.Controllers
             _cache = cache;
         }
 
-        /// <summary>
-        /// Retourne tous les joueurs appartenant à une équipe fantasy
-        /// de la ligue pour la saison courante, avec les mêmes
-        /// statistiques que celles affichées sur MonEquipePage
-        /// (GP / G / A / PTS / 3B / ATOI / FP + contrats).
-        ///
-        /// Les gardiens sont inclus : le filtrage par position est
-        /// fait côté client, sur le frontend StatistiquesPage, via
-        /// les quatre boutons (Tous / Attaquants / Défenseurs /
-        /// Gardiens). Les colonnes G / A / PTS pour un gardien
-        /// représentent ses propres buts et passes (généralement 0),
-        /// pas ses victoires ni ses blanchissages.
-        ///
-        /// Tri par défaut : FP décroissant, puis PTS, puis buts, puis
-        /// passes, puis nom de famille. Les joueurs dont le FP est
-        /// null (aucun match NHL cette saison) sont relégués en bas.
-        /// </summary>
+        [AllowAnonymous]
         [HttpGet("top-scorers")]
         public async Task<IActionResult> GetTopScorers(
-      [FromQuery] string? playerFilter,
-      CancellationToken ct)
+            [FromQuery] string? playerFilter,
+            CancellationToken ct)
         {
             var filter = playerFilter ?? "rostered";
             var cacheKey = $"top-scorers:{filter}";
@@ -125,8 +99,6 @@ namespace NhlFantasyLeague.api.Controllers
                 .Distinct()
                 .ToList();
 
-            // 2. PlayerSeasonStat de la saison courante, en une seule
-            //    requête. Pas de match → pas de ligne → FP null.
             var seasonStats = await _dbContext.PlayerSeasonStats
                 .AsNoTracking()
                 .Where(s =>
@@ -134,8 +106,6 @@ namespace NhlFantasyLeague.api.Controllers
                     playerIds.Contains(s.PlayerId))
                 .ToDictionaryAsync(s => s.PlayerId, ct);
 
-            // 3. PlayerCareerStat pour la saison en cours, game type 2,
-            //    pour calculer l'ATOI (moyenne pondérée).
             var careerRows = await _dbContext.PlayerCareerStats
                 .AsNoTracking()
                 .Where(c =>
@@ -172,9 +142,6 @@ namespace NhlFantasyLeague.api.Controllers
                     accGames + row.GamesPlayed;
             }
 
-            // 4. Tous les contrats des joueurs en portée, en une seule
-            //    requête. On les regroupe en mémoire pour résoudre les
-            //    contrats courant + second par joueur.
             var contracts = await _dbContext.PlayerContracts
                 .AsNoTracking()
                 .Where(c => playerIds.Contains(c.PlayerId))
@@ -184,13 +151,11 @@ namespace NhlFantasyLeague.api.Controllers
                 .GroupBy(c => c.PlayerId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
-            // 5. Composition des DTOs.
             var rows = new List<TopScorerRowDto>(players.Count);
 
             foreach (var player in players)
             {
                 entriesByPlayerId.TryGetValue(player.Id, out var entry);
-
                 seasonStats.TryGetValue(player.Id, out var stats);
 
                 int? age = null;
@@ -223,13 +188,6 @@ namespace NhlFantasyLeague.api.Controllers
                         playerContracts ?? new List<PlayerContract>(),
                         season.NhlSeasonCode);
 
-                // SV% and GAA are computed from the season totals
-                // (Saves / ShotsAgainst / GoalsAgainst / GP) instead of
-                // being read from the stored columns, because the
-                // stored columns are only refreshed by the landing
-                // sync and can lag behind the live-tracked season
-                // stats. Standard hockey formatting: SV% with 3
-                // decimals, GAA with 2.
                 var svPct = 0m;
                 var gaa = 0m;
 
@@ -258,7 +216,7 @@ namespace NhlFantasyLeague.api.Controllers
                     LastName = player.LastName,
                     Position = player.Position,
                     NhlTeamAbbreviation =
-player.NhlTeam?.Abbreviation ?? string.Empty,
+                        player.NhlTeam?.Abbreviation ?? string.Empty,
                     Age = age,
                     FantasyTeamId = entry?.FantasyTeamId,
                     FantasyTeamName = entry?.FantasyTeam?.Name,
@@ -285,8 +243,6 @@ player.NhlTeam?.Abbreviation ?? string.Empty,
                 });
             }
 
-            // 6. Tri : FP décroissant, puis PTS, puis buts, puis passes,
-            //    puis nom. Les FP null finissent tout en bas.
             rows.Sort((a, b) =>
             {
                 var aFp = a.FantasyPoints ?? int.MinValue;
@@ -318,15 +274,6 @@ player.NhlTeam?.Abbreviation ?? string.Empty,
 
             return rows;
         }
-
-        // =================================================================
-        // Contrats
-        //
-        // Même logique que RosterAdminService.ResolveContractLines /
-        // ToContractLineDto. Copiée ici pour que le contrôleur
-        // reste autonome ; si la règle change un jour, il faut la
-        // mettre à jour aux deux endroits.
-        // =================================================================
 
         private static (PlayerContractLineDto? Current, PlayerContractLineDto? Second)
             ResolveContractLines(
@@ -382,10 +329,6 @@ player.NhlTeam?.Abbreviation ?? string.Empty,
                 EndSeason = contract.EndSeason
             };
         }
-
-        // =================================================================
-        // ATOI helpers
-        // =================================================================
 
         private static int ParseToiToSeconds(string? toi)
         {

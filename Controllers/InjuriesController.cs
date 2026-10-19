@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models;
@@ -8,15 +9,11 @@ namespace NhlFantasyLeague.api.Controllers
 {
     /// <summary>
     /// Read-only view of every injured or suspended player in the
-    /// league. Data comes straight from the Player row (written by
-    /// the daily NhlInjuryService refresh); this controller never
-    /// writes anything.
+    /// league. Publicly accessible (works for anonymous visitors).
     ///
-    /// Result is cached for 60 seconds in memory. The underlying data
-    /// only changes once per day (daily refresh), so a stale-minute
-    /// window is fine and keeps a busy injuries page from waking
-    /// Neon on every visit.
+    /// Result is cached for 60 seconds in memory.
     /// </summary>
+    [AllowAnonymous]
     [ApiController]
     [Route("api/[controller]")]
     public class InjuriesController : ControllerBase
@@ -34,16 +31,6 @@ namespace NhlFantasyLeague.api.Controllers
             _cache = cache;
         }
 
-        /// <summary>
-        /// Returns every injured or suspended player.
-        ///
-        /// Optional filters (all applied in memory after the bulk
-        /// read, so the DB query itself is one query):
-        ///   - search      : substring on first or last name
-        ///   - nhlTeam     : 3-letter NHL team abbreviation
-        ///   - fantasyTeamId : only players currently held by that fantasy team
-        ///   - kind        : "Injury" or "Suspension" (default: all)
-        /// </summary>
         [HttpGet]
         public async Task<IActionResult> GetInjuries(
             [FromQuery] string? search,
@@ -71,9 +58,6 @@ namespace NhlFantasyLeague.api.Controllers
             string? kind,
             CancellationToken ct)
         {
-            // One bulk read of every injured player. The injured set
-            // is small (~100 rows in-season), so filtering in memory
-            // is cheaper than adding SQL clauses per combination.
             var players = await _dbContext.Players
                 .AsNoTracking()
                 .Include(p => p.NhlTeam)
@@ -85,8 +69,6 @@ namespace NhlFantasyLeague.api.Controllers
                 return new List<InjuryRowDto>();
             }
 
-            // Current-season roster lookup, one query, used to attach
-            // fantasy-team info without N+1.
             var currentSeason = await Data.SeasonQueries
                 .GetCurrentSeasonAsync(_dbContext, ct);
 
@@ -105,8 +87,6 @@ namespace NhlFantasyLeague.api.Controllers
                     rosterLookup[entry.PlayerId] = entry;
                 }
             }
-
-            // ---- In-memory filters ------------------------------------
 
             IEnumerable<Player> filtered = players;
 
@@ -144,8 +124,6 @@ namespace NhlFantasyLeague.api.Controllers
                     filtered = filtered.Where(p => p.InjuryKind == parsed);
                 }
             }
-
-            // ---- Projection -------------------------------------------
 
             return filtered
                 .OrderBy(p => p.LastName)

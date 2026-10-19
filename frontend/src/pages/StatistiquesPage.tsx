@@ -989,8 +989,8 @@ function DurationDropdown({ value, onChange }: { value: number, onChange: (v: nu
                                     setIsOpen(false);
                                 }}
                                 className={`w-full px-2 py-1.5 text-center text-xs transition-colors ${value === opt
-                                        ? 'bg-[#00E5FF]/20 font-bold text-[#00E5FF]'
-                                        : 'text-white hover:bg-[#00E5FF]/10'
+                                    ? 'bg-[#00E5FF]/20 font-bold text-[#00E5FF]'
+                                    : 'text-white hover:bg-[#00E5FF]/10'
                                     }`}
                             >
                                 {opt === 0 ? 'Tous' : `${opt} an${opt > 1 ? 's' : ''}`}
@@ -1189,6 +1189,8 @@ const TopScorersTable = memo(function TopScorersTable({
     myTeamId,
     showContracts,
     onToggleContracts,
+    playerFilter,
+    onPlayerFilterChange,
 }: {
     rows: TopScorerRow[];
     loading: boolean;
@@ -1196,9 +1198,19 @@ const TopScorersTable = memo(function TopScorersTable({
     myTeamId: number | null;
     showContracts: boolean;
     onToggleContracts: (checked: boolean) => void;
+    /**
+     * Filter currently applied server-side. Lifted from the parent
+     * (StatistiquesPage) so an anonymous visitor's filter change
+     * actually drives the fetch that happens upstream, and the local
+     * use below matches what was fetched.
+     */
+    playerFilter: string;
+    /**
+     * Called when the visitor picks a new filter in the modal. The
+     * parent persists it (authed) or stores it locally (anonymous).
+     */
+    onPlayerFilterChange: (filter: string) => void;
 }) {
-    const { user, updatePreferences } = useAuth();
-    const playerFilter = user?.statistiquesPlayerFilter || 'rostered';
 
     const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -1599,7 +1611,9 @@ const TopScorersTable = memo(function TopScorersTable({
                     onClick={() => {
                         setAppliedFilters(defaultFilterState);
                         setDraftFilters(defaultFilterState);
-                        void updatePreferences({ statistiquesPlayerFilter: 'rostered' });
+                        if (playerFilter !== 'rostered') {
+                            onPlayerFilterChange('rostered');
+                        }
                     }}
                     className='flex h-[26px] flex-1 min-w-[100px] items-center justify-center rounded-md border border-[#00E5FF]/30 bg-[#050A18] px-1 text-center text-[0.55rem] font-bold uppercase leading-tight tracking-wider text-[#7DD3FC] transition-colors hover:border-[#00E5FF] hover:text-[#00E5FF] disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/30 disabled:hover:border-white/10 disabled:hover:text-white/30'
                 >
@@ -1765,7 +1779,7 @@ const TopScorersTable = memo(function TopScorersTable({
                                     onClick={() => {
                                         setAppliedFilters(draftFilters);
                                         if (draftPlayerFilter !== playerFilter) {
-                                            void updatePreferences({ statistiquesPlayerFilter: draftPlayerFilter });
+                                            onPlayerFilterChange(draftPlayerFilter);
                                         }
                                         setIsFiltersOpen(false);
                                     }}
@@ -1906,7 +1920,7 @@ const DIVISION_ORDER = [
 ];
 
 const TEAM_STANDINGS_GRID =
-    '18px 72px 12px repeat(5, 28px) 46px repeat(3, 38px) repeat(5, 50px)';
+    '18px 72px 12px repeat(5, 22px) 46px repeat(3, 38px) repeat(5, 50px)';
 
 type TeamSortKey =
     | 'name'
@@ -2205,7 +2219,7 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
                                         style={{
                                             gridTemplateColumns: TEAM_STANDINGS_GRID,
                                             backgroundColor: getNhlTeamColor(team.teamAbbreviation),
-                                            backgroundImage: 'linear-gradient(to right, transparent 240px, rgba(0,0,0,0.15) 240px, rgba(0,0,0,0.15) 268px, transparent 268px)',
+                                            backgroundImage: 'linear-gradient(to right, transparent 216px, rgba(0,0,0,0.15) 216px, rgba(0,0,0,0.15) 238px, transparent 238px)',
                                             color: getNhlTeamTextColor(team.teamAbbreviation),
                                             columnGap: '2px',
                                             border: '2px solid transparent',
@@ -2217,7 +2231,11 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
                                             {index + 1}
                                         </div>
 
-                                        <div className='flex min-w-0 items-center gap-2 pl-1 whitespace-nowrap'>
+                                        <Link
+                                            to={`/nhl-equipe/${team.nhlTeamId}`}
+                                            aria-label={`Voir la page de l'équipe ${team.teamName}`}
+                                            className='flex min-w-0 items-center gap-2 pl-1 whitespace-nowrap hover:underline'
+                                        >
                                             <div
                                                 style={{
                                                     width: 20,
@@ -2235,7 +2253,7 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
                                             <span className='truncate'>
                                                 {team.teamAbbreviation}
                                             </span>
-                                        </div>
+                                        </Link>
 
                                         <div />
 
@@ -2306,7 +2324,7 @@ function TeamsSection() {
 
     const handleViewChange = (v: StandingsView) => {
         setView(v);
-        if (user?.statistiquesStandingsView !== v) {
+        if (user != null && user.statistiquesStandingsView !== v) {
             void updatePreferences({ statistiquesStandingsView: v });
         }
     };
@@ -2352,13 +2370,38 @@ export default function StatistiquesPage() {
     const { user, updatePreferences } = useAuth();
 
     const myTeamId = user?.fantasyTeamId ?? null;
-    const showContracts = user?.showContractsStats ?? false;
+
+    // Local fallbacks for two preference-backed values, used when the
+    // visitor is not logged in (no server-side preference store to
+    // persist to). Authenticated users still go through
+    // updatePreferences and persist across sessions.
+    const [localShowContractsStats, setLocalShowContractsStats] =
+        useState<boolean | null>(null);
+    const [localPlayerFilter, setLocalPlayerFilter] =
+        useState<string | null>(null);
+
+    const showContracts =
+        user?.showContractsStats ?? localShowContractsStats ?? false;
+    const playerFilter =
+        user?.statistiquesPlayerFilter ?? localPlayerFilter ?? 'rostered';
 
     const [mainTab, setMainTab] = useState<MainTab>('players');
     const location = useLocation();
 
     useEffect(() => {
-        if (location.state && (location.state as any).resetTab) {
+        if (!location.state) return;
+
+        const state = location.state as {
+            resetTab?: number;
+            initialTab?: MainTab;
+        };
+
+        if (state.initialTab) {
+            setMainTab(state.initialTab);
+            window.scrollTo(0, 0);
+        }
+
+        if (state.resetTab) {
             setMainTab('players');
             window.scrollTo(0, 0);
         }
@@ -2367,8 +2410,6 @@ export default function StatistiquesPage() {
     const [scorerRows, setScorerRows] = useState<TopScorerRow[]>([]);
     const [scorerLoading, setScorerLoading] = useState(true);
     const [scorerError, setScorerError] = useState<string | null>(null);
-
-    const playerFilter = user?.statistiquesPlayerFilter || 'rostered';
 
     useEffect(() => {
         let cancelled = false;
@@ -2537,7 +2578,21 @@ export default function StatistiquesPage() {
                     error={scorerError}
                     myTeamId={myTeamId}
                     showContracts={showContracts}
-                    onToggleContracts={(checked) => void updatePreferences({ showContractsStats: checked })}
+                    onToggleContracts={(checked) => {
+                        if (user != null) {
+                            void updatePreferences({ showContractsStats: checked });
+                        } else {
+                            setLocalShowContractsStats(checked);
+                        }
+                    }}
+                    playerFilter={playerFilter}
+                    onPlayerFilterChange={(filter) => {
+                        if (user != null) {
+                            void updatePreferences({ statistiquesPlayerFilter: filter });
+                        } else {
+                            setLocalPlayerFilter(filter);
+                        }
+                    }}
                 />
             </div>
 

@@ -882,28 +882,38 @@ namespace NhlFantasyLeague.api.Services
         }
 
         public async Task<List<TradeOfferDto>> ListActiveOffersAsync(
-      int userId,
-      bool includeMine,
-      CancellationToken ct = default)
+       int? userId,
+       bool includeMine,
+       CancellationToken ct = default)
         {
-            var user = await _dbContext.Users
-                .AsNoTracking()
-                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+            // Anonymous visitors have no user row; both the "exclude
+            // my own offers" filter and the per-user "seen" lookup
+            // are skipped for them, so the browse list shows every
+            // active public offer and no offer is flagged as new
+            // (the anonymous visitor cannot clear the badge anyway).
+            int? userTeamId = null;
 
-            var userTeamId = user?.FantasyTeamId;
+            if (userId.HasValue)
+            {
+                var user = await _dbContext.Users
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.Id == userId.Value, ct);
+
+                userTeamId = user?.FantasyTeamId;
+            }
 
             var offers = await _dbContext.TradeOffers
-.AsNoTracking()
-.Include(o => o.CreatedByFantasyTeam)
-.Include(o => o.Season)
-.Include(o => o.Slots)
-    .ThenInclude(s => s.OfferingPlayer)
-        .ThenInclude(p => p!.NhlTeam)
-.Where(o =>
-    o.Status == TradeOfferStatus.Active &&
-    !o.IsDirectOffer)
-.OrderByDescending(o => o.CreatedAt)
-.ToListAsync(ct);
+                .AsNoTracking()
+                .Include(o => o.CreatedByFantasyTeam)
+                .Include(o => o.Season)
+                .Include(o => o.Slots)
+                    .ThenInclude(s => s.OfferingPlayer)
+                        .ThenInclude(p => p!.NhlTeam)
+                .Where(o =>
+                    o.Status == TradeOfferStatus.Active &&
+                    !o.IsDirectOffer)
+                .OrderByDescending(o => o.CreatedAt)
+                .ToListAsync(ct);
 
             if (!includeMine && userTeamId.HasValue)
             {
@@ -930,14 +940,23 @@ namespace NhlFantasyLeague.api.Services
 
             var offerIds = offers.Select(o => o.Id).ToList();
 
-            var seenIds = (await _dbContext.TradeOfferViews
-                .AsNoTracking()
-                .Where(v =>
-                    v.UserId == userId &&
-                    offerIds.Contains(v.TradeOfferId))
-                .Select(v => v.TradeOfferId)
-                .ToListAsync(ct))
-                .ToHashSet();
+            // Seen set is only built for authenticated callers. Null
+            // for anonymous → ToDto returns IsNew=false for every
+            // offer, so the "Nouvelle offre" badge never appears to
+            // a visitor who cannot dismiss it.
+            IReadOnlySet<int>? seenIds = null;
+
+            if (userId.HasValue)
+            {
+                seenIds = (await _dbContext.TradeOfferViews
+                    .AsNoTracking()
+                    .Where(v =>
+                        v.UserId == userId.Value &&
+                        offerIds.Contains(v.TradeOfferId))
+                    .Select(v => v.TradeOfferId)
+                    .ToListAsync(ct))
+                    .ToHashSet();
+            }
 
             var offeredPlayerIds = offers
                 .SelectMany(o => o.Slots)
@@ -947,7 +966,7 @@ namespace NhlFantasyLeague.api.Services
                 .ToList();
 
             var contractsByPlayerId = await LoadContractsByPlayerIdAsync(
-offeredPlayerIds, ct);
+                offeredPlayerIds, ct);
 
             var statsByPlayerId = await LoadStatLinesByPlayerIdAsync(
                 offeredPlayerIds, ct);
@@ -1056,13 +1075,22 @@ offeredPlayerIds, ct);
         /// the number the badge renders.
         /// </summary>
         public async Task<MarketplaceNotificationCountDto>
-  GetNotificationCountAsync(
-      int userId,
-      CancellationToken ct = default)
+      GetNotificationCountAsync(
+          int? userId,
+          CancellationToken ct = default)
         {
+            // Anonymous visitors get zeros: they have no offers to
+            // see, no responses to be notified about, and the navbar
+            // badge is hidden for them anyway (TopBar gates it on
+            // isAuthenticated).
+            if (!userId.HasValue)
+            {
+                return new MarketplaceNotificationCountDto();
+            }
+
             var user = await _dbContext.Users
                 .AsNoTracking()
-                .FirstOrDefaultAsync(u => u.Id == userId, ct);
+                .FirstOrDefaultAsync(u => u.Id == userId.Value, ct);
 
             if (user?.FantasyTeamId == null)
             {
@@ -1072,15 +1100,8 @@ offeredPlayerIds, ct);
             var myTeamId = user.FantasyTeamId.Value;
 
             // --- Unseen offers (green) -----------------------------------
-            //
-            // Active browse offers the user has never seen, minus the
-            // ones he has already responded to (a pending response
-            // hides the offer from the browse list, so it should not
-            // be counted as "new to look at" on the badge). Direct
-            // offers are excluded — they are private and never
-            // appear in Voir les offres.
             var seenOfferIds = _dbContext.TradeOfferViews
-                .Where(v => v.UserId == userId)
+                .Where(v => v.UserId == userId.Value)
                 .Select(v => v.TradeOfferId);
 
             var respondedOfferIds = _dbContext.TradeOfferResponses
@@ -1100,18 +1121,8 @@ offeredPlayerIds, ct);
                 .CountAsync(ct);
 
             // --- Unseen responses (gold, part 1) -------------------------
-            //
-            // Pending responses on the user's own offers that he has
-            // not yet opened the Reçues tab on.
-            //
-            // The `TradeOffer.Status == Active` filter MUST match the
-            // filter used by ListReceivedResponsesAsync. If the
-            // offer was Cancelled or Closed, its responses are no
-            // longer shown in Reçues, so they must not be counted
-            // here either: a badge that counts something the user
-            // cannot open can never be cleared.
             var seenResponseIds = _dbContext.TradeOfferResponseViews
-                .Where(v => v.UserId == userId)
+                .Where(v => v.UserId == userId.Value)
                 .Select(v => v.TradeOfferResponseId);
 
             var unseenResponses = await _dbContext.TradeOfferResponses
@@ -1124,19 +1135,6 @@ offeredPlayerIds, ct);
                 .CountAsync(ct);
 
             // --- Unseen accepted sent responses (gold, part 2) -----------
-            //
-            // Responses the user's team sent to someone else's offer
-            // that have since been accepted, and that the user has
-            // not yet opened the Envoyées tab on. The same
-            // TradeOfferResponseView marker is reused: a response is
-            // either received (on the user's own offer) or sent
-            // (from the user's team), never both, so there is no
-            // collision on the (UserId, TradeOfferResponseId) key.
-            //
-            // Same rule as unseenResponses: the `Active` filter
-            // must match ListSentResponsesAsync, or an accepted
-            // response on a Cancelled offer would be counted and
-            // could never be seen.
             var unseenAcceptedSentResponses = await _dbContext
                 .TradeOfferResponses
                 .AsNoTracking()
@@ -1148,24 +1146,6 @@ offeredPlayerIds, ct);
                 .CountAsync(ct);
 
             // --- Persistent per-section totals ---------------------------
-            //
-            // These two counters back the "Reçues" and "Envoyées"
-            // segmented button labels on the Marketplace page. They
-            // are DIFFERENT from the unseen counters above: they do
-            // NOT get reduced when the user marks responses as seen.
-            //
-            // Both count "rows the corresponding panel renders",
-            // matching ListReceivedResponsesAsync /
-            // ListSentResponsesAsync exactly:
-            //   - status is Pending or Accepted (Rejected and
-            //     Cancelled rows are filtered out by the panels),
-            //   - the parent offer is still Active.
-            //
-            // The intent is that opening Reçues or Envoyées clears
-            // the navbar badge (that's the unseen counter's job) but
-            // does NOT change the button label, so the user can
-            // always see at a glance how many trades are sitting in
-            // each of those two sections.
             var totalReceivedResponses = await _dbContext
                 .TradeOfferResponses
                 .AsNoTracking()

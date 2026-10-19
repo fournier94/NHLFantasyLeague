@@ -806,8 +806,15 @@ export default function MonEquipePage() {
         'lineup' | 'cap' | 'draft'
     >('lineup');
 
-    // Default to false (unticked) when no preference is saved.
-    const showContracts = user?.showContractsRoster ?? false;
+    // Local override for the "Contrats" checkbox. Used when the user
+    // is anonymous (there is no server-side preference to persist to);
+    // ignored when authenticated so the server preference still wins
+    // and survives across sessions.
+    const [localShowContractsRoster, setLocalShowContractsRoster] =
+        useState<boolean | null>(null);
+
+    const showContracts =
+        user?.showContractsRoster ?? localShowContractsRoster ?? false;
 
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
 
@@ -816,8 +823,23 @@ export default function MonEquipePage() {
             const parsed = Number(teamIdParam);
             return Number.isFinite(parsed) ? parsed : null;
         }
-        return user?.fantasyTeamId ?? null;
-    }, [teamIdParam, user?.fantasyTeamId]);
+        if (user?.fantasyTeamId != null) {
+            return user.fantasyTeamId;
+        }
+        if (user == null) {
+            // Anonymous visitor: show the commissioner's team so a
+            // portfolio reviewer has something to look at. Falls
+            // back to the first team in the list if "Farn" is
+            // renamed or absent. Until the teams list has loaded,
+            // this returns null and the loading guard added below
+            // shows "Chargement..." instead of the "no team
+            // assigned" state.
+            const farn = teams.find((t) => t.name === 'Farn');
+            if (farn != null) return farn.id;
+            if (teams.length > 0) return teams[0].id;
+        }
+        return null;
+    }, [teamIdParam, user, teams]);
 
     const [roster, setRoster] = useState<TeamRoster | null>(null);
     const [loading, setLoading] = useState(true);
@@ -901,14 +923,15 @@ export default function MonEquipePage() {
     // -----------------------------------------------------------------
 
     const selectedTeamLabel = useMemo(() => {
-        if (teamIdParam != null) {
-            const selected = teams.find(
-                (t) => String(t.id) === teamIdParam,
-            );
-            return selected?.name ?? 'Mon equipe';
-        }
-        return 'Mon equipe';
-    }, [teams, teamIdParam]);
+        if (teamId == null) return 'Mon equipe';
+        // Authed user viewing his own team: keep the "Mon equipe"
+        // label so the personal feel is preserved.
+        if (user?.fantasyTeamId === teamId) return 'Mon equipe';
+        // Anyone else (authed viewing another team, or anonymous
+        // viewing the default Farn team): show the actual team name.
+        const selected = teams.find((t) => t.id === teamId);
+        return selected?.name ?? 'Mon equipe';
+    }, [teams, teamId, user?.fantasyTeamId]);
 
     const otherTeams = useMemo(
         () => teams.filter((t) => t.id !== user?.fantasyTeamId),
@@ -1180,6 +1203,15 @@ export default function MonEquipePage() {
         );
     }
 
+    // Anonymous visitor waiting for the league teams list to load.
+    // `teamId` is still null because Farn's id has not been resolved
+    // yet, and showing the "no team assigned" state above would be
+    // wrong for an anonymous visitor. Show loading instead of a
+    // blank page.
+    if (!authLoading && user == null && teamId == null) {
+        return <p className='text-muted-foreground'>Chargement...</p>;
+    }
+
     if (loading || authLoading) {
         return <p className='text-muted-foreground'>Chargement...</p>;
     }
@@ -1345,7 +1377,10 @@ export default function MonEquipePage() {
 
                                 {otherTeams.map((team) => {
                                     const isSelected =
-                                        teamIdParam === String(team.id);
+                                        teamIdParam === String(team.id) ||
+                                        (teamIdParam == null &&
+                                            user?.fantasyTeamId == null &&
+                                            teamId === team.id);
 
                                     return (
                                         <li key={team.id}>
@@ -1465,7 +1500,13 @@ export default function MonEquipePage() {
                                 <input
                                     type="checkbox"
                                     checked={showContracts}
-                                    onChange={(e) => void updatePreferences({ showContractsRoster: e.target.checked })}
+                                    onChange={(e) => {
+                                        if (user != null) {
+                                            void updatePreferences({ showContractsRoster: e.target.checked });
+                                        } else {
+                                            setLocalShowContractsRoster(e.target.checked);
+                                        }
+                                    }}
                                     className="peer sr-only"
                                 />
                                 <div className="h-4 w-4 rounded border border-white/50 bg-[#050A18] transition-colors peer-checked:border-white peer-checked:bg-white/20" />

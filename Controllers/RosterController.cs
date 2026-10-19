@@ -10,10 +10,10 @@ namespace NhlFantasyLeague.api.Controllers
     /// Roster admin endpoints: assign, move, release and update players on
     /// fantasy teams, read a team roster and search players.
     ///
-    /// Mutations (assign / move / release / release-all / update / swap /
-    /// set-status / backfill / history edit / history delete) are
-    /// commissioner-only. Reads (team roster, search, status history,
-    /// shape audit) are available to any authenticated user.
+    /// Mutations are commissioner-only. The public read endpoints
+    /// (team roster, ownership, game stats for date, search) are
+    /// available to any visitor so anonymous reviewers can browse
+    /// Mon équipe, Classement, and the marketplace.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
@@ -21,20 +21,11 @@ namespace NhlFantasyLeague.api.Controllers
     {
         private readonly RosterAdminService _rosterAdminService;
 
-        /// <summary>
-        /// Creates the controller.
-        /// </summary>
-        /// <param name="rosterAdminService">Service that manages fantasy team rosters.</param>
         public RosterController(RosterAdminService rosterAdminService)
         {
             _rosterAdminService = rosterAdminService;
         }
 
-        /// <summary>
-        /// Puts a player on a fantasy team for a season.
-        /// </summary>
-        /// <param name="request">Team, player, season and optional status, salary and slot.</param>
-        /// <returns>The created roster entry, or 400 with the reason when it fails.</returns>
         [HttpPost("assign")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> AssignPlayer([FromBody] AssignPlayerRequest request)
@@ -49,11 +40,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Moves a player from his current fantasy team to another team.
-        /// </summary>
-        /// <param name="request">Player, destination team and optional season.</param>
-        /// <returns>The updated roster entry, or 400 with the reason when it fails.</returns>
         [HttpPost("move")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> MovePlayer([FromBody] MovePlayerRequest request)
@@ -68,11 +54,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Releases a player by deleting his roster entry.
-        /// </summary>
-        /// <param name="request">Id of the roster entry to delete.</param>
-        /// <returns>The result message, or 400 with the reason when it fails.</returns>
         [HttpPost("release")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> ReleasePlayer([FromBody] ReleasePlayerRequest request)
@@ -87,12 +68,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Releases every player currently assigned to a fantasy team for a season.
-        /// Full league reset: every fantasy team roster becomes empty.
-        /// </summary>
-        /// <param name="request">Optional season id; the current season is used when omitted.</param>
-        /// <returns>The result message with the number of released players.</returns>
         [HttpPost("release-all")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> ReleaseAllPlayers([FromBody] ReleaseAllPlayersRequest request)
@@ -107,11 +82,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Updates the status, the fantasy salary or the slot of a roster entry.
-        /// </summary>
-        /// <param name="request">Entry id plus the values to change.</param>
-        /// <returns>The updated roster entry, or 400 with the reason when it fails.</returns>
         [HttpPost("update")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> UpdateEntry([FromBody] UpdateRosterEntryRequest request)
@@ -126,16 +96,11 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Returns the roster of one fantasy team with totals and counts.
-        /// </summary>
-        /// <param name="fantasyTeamId">Fantasy team id.</param>
-        /// <param name="seasonId">Season id, or omitted to use the current season.</param>
-        /// <returns>The team roster, or 404 when the team or season does not exist.</returns>
+        [AllowAnonymous]
         [HttpGet("team/{fantasyTeamId}")]
         public async Task<IActionResult> GetTeamRoster(
-       int fantasyTeamId,
-       [FromQuery] int? seasonId)
+            int fantasyTeamId,
+            [FromQuery] int? seasonId)
         {
             var roster = await _rosterAdminService.GetTeamRosterAsync(fantasyTeamId, seasonId);
 
@@ -147,13 +112,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(roster);
         }
 
-        /// <summary>
-        /// Returns the fantasy team's roster as it stood on a specific
-        /// calendar date (ET, day precision). Used by the "Créer un
-        /// échange" and "Changer des statuts" admin forms so the
-        /// dropdowns reflect the players who were actually on that
-        /// team at the chosen date, not today's roster.
-        /// </summary>
         [HttpGet("team/{fantasyTeamId:int}/at-date")]
         public async Task<IActionResult> GetTeamRosterAtDate(
             int fantasyTeamId,
@@ -186,11 +144,7 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(roster);
         }
 
-        /// <summary>
-        /// Searches players by first or last name and shows who holds them.
-        /// </summary>
-        /// <param name="search">Text to look for in the first or last name.</param>
-        /// <returns>The matching players with their current fantasy team, if any.</returns>
+        [AllowAnonymous]
         [HttpGet("search")]
         public async Task<IActionResult> SearchPlayers([FromQuery] string? search)
         {
@@ -199,16 +153,7 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(players);
         }
 
-        /// <summary>
-        /// Returns which fantasy team currently owns each of the
-        /// given NHL players in the current season. Players not on
-        /// any fantasy team are omitted from the response.
-        ///
-        /// Used by the Game Day page to display the team name next
-        /// to each player in an expanded boxscore. Authenticated but
-        /// not commissioner-only: any logged-in user can see who
-        /// owns whom.
-        /// </summary>
+        [AllowAnonymous]
         [HttpGet("ownership")]
         public async Task<IActionResult> GetOwnership(
             [FromQuery] int[] nhlPlayerIds,
@@ -222,22 +167,12 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(rows);
         }
 
-        /// <summary>
-        /// Returns per-game stats for every player on the given
-        /// fantasy team who dressed for an NHL game on the given
-        /// calendar date (yyyy-MM-dd, ET).
-        ///
-        /// Reads from PlayerGameLog, never from the NHL API. Used by
-        /// ClassementPage's "Hier" table, which shows yesterday's
-        /// finished games and has no use for live data.
-        ///
-        /// Only players who actually appeared in a game are returned.
-        /// </summary>
+        [AllowAnonymous]
         [HttpGet("game-stats-for-date")]
         public async Task<IActionResult> GetGameStatsForDate(
-     [FromQuery] int fantasyTeamId,
-     [FromQuery] string date,
-     CancellationToken ct = default)
+            [FromQuery] int fantasyTeamId,
+            [FromQuery] string date,
+            CancellationToken ct = default)
         {
             if (!DateOnly.TryParseExact(
                     date,
@@ -259,11 +194,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(rows);
         }
 
-        /// <summary>
-        /// Returns every game log for every player who was ever in the
-        /// ACTIVE starting lineup for the given fantasy team during
-        /// the season.
-        /// </summary>
         [HttpGet("team/{fantasyTeamId}/active-game-logs")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> GetActiveGameLogs(
@@ -278,22 +208,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(rows);
         }
 
-        /// <summary>
-        /// Returns the EFFECTIVE roster of one fantasy team for one
-        /// season: every player whose latest RosterStatusHistory row
-        /// (with EffectiveAt &lt;= now, status != Released) points at
-        /// that team. This is the source-of-truth view used by the
-        /// scoring recompute.
-        ///
-        /// Any player shown as Active here will have his production
-        /// credited to this team for the next game, assuming no
-        /// further change is made before that game. Trade and
-        /// assignment flows with a future effective date therefore
-        /// do not appear until that date arrives, exactly matching
-        /// the scoring behaviour.
-        ///
-        /// Read-only. Available to any authenticated user.
-        /// </summary>
         [HttpGet("team/{fantasyTeamId:int}/effective-roster")]
         public async Task<IActionResult> GetEffectiveRoster(
             int fantasyTeamId,
@@ -311,11 +225,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(roster);
         }
 
-        /// <summary>
-        /// Returns every continuous window during which some fantasy
-        /// team's roster shape was not
-        /// 12F/6D/1G active + 4F/2D/1G bench + 3 prospects.
-        /// </summary>
         [HttpGet("shape-violations")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> GetShapeViolations(
@@ -328,14 +237,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(violations);
         }
 
-        /// <summary>
-        /// Atomically swaps the RosterStatus of two players on the same
-        /// fantasy team at the same effective instant. Enforces same
-        /// position group and the exact league shape
-        /// (12/6/1 active + 4/2/1 bench + 3 prospects).
-        /// </summary>
-        /// <param name="request">Team, the two players, the effective instant and an optional note.</param>
-        /// <returns>The swap result, or 400 with the reason when it fails.</returns>
         [HttpPost("swap-status")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> SwapRosterStatus([FromBody] SwapRosterStatusRequest request)
@@ -350,13 +251,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Sets a single player's RosterStatus. Escape hatch used for
-        /// corrections and manual adjustments where a swap is not
-        /// applicable. Still enforces the league shape.
-        /// </summary>
-        /// <param name="request">Team, player, new status, effective instant and an optional note.</param>
-        /// <returns>The update result, or 400 with the reason when it fails.</returns>
         [HttpPost("set-status")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> SetRosterStatus([FromBody] SetRosterStatusRequest request)
@@ -371,13 +265,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Returns the append-only RosterStatusHistory of one player for
-        /// one season, most recent first.
-        /// </summary>
-        /// <param name="playerId">Player id (Player.Id).</param>
-        /// <param name="seasonId">Season id, or omitted to use the current season.</param>
-        /// <returns>The history rows.</returns>
         [HttpGet("status-history/{playerId}")]
         public async Task<IActionResult> GetRosterStatusHistory(
             int playerId,
@@ -389,16 +276,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(history);
         }
 
-        /// <summary>
-        /// Returns the FULL movement history of one player across
-        /// every season that has history rows, newest first. Each
-        /// row carries the season name so a cross-season view can
-        /// group or label it.
-        ///
-        /// Used by the admin page's "Historique des mouvements d'un
-        /// joueur" section. Commissioner-only.
-        /// </summary>
-        /// <param name="playerId">Player id (Player.Id).</param>
         [HttpGet("status-history/{playerId}/all")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> GetPlayerFullStatusHistory(
@@ -411,14 +288,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(history);
         }
 
-        /// <summary>
-        /// One-time seed that writes a history row per current RosterEntry
-        /// for a season, so existing rosters have a baseline before any
-        /// real swap happens. Safe to re-run: entries that already have
-        /// any history row for the season are skipped.
-        /// </summary>
-        /// <param name="request">Season id (optional) and the effective instant.</param>
-        /// <returns>The number of history rows inserted.</returns>
         [HttpPost("backfill-status-history")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> BackfillStatusHistory([FromBody] BackfillStatusHistoryRequest request)
@@ -434,13 +303,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Corrects the EffectiveAt of a history row in place. Sibling
-        /// rows that share the current EffectiveAt (e.g. the two rows
-        /// written by a trade) are moved together.
-        /// </summary>
-        /// <param name="id">History row id.</param>
-        /// <param name="request">The new effective instant and an optional note.</param>
         [HttpPatch("status-history/{id}")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> UpdateStatusHistory(
@@ -458,11 +320,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Deletes a history row. Sibling rows sharing the same
-        /// (PlayerId, SeasonId, EffectiveAt) are deleted together.
-        /// </summary>
-        /// <param name="id">History row id.</param>
         [HttpDelete("status-history/{id}")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> DeleteStatusHistory(int id)
@@ -478,26 +335,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Deletes every fantasy-team linkage for one player in the
-        /// given season: the live RosterEntry, every RosterStatusHistory
-        /// row, and every marketplace offer / pending or accepted
-        /// response that references him. The team totals recompute is
-        /// queued; the standings page reflects the change on the next
-        /// scheduler tick (≤ 30 s).
-        ///
-        /// After this call the player is treated as if he had never
-        /// been on any team this season, so no past game and no future
-        /// game will credit FP to any team for him.
-        ///
-        /// Trade and status-change audit records are preserved, but
-        /// their revert paths will refuse once one of their players
-        /// no longer has any history rows.
-        ///
-        /// Commissioner-only.
-        /// </summary>
-        /// <param name="playerId">Player id (Player.Id).</param>
-        /// <param name="seasonId">Season id, or omitted to use the current season.</param>
         [HttpPost("player/{playerId:int}/reset-fantasy-history")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> ResetPlayerFantasyHistory(

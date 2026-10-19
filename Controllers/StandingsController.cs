@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NhlFantasyLeague.api.Data;
 using NhlFantasyLeague.api.Models.Dtos;
@@ -11,11 +12,6 @@ namespace NhlFantasyLeague.api.Controllers
     [Route("api/[controller]")]
     public class StandingsController : ControllerBase
     {
-        /// <summary>
-        /// Standings change only during games. During a live slate,
-        /// users refresh constantly; a 30-second cache turns 20 loads
-        /// per minute into 2. Off-hours, nothing changes anyway.
-        /// </summary>
         private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
 
         private readonly AppDbContext _dbContext;
@@ -32,6 +28,7 @@ namespace NhlFantasyLeague.api.Controllers
             _cache = cache;
         }
 
+        [AllowAnonymous]
         [HttpGet]
         public async Task<IActionResult> GetStandings(
             [FromQuery] int? seasonId,
@@ -60,8 +57,8 @@ namespace NhlFantasyLeague.api.Controllers
         }
 
         private async Task<List<StandingsRowDto>?> BuildStandingsAsync(
-        int? seasonId,
-        CancellationToken ct)
+            int? seasonId,
+            CancellationToken ct)
         {
             var season = seasonId.HasValue
                 ? await _dbContext.Seasons
@@ -95,10 +92,6 @@ namespace NhlFantasyLeague.api.Controllers
                     GoalieShutouts = fts.GoalieShutouts,
                     GoaliePoints = fts.GoaliePoints,
 
-                    // Position-split fantasy points. These three columns
-                    // always sum to TotalFantasyPoints; both writers
-                    // preserve that invariant and log a Warning if it
-                    // ever fails.
                     ForwardFantasyPoints = fts.ForwardFantasyPoints,
                     DefenseFantasyPoints = fts.DefenseFantasyPoints,
                     GoalieFantasyPoints = fts.GoalieFantasyPoints,
@@ -109,8 +102,6 @@ namespace NhlFantasyLeague.api.Controllers
                 })
                 .ToListAsync(ct);
 
-            // Yesterday / today totals, computed on the fly. The season
-            // history is loaded once and handed to both computations.
             var seasonHistory = await _dbContext.RosterStatusHistories
                 .AsNoTracking()
                 .Where(h => h.SeasonId == season.Id)
@@ -118,21 +109,6 @@ namespace NhlFantasyLeague.api.Controllers
                 .ThenBy(h => h.Id)
                 .ToListAsync(ct);
 
-            // The "HIER" and "AJD" columns use the fantasy date, not
-            // the real ET calendar date. Between 00:00 and 03:00 ET
-            // the fantasy date stays on the previous calendar day, so
-            // a still-running West Coast game that started at 22:30 ET
-            // continues to be counted under "Aujourd'hui" for a
-            // manager watching it past midnight. At 03:00 ET the same
-            // game slides to "Hier" together with the two player
-            // tables on the Classement page.
-            //
-            // ComputeTeamDailyTotalsAsync filters PlayerGameLog rows by
-            // their GameDate, which is the real ET calendar date the
-            // game started on (written by NhlGameService.BuildSnapshot).
-            // Passing fantasyDate as "today" here is correct because
-            // the game's stored GameDate and the fantasy date coincide
-            // whenever a game belongs to the currently-displayed day.
             var nowUtc = DateTime.UtcNow;
             var today = TimeZoneHelper.GetFantasyDateEt(nowUtc);
             var yesterday = today.AddDays(-1);

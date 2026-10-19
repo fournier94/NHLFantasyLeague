@@ -56,6 +56,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <summary>
         /// Returns the league with its seasons and fantasy teams.
         /// </summary>
+        [AllowAnonymous]
         [HttpGet]
         public async Task<IActionResult> GetLeague()
         {
@@ -75,6 +76,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <summary>
         /// Returns every season ordered by NHL season code.
         /// </summary>
+        [AllowAnonymous]
         [HttpGet("seasons")]
         public async Task<IActionResult> GetSeasons()
         {
@@ -89,6 +91,7 @@ namespace NhlFantasyLeague.api.Controllers
         /// <summary>
         /// Returns every fantasy team ordered by name.
         /// </summary>
+        [AllowAnonymous]
         [HttpGet("teams")]
         public async Task<IActionResult> GetTeams()
         {

@@ -11,8 +11,8 @@ namespace NhlFantasyLeague.api.Controllers
     /// <summary>
     /// Draft pick endpoints.
     ///
-    /// Read endpoints are available to any authenticated user.
-    /// Mutations are commissioner-only.
+    /// Read endpoints are available to any visitor (anonymous or
+    /// authenticated). Mutations are commissioner-only.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
@@ -25,6 +25,7 @@ namespace NhlFantasyLeague.api.Controllers
             _dbContext = dbContext;
         }
 
+        [AllowAnonymous]
         [HttpGet("team/{fantasyTeamId:int}")]
         public async Task<IActionResult> GetTeamDraftPicks(
             int fantasyTeamId,
@@ -79,23 +80,6 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(result);
         }
 
-        /// <summary>
-        /// Transfers one draft pick from its current owner to another
-        /// team. Only the pick's CurrentOwnerFantasyTeamId is
-        /// rewritten; the OriginalOwnerFantasyTeamId is left alone
-        /// so the "came from" label keeps its full history.
-        ///
-        /// Also cleans up any marketplace object that the transfer
-        /// invalidates: an active offer, a pending/accepted response
-        /// that offered this pick, or a pending/accepted response
-        /// that requested this pick from its old owner. All are now
-        /// stale because the old owner no longer holds the pick.
-        /// Those objects are deleted in the same transaction as the
-        /// transfer, matching the policy used when a player changes
-        /// teams.
-        ///
-        /// Commissioner-only.
-        /// </summary>
         [HttpPost("transfer")]
         [Authorize(Roles = AuthService.CommissionerRole)]
         public async Task<IActionResult> TransferPick(
@@ -197,32 +181,6 @@ namespace NhlFantasyLeague.api.Controllers
             });
         }
 
-        /// <summary>
-        /// Deletes every marketplace object that references the given
-        /// pick on the given (old owner's) side.
-        ///
-        /// Three passes, all against the old owner:
-        ///
-        ///   1. Every ACTIVE TradeOffer created by the old owner that
-        ///      advertises this pick on its creator side.
-        ///
-        ///   2. Every PENDING or ACCEPTED TradeOfferResponse created
-        ///      by the old owner that offers this pick on its
-        ///      responder side, restricted to offers NOT being
-        ///      deleted in pass 1 (their responses cascade).
-        ///
-        ///   3. Every PENDING or ACCEPTED TradeOfferResponse on an
-        ///      offer created by the old owner that has this pick in
-        ///      its RequestedPicks, restricted to offers NOT being
-        ///      deleted in pass 1. The old owner can no longer
-        ///      deliver a pick that has been requested from him.
-        ///
-        /// Non-active offers and resolved/cancelled responses are
-        /// left in place: they are already invisible and deleting
-        /// them would erase audit rows for no benefit.
-        ///
-        /// Does NOT call SaveChangesAsync. Caller saves.
-        /// </summary>
         private async Task<(int OffersDeleted, int ResponsesDeleted)>
             DeleteMarketplaceObjectsForPickAsync(
                 int oldOwnerTeamId,
@@ -249,7 +207,6 @@ namespace NhlFantasyLeague.api.Controllers
                 _dbContext.TradeOffers.RemoveRange(offersToDelete);
             }
 
-            // Pass 2: the old owner's responses that offered this pick.
             var respondingIdsToDelete = await _dbContext
                 .TradeOfferResponsePicks
                 .AsNoTracking()
@@ -267,8 +224,6 @@ namespace NhlFantasyLeague.api.Controllers
                 .Distinct()
                 .ToListAsync(ct);
 
-            // Pass 3: responses on the old owner's offers that
-            // requested this pick from him.
             var requestedIdsToDelete = await _dbContext
                 .TradeOfferResponseRequestedPicks
                 .AsNoTracking()

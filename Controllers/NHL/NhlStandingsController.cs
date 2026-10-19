@@ -6,19 +6,19 @@ using NhlFantasyLeague.api.Data;
 namespace NhlFantasyLeague.api.Controllers.NHL
 {
     /// <summary>
-    /// Read-only NHL standings endpoint available to every authenticated
-    /// user (not just commissioners). Powers the "Équipes" section of the
-    /// Statistiques page.
+    /// Read-only NHL standings endpoint available to every visitor
+    /// (anonymous or authenticated). Powers the "Équipes" section of
+    /// the Statistiques page.
     ///
     /// This mirrors NhlTeamController.GetTeamSeasonStats exactly (same
-    /// columns, same filtering by season code and game type) but lives in
-    /// its own controller so the [Authorize(Roles = Commissioner)] on
-    /// NhlTeamController does not apply. The sync endpoints that DO belong
-    /// to the commissioner stay in NhlTeamController untouched.
+    /// columns, same filtering by season code and game type) but lives
+    /// in its own controller so the [Authorize(Roles = Commissioner)]
+    /// on NhlTeamController does not apply. The sync endpoints that DO
+    /// belong to the commissioner stay in NhlTeamController untouched.
     ///
     /// Read-only, idempotent, no writes.
     /// </summary>
-    [Authorize]
+    [AllowAnonymous]
     [ApiController]
     [Route("api/[controller]")]
     public class NhlStandingsController : ControllerBase
@@ -30,16 +30,6 @@ namespace NhlFantasyLeague.api.Controllers.NHL
             _dbContext = dbContext;
         }
 
-        /// <summary>
-        /// Returns every NhlTeamSeasonStat row for one season and game
-        /// type, joined with the team's identity and conference/division
-        /// fields so the frontend can group by conference, division, or
-        /// render a single league-wide table.
-        ///
-        /// Omit seasonCode to target the current season
-        /// (SeasonCodes.Current). Game type defaults to 2 (regular
-        /// season); pass 3 for playoffs.
-        /// </summary>
         [HttpGet("team-season-stats")]
         public async Task<IActionResult> GetTeamSeasonStats(
             [FromQuery] int? seasonCode,

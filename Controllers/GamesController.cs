@@ -11,78 +11,22 @@ using NhlFantasyLeague.api.Services.NHL;
 
 namespace NhlFantasyLeague.api.Controllers
 {
-    /// <summary>
-    /// Game Day endpoints. Serves today's schedule and boxscores from
-    /// the in-memory cache (no DB), and exposes manual triggers for
-    /// each scheduled job (commissioner-only, used for debugging and
-    /// recovery).
-    ///
-    /// The schedule response enriches each game with the team's
-    /// identity and season record (from NhlTeams + NhlTeamSeasonStats,
-    /// joined and cached for 5 minutes). The live cache itself stays
-    /// untouched so the Game Day page keeps its zero-DB read path.
-    ///
-    /// PAST-DATE ENDPOINTS AND THE NHL RATE LIMITER
-    ///
-    /// Past-date boxscores and by-date schedules are not in the
-    /// live cache (which only holds today's games), so they hit the
-    /// NHL API directly. Since the shared rate limiter was introduced
-    /// (see NhlApiRateLimiter), those calls queue behind whatever the
-    /// scheduled jobs are doing, which added visible latency for the
-    /// user. To mitigate, both endpoints are now cached in
-    /// ResponseCacheService:
-    ///
-    ///   - boxscore: 10 min, only for FINAL/OFF games. LIVE/CRIT are
-    ///     never cached (they need to stay fresh).
-    ///
-    ///   - by-date: 5 min, matching the client-side TTL, so repeat
-    ///     navigation between the same date and other views is a
-    ///     cache hit for both the browser and the API.
-    ///
-    /// The cache is invalidated by the live refresh only for standings
-    /// and roster prefixes; the boxscore and by-date caches are
-    /// short-lived and self-expire, which matches the reality that a
-    /// FINAL boxscore never changes.
-    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class GamesController : ControllerBase
     {
-        /// <summary>
-        /// How old the cache can be before IsFresh flips to false.
-        /// The scheduled live refresh runs every 7 minutes, so 10
-        /// minutes means "we missed at most one tick".
-        /// </summary>
         private static readonly TimeSpan CacheFreshnessWindow =
             TimeSpan.FromMinutes(10);
 
-        /// <summary>
-        /// TTL on the joined team lookup (NhlTeams + NhlTeamSeasonStats
-        /// keyed by abbreviation). Five minutes is well under the
-        /// once-per-day cadence of the daily team stats refresh, so
-        /// the lookup is rebuilt at most once every 5 minutes per
-        /// API process while never going stale between refreshes.
-        /// </summary>
         private static readonly TimeSpan TeamLookupTtl =
             TimeSpan.FromMinutes(5);
 
         private static readonly string TeamLookupCacheKey =
             "gameday:team-lookup";
 
-        /// <summary>
-        /// How long a FINAL/OFF boxscore is cached. The boxscore for a
-        /// finished game is effectively immutable; the NHL issues
-        /// rare corrections, and a 10-minute window is short enough
-        /// that a correction will be picked up on the next view.
-        /// LIVE/CRIT boxscores are never cached.
-        /// </summary>
         private static readonly TimeSpan FinalBoxscoreTtl =
             TimeSpan.FromMinutes(10);
 
-        /// <summary>
-        /// How long a by-date schedule is cached. Matches the client
-        /// TTL so repeat navigation is free on both ends.
-        /// </summary>
         private static readonly TimeSpan ByDateScheduleTtl =
             TimeSpan.FromMinutes(5);
 
@@ -106,10 +50,7 @@ namespace NhlFantasyLeague.api.Controllers
             _responseCache = responseCache;
         }
 
-        // =================================================================
-        // Read endpoints — served from the in-memory cache, no DB
-        // =================================================================
-
+        [AllowAnonymous]
         [HttpGet("today")]
         public async Task<IActionResult> GetToday(
             [FromQuery] bool refresh = false,
@@ -121,9 +62,7 @@ namespace NhlFantasyLeague.api.Controllers
             }
 
             var snapshots = _cache.GetAll();
-
             var nowUtc = DateTime.UtcNow;
-
             var teamLookup = await GetTeamLookupAsync(ct);
 
             var response = new GameDayScheduleResponse
@@ -169,13 +108,12 @@ namespace NhlFantasyLeague.api.Controllers
             return Ok(response);
         }
 
+        [AllowAnonymous]
         [HttpGet("{gameId:long}/boxscore")]
         public async Task<IActionResult> GetBoxscore(
             long gameId,
             CancellationToken ct = default)
         {
-            // Try the in-memory live cache first. It has today's
-            // games with the freshest data.
             var snapshot = _cache.Get(gameId);
 
             if (snapshot?.Boxscore != null)
@@ -183,8 +121,6 @@ namespace NhlFantasyLeague.api.Controllers
                 return Ok(snapshot.Boxscore);
             }
 
-            // Then try the response cache. This is populated for
-            // FINAL/OFF games by the fetch below.
             var cacheKey = $"boxscore:{gameId}";
 
             var cached = _responseCache.TryGet<NhlBoxscoreResponse>(cacheKey);
@@ -194,7 +130,6 @@ namespace NhlFantasyLeague.api.Controllers
                 return Ok(cached);
             }
 
-            // Fall back to fetching from the NHL API directly.
             try
             {
                 var box = await _gameService.GetBoxscoreAsync(gameId, ct);
@@ -207,11 +142,6 @@ namespace NhlFantasyLeague.api.Controllers
                     });
                 }
 
-                // Only cache FINAL/OFF. LIVE/CRIT change by the
-                // second; the live cache is the freshest source and
-                // this fallback is only hit when the live cache
-                // misses (which for a LIVE game means the refresh
-                // has not run yet).
                 if (!string.Equals(box.GameState, "LIVE",
                         StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(box.GameState, "CRIT",
@@ -232,11 +162,7 @@ namespace NhlFantasyLeague.api.Controllers
             }
         }
 
-        /// <summary>
-        /// Returns the schedule for a specific NHL calendar date
-        /// (yyyy-MM-dd, ET). Used by the Game Day date picker to show
-        /// the last 7 days of games.
-        /// </summary>
+        [AllowAnonymous]
         [HttpGet("by-date/{date}")]
         public async Task<IActionResult> GetByDate(
             string date,
@@ -267,10 +193,6 @@ namespace NhlFantasyLeague.api.Controllers
                 });
             }
 
-            // Cache the raw schedule for this date. The enrichment
-            // (team lookup join) runs on every call so a stale cache
-            // entry cannot serve a stale team name or record — those
-            // tables are tiny and cached separately anyway.
             var scheduleCacheKey = $"gameday:schedule:{date}";
 
             var schedule = await _responseCache.GetOrCreateAsync(
@@ -280,11 +202,6 @@ namespace NhlFantasyLeague.api.Controllers
 
             var teamLookup = await GetTeamLookupAsync(ct);
 
-            // Load the persisted per-game shots for this date. One
-            // query for the whole day, keyed by NhlGameId. The
-            // schedule endpoint does not carry shots, so this table
-            // (written by the live refresh and the post-game write)
-            // is the only source for past-date views.
             var gameStatsForDate = await _dbContext.NhlGameStats
                 .AsNoTracking()
                 .Where(s => s.GameDate == parsed)
@@ -338,10 +255,6 @@ namespace NhlFantasyLeague.api.Controllers
 
             return Ok(response);
         }
-
-        // =================================================================
-        // Team lookup — the join that populates the banner game card
-        // =================================================================
 
         private sealed class TeamLookupEntry
         {
@@ -441,10 +354,6 @@ namespace NhlFantasyLeague.api.Controllers
 
             return summary;
         }
-
-        // =================================================================
-        // Manual triggers — commissioner only, used for debugging
-        // =================================================================
 
         [HttpPost("refresh-live")]
         [Authorize(Roles = AuthService.CommissionerRole)]
