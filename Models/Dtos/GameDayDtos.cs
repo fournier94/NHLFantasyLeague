@@ -68,6 +68,13 @@ namespace NhlFantasyLeague.api.Models.Dtos
 
         // ---- Away side ----
 
+        /// <summary>
+        /// NHL API team id of the away team (e.g. 8 for Montreal).
+        /// Used by the frontend to link the away logo of an
+        /// unstarted game to that team's detail page.
+        /// </summary>
+        public int AwayNhlTeamId { get; set; }
+
         public string AwayAbbreviation { get; set; } = string.Empty;
         public string AwayFullName { get; set; } = string.Empty;
         public string AwayCommonName { get; set; } = string.Empty;
@@ -92,6 +99,12 @@ namespace NhlFantasyLeague.api.Models.Dtos
         public int? AwayShots { get; set; }
 
         // ---- Home side ----
+
+        /// <summary>
+        /// NHL API team id of the home team. Same purpose as
+        /// AwayNhlTeamId.
+        /// </summary>
+        public int HomeNhlTeamId { get; set; }
 
         public string HomeAbbreviation { get; set; } = string.Empty;
         public string HomeFullName { get; set; } = string.Empty;

@@ -1851,6 +1851,11 @@ export interface GameDayGameSummary {
     /** FUT, PRE, LIVE, CRIT, FINAL. */
     gameState: string;
 
+    /**
+     * NHL API team id of the away team. Used to link the away
+     * logo of an unstarted game to that team's detail page.
+     */
+    awayNhlTeamId: number;
     awayAbbreviation: string;
     awayFullName: string;
     awayCommonName: string;
@@ -1869,6 +1874,11 @@ export interface GameDayGameSummary {
      */
     awayShots: number | null;
 
+    /**
+     * NHL API team id of the home team. Same purpose as
+     * awayNhlTeamId.
+     */
+    homeNhlTeamId: number;
     homeAbbreviation: string;
     homeFullName: string;
     homeCommonName: string;

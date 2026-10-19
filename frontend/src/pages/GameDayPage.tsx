@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
     getGameBoxscore,
     getGamesByDate,
@@ -407,12 +407,16 @@ function TeamBoxscore({
 
     return (
         <div className='space-y-2'>
-            <div className='flex items-center gap-2 border-b border-[#00A8FF]/20 pb-1'>
-                <NhlTeamLogo abbreviation={abbreviation} size={20} />
-                <span className='text-sm font-semibold text-foreground'>
+            <div className='flex items-center gap-2 border-b border-[#00A8FF]/20 pb-1.5'>
+                <div className='relative flex h-7 w-7 shrink-0 items-center justify-center'>
+                    <div className='absolute inset-0 flex items-center justify-center scale-[1.2]'>
+                        <NhlTeamLogo abbreviation={abbreviation} size={38} />
+                    </div>
+                </div>
+                <span className='text-base font-semibold text-foreground'>
                     {abbreviation}
                 </span>
-                <span className='text-[0.65rem] uppercase tracking-wider text-[#7DD3FC]'>
+                <span className='text-xs uppercase tracking-wider text-[#7DD3FC]'>
                     {label}
                 </span>
             </div>
@@ -524,7 +528,7 @@ function BoxscorePanel({
             // a nested scrollbar. Since only one team's boxscore is
             // shown at a time (the away OR the home side), the total
             // content fits comfortably on any screen.
-            className='space-y-4 border-t px-3 py-3'
+            className='space-y-4 border-t px-3 py-2'
             style={boxscoreStyle}
             onClick={(event) => event.stopPropagation()}
         >
@@ -583,6 +587,7 @@ function TeamSide({
     side,
     dimmed = false,
     active = false,
+    onLogoClick,
 }: {
     abbreviation: string;
     placeName: string;
@@ -601,6 +606,13 @@ function TeamSide({
      * active and the other is dimmed.
      */
     active?: boolean;
+    /**
+     * When provided, the team logo becomes clickable and navigates
+     * to that team's detail page. Only set on unstarted games
+     * (FUT / PRE), so the click does not fight the boxscore expand
+     * behaviour that clickable cards have.
+     */
+    onLogoClick?: () => void;
 }) {
     const isAway = side === 'away';
     const accentSide: 'left' | 'right' = isAway ? 'left' : 'right';
@@ -690,14 +702,33 @@ function TeamSide({
                 style={{ zIndex: 3 }}
             >
                 {/* When this side is the inactive one on an expanded
-                    card, the logo is desaturated to match the dimmed
-                    background. filter applies to the whole subtree,
-                    so wrapping the logo is enough — no changes to the
-                    NhlTeamLogo component are needed. 0.2 = 20%
-                    saturation = 80% reduction. */}
+                card, the logo is desaturated to match the dimmed
+                background. filter applies to the whole subtree,
+                so wrapping the logo is enough — no changes to the
+                NhlTeamLogo component are needed. 0.2 = 20%
+                saturation = 80% reduction.
+
+                When onLogoClick is set (unstarted games only), the
+                wrapper becomes a clickable target. The click is
+                stopped here so the outer game card's onClick never
+                fires, and the wrapper gets cursor-pointer plus
+                hover/press feedback so the tap reads as intentional. */}
                 <div
+                    onClick={
+                        onLogoClick
+                            ? (event) => {
+                                event.stopPropagation();
+                                onLogoClick();
+                            }
+                            : undefined
+                    }
+                    className={cn(
+                        'relative scale-[1.35]',
+                        onLogoClick && 'cursor-pointer hover:scale-[1.45] active:scale-[1.25]'
+                    )}
                     style={{
                         filter: dimmed ? 'saturate(0.2)' : undefined,
+                        zIndex: 10,
                     }}
                 >
                     <NhlTeamLogo
@@ -752,6 +783,7 @@ function GameCard({
     boxscoreLoading,
     ownershipByPlayerId,
     onToggle,
+    onTeamLogoClick,
 }: {
     game: GameDayGameSummary;
     expanded: boolean;
@@ -760,6 +792,7 @@ function GameCard({
     boxscoreLoading: boolean;
     ownershipByPlayerId: Map<number, PlayerOwnership>;
     onToggle: (gameId: number, side: 'away' | 'home') => void;
+    onTeamLogoClick: (nhlTeamId: number) => void;
 }) {
     const live = isLive(game);
     const scheduled = isScheduled(game);
@@ -804,6 +837,22 @@ function GameCard({
     // collapsed, neither side is dimmed.
     const awayDimmed = expanded && expandedSide === 'home';
     const homeDimmed = expanded && expandedSide === 'away';
+
+    // Click handlers for the team logos. Only set on unstarted
+    // games: on a clickable card the logo click still belongs to
+    // the card, so the user expands the side they tapped instead
+    // of navigating away. The > 0 guards protect against a lookup
+    // miss where the abbreviation could not be mapped to an NHL
+    // team id.
+    const handleAwayLogoClick =
+        scheduled && game.awayNhlTeamId > 0
+            ? () => onTeamLogoClick(game.awayNhlTeamId)
+            : undefined;
+
+    const handleHomeLogoClick =
+        scheduled && game.homeNhlTeamId > 0
+            ? () => onTeamLogoClick(game.homeNhlTeamId)
+            : undefined;
 
     const awayScore = game.awayScore ?? 0;
     const homeScore = game.homeScore ?? 0;
@@ -1105,6 +1154,7 @@ function GameCard({
                     side='away'
                     dimmed={awayDimmed}
                     active={expandedSide === 'away'}
+                    onLogoClick={handleAwayLogoClick}
                 />
 
                 {/* Center column. Neutral navy with only the cyan
@@ -1222,6 +1272,7 @@ function GameCard({
                     side='home'
                     dimmed={homeDimmed}
                     active={expandedSide === 'home'}
+                    onLogoClick={handleHomeLogoClick}
                 />
             </div>
 
@@ -1320,6 +1371,8 @@ export default function GameDayPage() {
      * the scroll was dispatched.
      */
     const pendingScrollToGameIdRef = useRef<number | null>(null);
+
+    const navigate = useNavigate();
 
     // Same aura channel as the MonEquipePage team picker, so the
     // admin appearance slider drives both at once.
@@ -1572,6 +1625,26 @@ export default function GameDayPage() {
             }
         },
         [],
+    );
+
+    const handleTeamLogoClick = useCallback(
+        (nhlTeamId: number) => {
+            if (!selectedDate) return;
+
+            // The snapshot is kept current by the effect further
+            // down, but we save it again here so this handler is
+            // self-sufficient regardless of render timing.
+            saveGameDaySnapshot({
+                selectedDate,
+                expandedGameId,
+                expandedSide,
+            });
+
+            navigate(`/nhl-equipe/${nhlTeamId}`, {
+                state: { returnTo: '/game-day' },
+            });
+        },
+        [selectedDate, expandedGameId, expandedSide, navigate],
     );
 
     // --- Mount effect: seed the fantasy date and the selected date ---
@@ -2266,6 +2339,7 @@ export default function GameDayPage() {
                                     : new Map()
                             }
                             onToggle={handleToggleExpand}
+                            onTeamLogoClick={handleTeamLogoClick}
                         />
                     ))}
                 </div>

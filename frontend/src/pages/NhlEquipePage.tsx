@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
     getNhlStandings,
@@ -92,6 +92,21 @@ function computeRank(
 export default function NhlEquipePage() {
     const { nhlTeamId } = useParams<{ nhlTeamId: string }>();
 
+    const location = useLocation();
+
+    // When GameDay navigates here via a team-logo click on an
+    // unstarted game, it passes state.returnTo = '/game-day'. In
+    // that case the "Retour" button must return the user to the
+    // GameDay page (where the snapshot will be restored). For every
+    // other entry point (Statistiques standings table, direct
+    // URL, etc.), the fallback stays Statistiques with the teams
+    // tab selected, which is the pre-existing behaviour.
+    const returnTo =
+        (location.state as { returnTo?: string } | null)?.returnTo;
+
+    const backTo = returnTo || '/statistiques';
+    const backState = returnTo ? undefined : { initialTab: 'teams' as const };
+
     const [rows, setRows] = useState<NhlTeamStandingsRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -141,8 +156,8 @@ export default function NhlEquipePage() {
             <section className='-mt-4 flex min-h-full w-full flex-col items-center gap-3 pt-2.5 sm:-mt-6'>
                 <div className='w-full max-w-5xl'>
                     <Link
-                        to='/statistiques'
-                        state={{ initialTab: 'teams' }}
+                        to={backTo}
+                        state={backState}
                         className='inline-flex items-center gap-2 text-base text-muted-foreground transition-colors hover:text-white'
                     >
                         <ArrowLeft className='h-5 w-5' />
@@ -195,8 +210,8 @@ export default function NhlEquipePage() {
             {/* Back link */}
             <div className='w-full max-w-5xl'>
                 <Link
-                    to='/statistiques'
-                    state={{ initialTab: 'teams' }}
+                    to={backTo}
+                    state={backState}
                     className='inline-flex items-center gap-2 text-base text-muted-foreground transition-colors hover:text-white'
                 >
                     <ArrowLeft className='h-5 w-5' />

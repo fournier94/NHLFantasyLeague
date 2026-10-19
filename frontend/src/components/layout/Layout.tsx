@@ -30,9 +30,10 @@ import {
  * land back on it (see lib/playerNavigation.ts).
  *
  * It also clears the GameDayPage state snapshot whenever the user
- * lands on a page that is neither GameDay nor a player page. That
- * makes the snapshot only survive a direct PlayerPage -> GameDayPage
- * round-trip; any other page in between resets it.
+ * lands on a page that is neither GameDay, a player page, nor an
+ * NHL team page. That makes the snapshot survive a direct
+ * GameDay -> (Player | NhlEquipe) -> GameDay round-trip; any other
+ * page in between resets it.
  */
 export function Layout() {
     const headerRef = useRef<HTMLElement>(null);
@@ -99,22 +100,27 @@ export function Layout() {
     }, [location.pathname, location.search, location.hash]);
 
     // Clear the GameDay state snapshot whenever the user lands on a
-    // page that is neither GameDay nor a player page.
+    // page that is neither GameDay, a player page, nor an NHL team
+    // page.
     //
     // This is what makes the snapshot survive only a direct
-    // PlayerPage -> GameDayPage transition:
+    // GameDay -> (Player | NhlEquipe) -> GameDay transition:
     //
     //   GameDay -> Player -> GameDay                : no clear, restore applied
+    //   GameDay -> NhlEquipe -> GameDay             : no clear, restore applied
     //   GameDay -> Player -> Classement -> GameDay  : clear on Classement, no restore
     //   GameDay -> Classement -> GameDay            : clear on Classement, no restore
     //
-    // Player pages themselves do not clear: that is precisely the
-    // path we want to survive.
+    // Player and NhlEquipe pages themselves do not clear: those are
+    // precisely the paths we want to survive, because both are
+    // reached from GameDay (Player via a name link in the expanded
+    // boxscore, NhlEquipe via a logo click on an unstarted game).
     useEffect(() => {
         const path = location.pathname;
         const isGameDay = path === '/game-day';
+        const isNhlEquipe = path.startsWith('/nhl-equipe/');
 
-        if (!isGameDay && !isPlayerPath(path)) {
+        if (!isGameDay && !isPlayerPath(path) && !isNhlEquipe) {
             clearGameDaySnapshot();
         }
     }, [location.pathname]);

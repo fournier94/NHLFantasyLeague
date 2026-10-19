@@ -258,6 +258,12 @@ namespace NhlFantasyLeague.api.Controllers
 
         private sealed class TeamLookupEntry
         {
+            /// <summary>
+            /// NHL API team id. Used by the frontend to link the
+            /// team logo of an unstarted game to the team page.
+            /// </summary>
+            public int NhlTeamId { get; set; }
+
             public string FullName { get; set; } = string.Empty;
             public string CommonName { get; set; } = string.Empty;
             public string PlaceName { get; set; } = string.Empty;
@@ -305,6 +311,7 @@ namespace NhlFantasyLeague.api.Controllers
 
                 var entry = new TeamLookupEntry
                 {
+                    NhlTeamId = team.NhlTeamId,
                     FullName = team.Name,
                     CommonName = team.CommonName,
                     PlaceName = team.PlaceName,
@@ -334,6 +341,7 @@ namespace NhlFantasyLeague.api.Controllers
                     summary.AwayAbbreviation,
                     out var away))
             {
+                summary.AwayNhlTeamId = away.NhlTeamId;
                 summary.AwayFullName = away.FullName;
                 summary.AwayCommonName = away.CommonName;
                 summary.AwayPlaceName = away.PlaceName;
@@ -345,6 +353,7 @@ namespace NhlFantasyLeague.api.Controllers
                     summary.HomeAbbreviation,
                     out var home))
             {
+                summary.HomeNhlTeamId = home.NhlTeamId;
                 summary.HomeFullName = home.FullName;
                 summary.HomeCommonName = home.CommonName;
                 summary.HomePlaceName = home.PlaceName;
