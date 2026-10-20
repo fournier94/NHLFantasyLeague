@@ -2551,57 +2551,41 @@ export default function StatistiquesPage() {
                 </button>
             </div>
 
-            <div
-                className={
-                    mainTab === 'players'
-                        ? 'block w-full'
-                        : 'hidden'
-                }
-            >
-                <TopScorersTable
-                    rows={scorerRows}
-                    loading={scorerLoading}
-                    error={scorerError}
-                    myTeamId={myTeamId}
-                    showContracts={showContracts}
-                    onToggleContracts={(checked) => {
-                        if (user != null) {
-                            void updatePreferences({ showContractsStats: checked });
-                        } else {
-                            setLocalShowContractsStats(checked);
-                        }
-                    }}
-                    playerFilter={playerFilter}
-                    onPlayerFilterChange={(filter) => {
-                        if (user != null) {
-                            void updatePreferences({ statistiquesPlayerFilter: filter });
-                        } else {
-                            setLocalPlayerFilter(filter);
-                        }
-                    }}
-                />
-            </div>
+            {mainTab === 'players' && (
+                <div className="block w-full">
+                    <TopScorersTable
+                        rows={scorerRows}
+                        loading={scorerLoading}
+                        error={scorerError}
+                        myTeamId={myTeamId}
+                        showContracts={showContracts}
+                        onToggleContracts={(checked) => {
+                            if (user != null) {
+                                void updatePreferences({ showContractsStats: checked });
+                            } else {
+                                setLocalShowContractsStats(checked);
+                            }
+                        }}
+                        playerFilter={playerFilter}
+                        onPlayerFilterChange={(filter) => {
+                            if (user != null) {
+                                void updatePreferences({ statistiquesPlayerFilter: filter });
+                            } else {
+                                setLocalPlayerFilter(filter);
+                            }
+                        }}
+                    />
+                </div>
+            )}
 
-            {hasVisitedTeams && (
-                <div
-                    className={
-                        mainTab === 'teams'
-                            ? 'block w-full'
-                            : 'hidden'
-                    }
-                >
+            {mainTab === 'teams' && hasVisitedTeams && (
+                <div className="block w-full">
                     <TeamsSection />
                 </div>
             )}
 
-            {hasVisitedInjuries && (
-                <div
-                    className={
-                        mainTab === 'injuries'
-                            ? 'mt-4 block w-full sm:mt-6'
-                            : 'hidden'
-                    }
-                >
+            {mainTab === 'injuries' && hasVisitedInjuries && (
+                <div className="mt-4 block w-full sm:mt-6">
                     <InjuriesPage hideTitle />
                 </div>
             )}
