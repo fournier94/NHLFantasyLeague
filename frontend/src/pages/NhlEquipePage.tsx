@@ -12,7 +12,6 @@ import {
     getNhlTeamColor,
     getNhlTeamTextColor,
     getNhlTeamAuraColor,
-    getNhlTeamOutlineColor,
     desaturateHex,
 } from '@/lib/nhlTeamColors';
 
@@ -326,7 +325,6 @@ export default function NhlEquipePage() {
     const primaryColor = getNhlTeamColor(team.teamAbbreviation);
     const textColor = getNhlTeamTextColor(team.teamAbbreviation);
     const auraColor = getNhlTeamAuraColor(team.teamAbbreviation);
-    const outlineColor = getNhlTeamOutlineColor(team.teamAbbreviation);
 
     // Specific overrides
     const isBlackBgTeam = team.teamAbbreviation === 'VGK' || team.teamAbbreviation === 'BOS';
@@ -371,15 +369,8 @@ export default function NhlEquipePage() {
     const badgeBgColor = primaryColor;
     const badgeTextColor = isBlackBgTeam || isColumbus ? '#FFFFFF' : textColor;
 
-    // Use secondary team color for MTL outline, otherwise use the standard outline color
-    const finalOutlineColor = isMontreal ? (textColor || '#192168') : outlineColor;
-
-    const textOutlineStyle: React.CSSProperties = finalOutlineColor
-        ? {
-            WebkitTextStroke: `2px ${finalOutlineColor}`,
-            paintOrder: 'stroke fill',
-        }
-        : {};
+    // Removed outline styles entirely
+    const textOutlineStyle: React.CSSProperties = {};
 
     // Calculate ranks for the top section
     const rankDiff = team ? computeRank(rows, statsConfig.DIFF, team) : undefined;
