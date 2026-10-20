@@ -813,8 +813,22 @@ export default function MonEquipePage() {
     const [localShowContractsRoster, setLocalShowContractsRoster] =
         useState<boolean | null>(null);
 
+    // Optimistic state: updates instantly when you click, then syncs 
+    // with the DB. Prevents the checkbox from "snapping back" while 
+    // the network request is in flight.
+    const [optimisticShowContracts, setOptimisticShowContracts] =
+        useState<boolean | null>(null);
+
     const showContracts =
-        user?.showContractsRoster ?? localShowContractsRoster ?? false;
+        optimisticShowContracts ??
+        user?.showContractsRoster ??
+        localShowContractsRoster ??
+        false;
+
+    // Clear the optimistic state once the real value from the server arrives
+    useEffect(() => {
+        setOptimisticShowContracts(null);
+    }, [user?.showContractsRoster]);
 
     const [teams, setTeams] = useState<FantasyTeam[]>([]);
 
@@ -1501,10 +1515,12 @@ export default function MonEquipePage() {
                                     type="checkbox"
                                     checked={showContracts}
                                     onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setOptimisticShowContracts(checked);
                                         if (user != null) {
-                                            void updatePreferences({ showContractsRoster: e.target.checked });
+                                            void updatePreferences({ showContractsRoster: checked });
                                         } else {
-                                            setLocalShowContractsRoster(e.target.checked);
+                                            setLocalShowContractsRoster(checked);
                                         }
                                     }}
                                     className="peer sr-only"

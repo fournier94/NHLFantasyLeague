@@ -173,10 +173,10 @@ namespace NhlFantasyLeague.api.Controllers
             }
 
             if (!Enum.TryParse<PlayerPageStyle>(
-         request.Style?.Trim(),
-         ignoreCase: true,
-         out var parsed)
-     || !Enum.IsDefined(parsed))
+                request.Style?.Trim(),
+                ignoreCase: true,
+                out var parsed)
+                || !Enum.IsDefined(parsed))
             {
                 return BadRequest(new
                 {
@@ -201,27 +201,48 @@ namespace NhlFantasyLeague.api.Controllers
                 return Unauthorized();
             }
 
+            // Fix concurrency issue: LastActiveMiddleware updates the user row
+            // silently in the background, which modifies the ConcurrencyStamp.
+            // Instead of using _userManager.UpdateAsync (which throws a concurrency 
+            // exception and fails silently), we use ExecuteUpdateAsync to 
+            // atomically update only the preference columns.
+            var updateQuery = _dbContext.Users.Where(u => u.Id == user.Id);
+            var hasUpdates = false;
+
             if (request.ShowContractsStats.HasValue)
             {
-                user.ShowContractsStats = request.ShowContractsStats.Value;
+                await updateQuery.ExecuteUpdateAsync(s =>
+                    s.SetProperty(u => u.ShowContractsStats, request.ShowContractsStats.Value));
+                hasUpdates = true;
             }
 
             if (request.ShowContractsRoster.HasValue)
             {
-                user.ShowContractsRoster = request.ShowContractsRoster.Value;
+                await updateQuery.ExecuteUpdateAsync(s =>
+                    s.SetProperty(u => u.ShowContractsRoster, request.ShowContractsRoster.Value));
+                hasUpdates = true;
             }
 
             if (!string.IsNullOrWhiteSpace(request.StatistiquesPlayerFilter))
             {
-                user.StatistiquesPlayerFilter = request.StatistiquesPlayerFilter;
+                await updateQuery.ExecuteUpdateAsync(s =>
+                    s.SetProperty(u => u.StatistiquesPlayerFilter, request.StatistiquesPlayerFilter));
+                hasUpdates = true;
             }
 
             if (!string.IsNullOrWhiteSpace(request.StatistiquesStandingsView))
             {
-                user.StatistiquesStandingsView = request.StatistiquesStandingsView;
+                await updateQuery.ExecuteUpdateAsync(s =>
+                    s.SetProperty(u => u.StatistiquesStandingsView, request.StatistiquesStandingsView));
+                hasUpdates = true;
             }
 
-            await _userManager.UpdateAsync(user);
+            if (hasUpdates)
+            {
+                // Re-fetch the user to return the fresh state to the frontend
+                _dbContext.ChangeTracker.Clear();
+                user = await _dbContext.Users.AsNoTracking().FirstAsync(u => u.Id == user.Id);
+            }
 
             return Ok(await BuildAuthUserAsync(user));
         }
