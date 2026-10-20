@@ -586,7 +586,6 @@ function TeamSide({
     secondaryColor,
     dimmed = false,
     active = false,
-    onLogoClick,
     nhlTeamId,
     onTeamPageClick,
 }: {
@@ -598,7 +597,6 @@ function TeamSide({
     secondaryColor: string;
     dimmed?: boolean;
     active?: boolean;
-    onLogoClick?: () => void;
     nhlTeamId: number;
     onTeamPageClick: (nhlTeamId: number) => void;
 }) {
@@ -622,17 +620,12 @@ function TeamSide({
     const saturationFilter =
         active && !dimmed ? 'saturate(1.15)' : undefined;
 
-    // ================================================================
-    // PAGE D'ÉQUIPE BUTTON — DESIGN #1
-    // Double border + visible inner glow
-    // ================================================================
-
-    // Keep the team's color in the button while darkening the surface
-    // enough for the border and text to stand out.
+    // Button background is now 100% opaque (no alpha).
     const buttonBg = dimmed
-        ? 'rgba(17, 17, 17, 0.96)'
-        : `${secondaryColor}A6`;
+        ? '#111111'
+        : secondaryColor;
 
+    // The text is strictly the primary team color (fillColor).
     const buttonText = dimmed
         ? '#AAAAAA'
         : fillColor;
@@ -656,9 +649,6 @@ function TeamSide({
             // Colored light inside the button.
             `inset 0 0 7px ${secondaryColor}`,
 
-            // Darken the center slightly so the text stays readable.
-            'inset 0 0 3px 1px rgba(0, 0, 0, 0.55)',
-
             // Restrained colored glow around the outside.
             `0 0 5px ${secondaryColor}`,
         ].join(', ');
@@ -681,19 +671,7 @@ function TeamSide({
                 style={{ zIndex: 3 }}
             >
                 <div
-                    onClick={
-                        onLogoClick
-                            ? (event) => {
-                                event.stopPropagation();
-                                onLogoClick();
-                            }
-                            : undefined
-                    }
-                    className={cn(
-                        'relative scale-[1.35]',
-                        onLogoClick &&
-                        'cursor-pointer hover:scale-[1.45] active:scale-[1.25]'
-                    )}
+                    className='relative scale-[1.35]'
                     style={{
                         filter: dimmed ? 'saturate(0.2)' : undefined,
                         zIndex: 10,
@@ -739,8 +717,11 @@ function TeamSide({
                 }}
                 className={cn(
                     'absolute bottom-0 left-0 right-0 w-full',
-                    'box-border py-1.5',
-                    'text-[0.6rem] font-bold uppercase tracking-wider',
+                    // Lock the height to 27px and center the text so
+                    // the button stays the exact same physical size, 
+                    // no matter the font size.
+                    'flex h-[27px] items-center justify-center',
+                    'text-xs font-extrabold uppercase tracking-wider leading-none',
                     'transition-[background-color,box-shadow,filter,transform] duration-200',
                     !dimmed &&
                     'hover:brightness-125 active:scale-[0.98]'
@@ -748,16 +729,13 @@ function TeamSide({
                 style={{
                     backgroundColor: buttonBg,
                     color: buttonText,
+                    opacity: 1, // Forces 100% opacity on the text
 
                     // First border: colored outer frame.
                     border: `1px solid ${buttonBorder}`,
 
                     // Second border and both glow layers.
                     boxShadow: buttonShadow,
-
-                    // Keep the existing glass effect.
-                    backdropFilter: 'blur(8px)',
-                    WebkitBackdropFilter: 'blur(8px)',
 
                     // Ensure the button and its borders remain visible.
                     position: 'absolute',
@@ -838,22 +816,6 @@ function GameCard({
     // collapsed, neither side is dimmed.
     const awayDimmed = expanded && expandedSide === 'home';
     const homeDimmed = expanded && expandedSide === 'away';
-
-    // Click handlers for the team logos. Only set on unstarted
-    // games: on a clickable card the logo click still belongs to
-    // the card, so the user expands the side they tapped instead
-    // of navigating away. The > 0 guards protect against a lookup
-    // miss where the abbreviation could not be mapped to an NHL
-    // team id.
-    const handleAwayLogoClick =
-        scheduled && game.awayNhlTeamId > 0
-            ? () => onTeamLogoClick(game.awayNhlTeamId)
-            : undefined;
-
-    const handleHomeLogoClick =
-        scheduled && game.homeNhlTeamId > 0
-            ? () => onTeamLogoClick(game.homeNhlTeamId)
-            : undefined;
 
     const awayScore = game.awayScore ?? 0;
     const homeScore = game.homeScore ?? 0;
@@ -1154,7 +1116,6 @@ function GameCard({
                     secondaryColor={awaySecondaryColor}
                     dimmed={awayDimmed}
                     active={expandedSide === 'away'}
-                    onLogoClick={handleAwayLogoClick}
                     nhlTeamId={game.awayNhlTeamId}
                     onTeamPageClick={onTeamLogoClick}
                 />
@@ -1273,7 +1234,6 @@ function GameCard({
                     secondaryColor={homeSecondaryColor}
                     dimmed={homeDimmed}
                     active={expandedSide === 'home'}
-                    onLogoClick={handleHomeLogoClick}
                     nhlTeamId={game.homeNhlTeamId}
                     onTeamPageClick={onTeamLogoClick}
                 />

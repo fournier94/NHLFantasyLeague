@@ -478,17 +478,7 @@ const TopScorersRow = memo(function TopScorersRow({
     row: TopScorerRow;
     rank: number;
     isMine: boolean;
-    /**
-     * True quand le filtre "Gardiens" est actif. Les colonnes du
-     * milieu basculent sur W / L / OTL / SO / SV% / GAA à la place
-     * de G / A / PTS / ATOI.
-     */
     showGoalieColumns: boolean;
-    /**
-     * True quand la case "Afficher les contrats" est cochée.
-     * Affiche le salaire et les années restantes sous le nom
-     * du joueur, comme sur MonEquipePage.
-     */
     showContracts: boolean;
 }) {
     const navigate = useNavigate();
@@ -515,7 +505,7 @@ const TopScorersRow = memo(function TopScorersRow({
     return (
         <Link
             to={`/joueurs/${row.nhlPlayerId}`}
-            className={`grid h-full w-full items-center border-b py-1 pl-1 pr-2 text-[0.9rem] tabular-nums transition-[filter] duration-150 hover:brightness-110 ${showGoalieColumns ? 'gap-x-1' : 'gap-x-0.5'
+            className={`grid w-full items-center border-b py-1 pl-1 pr-2 text-[0.9rem] tabular-nums transition-[filter] duration-150 hover:brightness-110 ${showGoalieColumns ? 'gap-x-1' : 'gap-x-0.5'
                 }`}
             style={{
                 gridTemplateColumns: showGoalieColumns
@@ -535,10 +525,6 @@ const TopScorersRow = memo(function TopScorersRow({
                 {rank}
             </div>
 
-            {/* Team — nom d'équipe fantasy, dans sa propre colonne
-                à droite du rang. Cliquable pour naviguer vers la
-                page Mon équipe de cette équipe, comme partout
-                ailleurs. */}
             <div className='flex min-w-0 items-center justify-center'>
                 {teamLabel && row.fantasyTeamId != null && (
                     <span

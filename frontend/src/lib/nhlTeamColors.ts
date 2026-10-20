@@ -47,7 +47,7 @@ export const NHL_TEAM_TEXT_COLORS: Record<string, string> = {
     EDM: '#FF4C00',
     FLA: '#041E42',
     LAK: '#A2AAAD',
-    MIN: '#c7102c',
+    MIN: '#DDCBA4',
     MTL: '#192168',
     NSH: '#041E42',
     NJD: '#FFFFFF',
@@ -92,6 +92,15 @@ export const NHL_TEAM_AURA_COLORS: Record<string, string> = {
     ANA: '#E34402',
 };
 
+/**
+ * Specific accent/outline colors for certain teams.
+ * Used to draw a colored stroke around text on top of primary team colors.
+ */
+export const NHL_TEAM_OUTLINE_COLORS: Record<string, string> = {
+    OTT: '#B79257',
+    FLA: '#B9975B',
+};
+
 export function getNhlTeamColor(
     abbreviation: string | null | undefined,
 ): string {
@@ -120,6 +129,15 @@ export function getNhlTeamAuraColor(
         NHL_TEAM_COLORS[key] ??
         '#00A8FF'
     );
+}
+
+/**
+ * Returns the custom outline color for a team, or undefined if none is set.
+ */
+export function getNhlTeamOutlineColor(
+    abbreviation: string | null | undefined,
+): string | undefined {
+    return NHL_TEAM_OUTLINE_COLORS[abbreviation?.toUpperCase() ?? ''];
 }
 
 export function desaturateHex(
