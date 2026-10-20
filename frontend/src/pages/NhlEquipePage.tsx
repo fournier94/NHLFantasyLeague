@@ -227,13 +227,11 @@ export default function NhlEquipePage() {
     const { nhlTeamId } = useParams<{ nhlTeamId: string }>();
     const location = useLocation();
 
-    const returnTo =
-        (location.state as { returnTo?: string } | null)?.returnTo;
+    const state = location.state as { returnTo?: string, initialTab?: string } | null;
+    const returnTo = state?.returnTo;
 
     const backTo = returnTo || '/statistiques';
-    const backState = returnTo
-        ? undefined
-        : { initialTab: 'teams' as const };
+    const backState = { initialTab: state?.initialTab ?? 'teams' };
 
     const [rows, setRows] = useState<NhlTeamStandingsRow[]>([]);
     const [loading, setLoading] = useState(true);

@@ -21,6 +21,7 @@ import {
     type PlayerContractLine,
 } from '@/api/client';
 import { getStatsFilters, setStatsFilters } from '@/lib/statsFiltersState';
+import { consumePendingRestore, hasPendingRestore, setPendingRestore } from '@/lib/scrollRestoration';
 
 type MainTab = 'players' | 'injuries' | 'teams';
 
@@ -553,6 +554,22 @@ const TopScorersRow = memo(function TopScorersRow({
 
             <div className='flex self-stretch items-center justify-center'>
                 <div
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const teamIds: Record<string, number> = {
+                            ANA: 24, BOS: 6, BUF: 7, CGY: 20, CAR: 12, CHI: 16, COL: 21, CBJ: 29,
+                            DAL: 25, DET: 17, EDM: 22, FLA: 13, LAK: 26, MIN: 30, MTL: 8, NSH: 18,
+                            NJD: 1, NYI: 2, NYR: 3, OTT: 9, PHI: 4, PIT: 5, SJS: 28, SEA: 55,
+                            STL: 19, TBL: 14, TOR: 10, UTA: 59, VAN: 23, VGK: 54, WSH: 15, WPG: 52
+                        };
+                        const id = teamIds[row.nhlTeamAbbreviation?.toUpperCase()];
+                        if (id) {
+                            setPendingRestore(null, window.scrollY);
+                            navigate(`/nhl-equipe/${id}`, { state: { returnTo: window.location.pathname + window.location.search, initialTab: 'players' } });
+                        }
+                    }}
+                    className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
                     style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -2384,7 +2401,9 @@ export default function StatistiquesPage() {
 
         if (state.initialTab) {
             setMainTab(state.initialTab);
-            window.scrollTo(0, 0);
+            if (!hasPendingRestore()) {
+                window.scrollTo(0, 0);
+            }
         }
 
         if (state.resetTab) {
@@ -2392,6 +2411,18 @@ export default function StatistiquesPage() {
             window.scrollTo(0, 0);
         }
     }, [location.state]);
+
+    useEffect(() => {
+        if (mainTab !== 'teams') return;
+        const pending = consumePendingRestore();
+        if (!pending) return;
+        const timer = setTimeout(() => {
+            if (pending.scrollY > 0) {
+                window.scrollTo({ top: pending.scrollY, behavior: 'auto' });
+            }
+        }, 100);
+        return () => clearTimeout(timer);
+    }, [mainTab]);
 
     const [scorerRows, setScorerRows] = useState<TopScorerRow[]>([]);
     const [scorerLoading, setScorerLoading] = useState(true);

@@ -1,5 +1,5 @@
 ﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     getLeagueTeams,
     getTeamDraftPicks,
@@ -19,7 +19,7 @@ import {
     auraRangeFor,
     isAuraOff,
 } from '@/lib/auraConfig';
-import { consumePendingRestore } from '@/lib/scrollRestoration';
+import { consumePendingRestore, setPendingRestore } from '@/lib/scrollRestoration';
 import { useAuth } from '@/lib/AuthContext';
 
 function isActive(entry: RosterEntry): boolean {
@@ -472,6 +472,7 @@ const LineupRow = memo(function LineupRow({
     isLastOfSection: boolean;
     showContracts: boolean;
 }) {
+    const navigate = useNavigate();
     const group = toLineupPositionGroup(entry.position);
     const isGoalie = group === 'G';
     const s = entry.currentSeason;
@@ -568,6 +569,22 @@ const LineupRow = memo(function LineupRow({
         >
             <div className='flex self-stretch items-center justify-center'>
                 <div
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const teamIds: Record<string, number> = {
+                            ANA: 24, BOS: 6, BUF: 7, CGY: 20, CAR: 12, CHI: 16, COL: 21, CBJ: 29,
+                            DAL: 25, DET: 17, EDM: 22, FLA: 13, LAK: 26, MIN: 30, MTL: 8, NSH: 18,
+                            NJD: 1, NYI: 2, NYR: 3, OTT: 9, PHI: 4, PIT: 5, SJS: 28, SEA: 55,
+                            STL: 19, TBL: 14, TOR: 10, UTA: 59, VAN: 23, VGK: 54, WSH: 15, WPG: 52
+                        };
+                        const id = teamIds[entry.nhlTeamAbbreviation?.toUpperCase()];
+                        if (id) {
+                            setPendingRestore(null, window.scrollY);
+                            navigate(`/nhl-equipe/${id}`, { state: { returnTo: window.location.pathname + window.location.search } });
+                        }
+                    }}
+                    className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
                     style={{
                         display: 'flex',
                         alignItems: 'center',

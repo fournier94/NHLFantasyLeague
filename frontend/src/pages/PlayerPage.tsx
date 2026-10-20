@@ -20,10 +20,11 @@ import {
 } from '@/lib/auraConfig';
 import { getNhlTeamAuraColor } from '@/lib/nhlTeamColors';
 import { getLastNonPlayerLocation } from '@/lib/playerNavigation';
+import { consumePendingRestore, setPendingRestore } from '@/lib/scrollRestoration';
 import { useAuth } from '@/lib/AuthContext';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
 import { NeonTitle } from '@/components/ui/NeonTitle';
-import { Banknote, Ruler } from 'lucide-react';
+import { ArrowLeft, Banknote, Ruler } from 'lucide-react';
 
 // ---------------------------------------------------------------------
 // Formatters
@@ -1997,7 +1998,6 @@ export default function PlayerPage() {
     const [showGameLog, setShowGameLog] = useState(false);
     const [showInjuryModal, setShowInjuryModal] = useState(false);
 
-    const closeAura = useAura('playerPageCloseButton');
     const pageTeamLogoAura = useAura('playerPageTeamLogo');
 
     useEffect(() => {
@@ -2023,6 +2023,18 @@ export default function PlayerPage() {
 
         void state;
     }, [location.state]);
+
+    useEffect(() => {
+        if (!player) return;
+        const pending = consumePendingRestore();
+        if (!pending) return;
+        const frame = requestAnimationFrame(() => {
+            if (pending.scrollY > 0) {
+                window.scrollTo({ top: pending.scrollY, behavior: 'auto' });
+            }
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [player]);
 
     useEffect(() => {
         if (!nhlPlayerId) {
@@ -2088,20 +2100,6 @@ export default function PlayerPage() {
         navigate('/mon-equipe', { replace: true });
     }
 
-    const closeRest = [
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 0) * 1.2).toFixed(2)}px #FFFFFF`,
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 1) * 1.5).toFixed(2)}px #EF4444`,
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 2) * 1.5).toFixed(2)}px rgba(239, 68, 68, 0.9)`,
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 3) * 1.5).toFixed(2)}px rgba(239, 68, 68, 0.6)`,
-    ].join(', ');
-
-    const closePeak = [
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 0) * 1.5).toFixed(2)}px #FFFFFF`,
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 1) * 2.0).toFixed(2)}px #EF4444`,
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 2) * 2.0).toFixed(2)}px #EF4444`,
-        `0 0 ${(auraRangeFor(closeAura, 'playerPageCloseButton', 3) * 2.0).toFixed(2)}px rgba(239, 68, 68, 0.9)`,
-    ].join(', ');
-
     // Use the aura-only color so the logo glow stays visible for
     // teams with a dark primary (UTA, SEA, TBL, etc.). The base
     // team color is intentionally not used here.
@@ -2121,49 +2119,28 @@ export default function PlayerPage() {
         `drop-shadow(0 0 ${auraRangeFor(pageTeamLogoAura, 'playerPageTeamLogo', 2).toFixed(2)}px ${pageTeamLogoColor}${auraAlphaHex(pageTeamLogoAura, 0x33, 0xBB)})`,
     ].join(' ');
 
-    const closeButtonClass = cn(
-        'pointer-events-auto cursor-pointer rounded-md bg-transparent px-3 py-1.5 text-[0.95rem] font-normal text-white transition-colors hover:bg-secondary',
-        !isAuraOff(closeAura) ? auraPulseClass('text') : '',
-    );
-
-    const closeButtonStyle = {
-        WebkitTextStrokeWidth: '1.75px',
-        WebkitTextStrokeColor: '#EF4444',
-        paintOrder: 'stroke fill',
-        ...(!isAuraOff(closeAura)
-            ? auraPulseStyle(closeRest, closePeak)
-            : {}),
-    } as React.CSSProperties;
-
-    function CloseButtonLayer() {
-        return (
-            <div className='pointer-events-none fixed inset-x-0 top-0 z-40'>
-                <div className='mx-auto flex w-full max-w-5xl justify-end px-2 pt-[calc(var(--header-height,4rem))] sm:px-3'>
-                    <button
-                        type='button'
-                        onClick={handleClose}
-                        className={closeButtonClass}
-                        style={closeButtonStyle}
-                    >
-                        ✕ Fermer
-                    </button>
-                </div>
-            </div>
-        );
-    }
-
     if (loading) {
         return <p className='text-muted-foreground'>Chargement...</p>;
     }
 
     if (error || !player) {
         return (
-            <div className='space-y-3'>
-                <CloseButtonLayer />
-                <p className='text-destructive'>
+            <section className="-mt-4 flex min-h-full w-full flex-col items-center gap-3 pt-2.5 sm:-mt-6">
+                <div className="w-full max-w-5xl">
+                    <button
+                        type="button"
+                        onClick={handleClose}
+                        className="inline-flex items-center gap-2 text-base text-muted-foreground transition-colors hover:text-white"
+                    >
+                        <ArrowLeft className="h-5 w-5" />
+                        <span>Retour</span>
+                    </button>
+                </div>
+
+                <p className="text-base text-destructive">
                     {error ?? 'Joueur introuvable.'}
                 </p>
-            </div>
+            </section>
         );
     }
 
@@ -2258,7 +2235,16 @@ export default function PlayerPage() {
 
     return (
         <>
-            <CloseButtonLayer />
+            <div className="sticky top-[calc(var(--header-height,4rem)+0.5rem)] z-[60] w-full max-w-5xl px-3 h-0 pointer-events-none flex justify-end">
+                <button
+                    type="button"
+                    onClick={handleClose}
+                    className="pointer-events-auto inline-flex items-center gap-2 text-lg font-bold text-white transition-colors hover:text-white/80 -translate-y-1"
+                >
+                    <ArrowLeft className="h-5 w-5" />
+                    <span>Retour</span>
+                </button>
+            </div>
 
             <section className='mx-auto -mt-3 w-full max-w-5xl space-y-4'>
                 {player.heroImageUrl && (
@@ -2340,7 +2326,21 @@ export default function PlayerPage() {
                                     <img
                                         src={player.nhlTeamLogoUrl}
                                         alt={player.nhlTeamAbbreviation ?? ''}
-                                        className={`h-8 w-8 shrink-0 ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            const teamIds: Record<string, number> = {
+                                                ANA: 24, BOS: 6, BUF: 7, CGY: 20, CAR: 12, CHI: 16, COL: 21, CBJ: 29,
+                                                DAL: 25, DET: 17, EDM: 22, FLA: 13, LAK: 26, MIN: 30, MTL: 8, NSH: 18,
+                                                NJD: 1, NYI: 2, NYR: 3, OTT: 9, PHI: 4, PIT: 5, SJS: 28, SEA: 55,
+                                                STL: 19, TBL: 14, TOR: 10, UTA: 59, VAN: 23, VGK: 54, WSH: 15, WPG: 52
+                                            };
+                                            const id = teamIds[player.nhlTeamAbbreviation?.toUpperCase() ?? ''];
+                                            if (id) {
+                                                setPendingRestore(null, window.scrollY);
+                                                navigate(`/nhl-equipe/${id}`, { state: { returnTo: window.location.pathname + window.location.search } });
+                                            }
+                                        }}
+                                        className={`h-8 w-8 shrink-0 cursor-pointer transition-transform hover:scale-110 active:scale-95 ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
                                         style={
                                             !isAuraOff(pageTeamLogoAura)
                                                 ? auraPulseStyle(pageTeamLogoRest, pageTeamLogoPeak)
