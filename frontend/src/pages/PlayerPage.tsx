@@ -2323,9 +2323,7 @@ export default function PlayerPage() {
                                 />
 
                                 {player.nhlTeamLogoUrl && (
-                                    <img
-                                        src={player.nhlTeamLogoUrl}
-                                        alt={player.nhlTeamAbbreviation ?? ''}
+                                    <div
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             const teamIds: Record<string, number> = {
@@ -2340,13 +2338,19 @@ export default function PlayerPage() {
                                                 navigate(`/nhl-equipe/${id}`, { state: { returnTo: window.location.pathname + window.location.search } });
                                             }
                                         }}
-                                        className={`h-8 w-8 shrink-0 cursor-pointer transition-transform hover:scale-110 active:scale-95 ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
-                                        style={
-                                            !isAuraOff(pageTeamLogoAura)
-                                                ? auraPulseStyle(pageTeamLogoRest, pageTeamLogoPeak)
-                                                : undefined
-                                        }
-                                    />
+                                        className="relative cursor-pointer transition-transform hover:scale-110 active:scale-95 after:absolute after:-inset-3 after:content-['']"
+                                    >
+                                        <img
+                                            src={player.nhlTeamLogoUrl}
+                                            alt={player.nhlTeamAbbreviation ?? ''}
+                                            className={`h-8 w-8 shrink-0 ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
+                                            style={
+                                                !isAuraOff(pageTeamLogoAura)
+                                                    ? auraPulseStyle(pageTeamLogoRest, pageTeamLogoPeak)
+                                                    : undefined
+                                            }
+                                        />
+                                    </div>
                                 )}
                             </p>
                         )}

@@ -569,7 +569,7 @@ const TopScorersRow = memo(function TopScorersRow({
                             navigate(`/nhl-equipe/${id}`, { state: { returnTo: window.location.pathname + window.location.search, initialTab: 'players' } });
                         }
                     }}
-                    className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
+                    className="relative cursor-pointer transition-transform hover:scale-110 active:scale-95 after:absolute after:-inset-3 after:content-['']"
                     style={{
                         display: 'flex',
                         alignItems: 'center',

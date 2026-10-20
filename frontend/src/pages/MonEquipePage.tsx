@@ -584,7 +584,7 @@ const LineupRow = memo(function LineupRow({
                             navigate(`/nhl-equipe/${id}`, { state: { returnTo: window.location.pathname + window.location.search } });
                         }
                     }}
-                    className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
+                    className="relative cursor-pointer transition-transform hover:scale-110 active:scale-95 after:absolute after:-inset-3 after:content-['']"
                     style={{
                         display: 'flex',
                         alignItems: 'center',
