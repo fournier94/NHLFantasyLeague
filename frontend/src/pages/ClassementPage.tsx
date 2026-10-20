@@ -393,30 +393,6 @@ function renderDailyTotal(value: number) {
 }
 
 // ---------------------------------------------------------------------
-// Small line-chart glyph used in the FP column
-// ---------------------------------------------------------------------
-
-function TrendGlyph({ color = GOLD }: { color?: string }) {
-    return (
-        <svg
-            viewBox='0 0 24 24'
-            width={16}
-            height={16}
-            fill='none'
-            stroke={color}
-            strokeWidth={2}
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            aria-hidden='true'
-            style={{ filter: `drop-shadow(0 0 2px ${color})` }}
-        >
-            <path d='M3 17 L9 11 L13 15 L21 6' />
-            <path d='M15 6 L21 6 L21 12' />
-        </svg>
-    );
-}
-
-// ---------------------------------------------------------------------
 // Rank cell — crown for 1, metallic pill for 2/3, outlined for 4+
 // ---------------------------------------------------------------------
 
@@ -1946,14 +1922,11 @@ export default function ClassementPage() {
                                         )}
                                     </div>
 
-                                    <div className='flex items-center justify-center gap-1'>
-                                        <span
-                                            className='text-sm font-bold sm:text-base'
-                                            style={{ color: GOLD }}
-                                        >
-                                            {row.totalFantasyPoints}
-                                        </span>
-                                        <TrendGlyph color={GOLD} />
+                                    <div
+                                        className='text-center font-bold'
+                                        style={{ color: GOLD }}
+                                    >
+                                        {row.totalFantasyPoints}
                                     </div>
                                 </div>
                             );

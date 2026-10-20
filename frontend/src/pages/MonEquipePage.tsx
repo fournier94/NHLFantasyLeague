@@ -674,11 +674,11 @@ const LineupRow = memo(function LineupRow({
                     : (atoi ?? '—')}
             </div>
 
-            {/* HIER et AJD : réduits de 0.95rem à 0.9rem sur ≥ 400px. */}
-            <div className='text-center text-[0.85rem] min-[400px]:text-[0.9rem]'>
+            {/* HIER et AJD : légèrement augmentés */}
+            <div className='text-center text-[0.9rem] min-[400px]:text-[1rem]'>
                 {renderDailyPoints(entry.yesterdayFantasyPoints)}
             </div>
-            <div className='text-center text-[0.85rem] min-[400px]:text-[0.9rem]'>
+            <div className='text-center text-[0.9rem] min-[400px]:text-[1rem]'>
                 {renderDailyPoints(entry.todayFantasyPoints)}
             </div>
 
