@@ -1574,7 +1574,17 @@ export default function GameDayPage() {
             try {
                 const result = await getGamesByDate(date);
                 if (!isMountedRef.current) return null;
-                setData(result);
+
+                // If the requested date matches the current fantasy date, do not
+                // overwrite the data. The `fetchTodayGames` function is the
+                // authoritative source for today's schedule and will populate
+                // the state reliably. This prevents a race condition where
+                // this slower request could overwrite the full week's
+                // schedule with an empty or stale one.
+                if (date !== result.currentFantasyDate) {
+                    setData(result);
+                }
+
                 setError(null);
                 return result;
             } catch {
@@ -1944,13 +1954,14 @@ export default function GameDayPage() {
         const snapshot = peekGameDaySnapshot();
         if (snapshot == null) return;
 
+        // Force the loading state so the user sees "Chargement..." instead
+        // of "Aucun match prévu" if the fetch takes a moment to resolve.
+        setLoading(true);
         setSelectedDate(snapshot.selectedDate);
         setExpandedGameId(snapshot.expandedGameId);
         setExpandedSide(snapshot.expandedSide);
 
-        // Fire both network calls in parallel. The games list and
-        // the boxscore are independent; racing them halves the
-        // time to first paint of the expanded card.
+        // Fire both network calls in parallel.
         void fetchGamesForDate(snapshot.selectedDate);
 
         if (

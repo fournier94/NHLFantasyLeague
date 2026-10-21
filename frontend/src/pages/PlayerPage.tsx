@@ -19,7 +19,6 @@ import {
     AURA_STRIP_PULSE_PEAK_SCALE,
 } from '@/lib/auraConfig';
 import { getNhlTeamAuraColor } from '@/lib/nhlTeamColors';
-import { getLastNonPlayerLocation } from '@/lib/playerNavigation';
 import { consumePendingRestore, setPendingRestore } from '@/lib/scrollRestoration';
 import { useAuth } from '@/lib/AuthContext';
 import { NhlTeamLogo } from '@/components/nhl/NhlTeamLogo';
@@ -2083,21 +2082,13 @@ export default function PlayerPage() {
     // history, so a hardware / gesture Back after Fermer does not
     // re-enter the middle of the chain.
     function handleClose() {
-        const stored = getLastNonPlayerLocation();
-
-        if (stored != null) {
-            navigate(
-                {
-                    pathname: stored.pathname,
-                    search: stored.search,
-                    hash: stored.hash,
-                },
-                { replace: true },
-            );
-            return;
+        // Go back exactly 1 step, just like the Retour button.
+        // If we just landed on the app (no history), fall back to Mon équipe.
+        if (window.history.state && window.history.state.idx > 0) {
+            navigate(-1);
+        } else {
+            navigate('/mon-equipe', { replace: true });
         }
-
-        navigate('/mon-equipe', { replace: true });
     }
 
     // Use the aura-only color so the logo glow stays visible for
@@ -2302,7 +2293,7 @@ export default function PlayerPage() {
                         </div>
 
                         {player.position && (
-                            <p className='mt-1 flex h-5 items-center text-sm text-foreground'>
+                            <div className='mt-1 flex h-5 items-center text-sm text-foreground'>
                                 <span>
                                     <span className='font-bold'>
                                         {displayPosition(player.position)}
@@ -2322,7 +2313,7 @@ export default function PlayerPage() {
                                     }
                                 />
 
-                                {player.nhlTeamLogoUrl && (
+                                {player.nhlTeamAbbreviation && (
                                     <div
                                         onClick={(e) => {
                                             e.stopPropagation();
@@ -2338,21 +2329,20 @@ export default function PlayerPage() {
                                                 navigate(`/nhl-equipe/${id}`, { state: { returnTo: window.location.pathname + window.location.search } });
                                             }
                                         }}
-                                        className="relative cursor-pointer transition-transform hover:scale-110 active:scale-95 after:absolute after:-inset-3 after:content-['']"
+                                        className={`relative shrink-0 cursor-pointer transition-transform hover:scale-110 active:scale-95 after:absolute after:-inset-3 after:content-[''] ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
+                                        style={
+                                            !isAuraOff(pageTeamLogoAura)
+                                                ? auraPulseStyle(pageTeamLogoRest, pageTeamLogoPeak)
+                                                : undefined
+                                        }
                                     >
-                                        <img
-                                            src={player.nhlTeamLogoUrl}
-                                            alt={player.nhlTeamAbbreviation ?? ''}
-                                            className={`h-8 w-8 shrink-0 ${!isAuraOff(pageTeamLogoAura) ? auraPulseClass('filter') : ''}`}
-                                            style={
-                                                !isAuraOff(pageTeamLogoAura)
-                                                    ? auraPulseStyle(pageTeamLogoRest, pageTeamLogoPeak)
-                                                    : undefined
-                                            }
+                                        <NhlTeamLogo
+                                            abbreviation={player.nhlTeamAbbreviation}
+                                            size={32}
                                         />
                                     </div>
                                 )}
-                            </p>
+                            </div>
                         )}
 
                         {(birthDateDisplay || player.age != null) && (

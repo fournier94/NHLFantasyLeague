@@ -20,7 +20,12 @@ import {
     type TopScorerRow,
     type PlayerContractLine,
 } from '@/api/client';
-import { getStatsFilters, setStatsFilters } from '@/lib/statsFiltersState';
+import {
+    getStatsFilters,
+    setStatsFilters,
+    getStatsMainTab,
+    setStatsMainTab,
+} from '@/lib/statsFiltersState';
 import { consumePendingRestore, hasPendingRestore, setPendingRestore } from '@/lib/scrollRestoration';
 
 type MainTab = 'players' | 'injuries' | 'teams';
@@ -1923,7 +1928,7 @@ const DIVISION_ORDER = [
 ];
 
 const TEAM_STANDINGS_GRID =
-    '18px 72px 12px repeat(5, 22px) 46px repeat(3, 38px) repeat(5, 50px)';
+    '30px 72px 12px repeat(5, 22px) 46px repeat(3, 38px) repeat(5, 50px)';
 
 type TeamSortKey =
     | 'name'
@@ -2186,7 +2191,7 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
                         <div className='w-max mx-auto'>
                             {/* Header Row */}
                             <div
-                                className='grid w-full items-center py-2 px-3 text-[0.8rem] font-black uppercase leading-none sm:text-[0.85rem]'
+                                className='grid w-full items-center py-2 pl-0 pr-3 text-[0.8rem] font-black uppercase leading-none sm:text-[0.85rem]'
                                 style={{
                                     gridTemplateColumns: TEAM_STANDINGS_GRID,
                                     columnGap: '2px',
@@ -2194,7 +2199,7 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
                                     backgroundColor: '#050A16',
                                 }}
                             >
-                                <div />
+                                <div className='-my-2 self-stretch' />
                                 <SortableStandingsHeader label='Équipe' sortKey='name' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='pl-1 tracking-wider whitespace-nowrap' />
                                 <div />
                                 <SortableStandingsHeader label='GP' sortKey='gp' activeSortKey={sortKey} sortDirection={sortDir} onSort={handleSort} className='text-white' />
@@ -2218,19 +2223,31 @@ const NhlStandingsTable = memo(function NhlStandingsTable({
                                 {group.teams.map((team, index) => (
                                     <div
                                         key={team.id}
-                                        className='grid items-center py-2 px-3 text-[0.95rem] font-bold tabular-nums leading-none transition-[filter] duration-150 hover:brightness-110'
+                                        className='grid items-center py-2 pl-0 pr-3 text-[0.95rem] font-bold tabular-nums leading-none transition-[filter] duration-150 hover:brightness-110'
                                         style={{
                                             gridTemplateColumns: TEAM_STANDINGS_GRID,
                                             backgroundColor: getNhlTeamColor(team.teamAbbreviation),
                                             backgroundImage: 'linear-gradient(to right, transparent 216px, rgba(0,0,0,0.15) 216px, rgba(0,0,0,0.15) 238px, transparent 238px)',
                                             color: getNhlTeamTextColor(team.teamAbbreviation),
                                             columnGap: '2px',
-                                            border: '2px solid transparent',
+                                            borderLeft: '2px solid #FFFFFF',
+                                            borderRight: '2px solid transparent',
                                             contentVisibility: 'auto',
                                             containIntrinsicSize: '40px',
                                         } as React.CSSProperties}
                                     >
-                                        <div className='flex justify-center items-center'>
+                                        <div
+                                            className='-my-2 flex self-stretch items-center justify-center font-black'
+                                            style={{
+                                                backgroundColor: '#050A16',
+                                                color: '#FFFFFF',
+                                                borderRight: '2px solid #FFFFFF',
+                                                borderBottom:
+                                                    index === group.teams.length - 1
+                                                        ? '2px solid #FFFFFF'
+                                                        : undefined,
+                                            }}
+                                        >
                                             {index + 1}
                                         </div>
 
@@ -2388,7 +2405,13 @@ export default function StatistiquesPage() {
     const playerFilter =
         user?.statistiquesPlayerFilter ?? localPlayerFilter ?? 'rostered';
 
-    const [mainTab, setMainTab] = useState<MainTab>('players');
+    const [mainTab, setMainTabState] = useState<MainTab>(() => getStatsMainTab());
+
+    const setMainTab = useCallback((tab: MainTab) => {
+        setMainTabState(tab);
+        setStatsMainTab(tab);
+    }, []);
+
     const location = useLocation();
 
     useEffect(() => {
@@ -2410,7 +2433,7 @@ export default function StatistiquesPage() {
             setMainTab('players');
             window.scrollTo(0, 0);
         }
-    }, [location.state]);
+    }, [location.state, setMainTab]);
 
     useEffect(() => {
         if (mainTab !== 'teams') return;
@@ -2458,8 +2481,8 @@ export default function StatistiquesPage() {
         };
     }, [playerFilter]);
 
-    const [hasVisitedInjuries, setHasVisitedInjuries] = useState(false);
-    const [hasVisitedTeams, setHasVisitedTeams] = useState(false);
+    const [hasVisitedInjuries, setHasVisitedInjuries] = useState(() => getStatsMainTab() === 'injuries');
+    const [hasVisitedTeams, setHasVisitedTeams] = useState(() => getStatsMainTab() === 'teams');
 
     useEffect(() => {
         if (mainTab === 'injuries') {

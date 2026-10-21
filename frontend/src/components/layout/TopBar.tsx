@@ -51,25 +51,9 @@ import {
     LEAGUE_LOGO_PULSE_REST_SCALE,
 } from '@/lib/auraConfig';
 
-// ---------------------------------------------------------------------
-// Single size knob for every non-logo icon in the top bar.
-//
-// Change this one constant to scale every icon (mobile shortcuts,
-// search, hamburger, desktop nav links, profil) at once. The league
-// logo is intentionally excluded: it keeps its own fixed h-10 size.
-//
-// Responsive via Tailwind variants. Tiers are stacked so the
-// tightest match wins:
-//   h-6 w-6                   -> default (>= 400px)
-//   max-[400px]:h-5 w-5       -> under 400px
-//
-// Adjust the pixel values or add more tiers as needed. Nothing here
-// uses JavaScript; Tailwind compiles this into plain @media rules.
-// ---------------------------------------------------------------------
 const NAV_ICON_CLASS =
     'h-6 w-6 max-[400px]:h-5 max-[400px]:w-5';
 
-/** Nav items rendered inside the mobile hamburger. */
 const MOBILE_NAV_ITEMS = [
     { to: '/mon-equipe', label: 'Mon equipe', icon: Users },
     { to: '/game-day', label: 'Game Day', icon: CalendarDays },
@@ -77,26 +61,11 @@ const MOBILE_NAV_ITEMS = [
     { to: '/classement', label: 'Classement', icon: Crown },
 ];
 
-/** Colors used for the mobile shortcut icons. */
 const GOLD = '#FFC72C';
 const GAMEDAY_CYAN = '#00E5FF';
 const SEARCH_WHITE = '#FFFFFF';
 const MARKETPLACE_VIOLET = '#A855F7';
-
-/**
- * Green used for the marketplace badge when only "Voir les offres"
- * items are pending. Matches the "Nouvelle offre" chip that is
- * rendered on top of a fresh or modified offer card, so the badge
- * and the chip read as the same green signal.
- */
 const MARKETPLACE_GREEN = '#22C55E';
-
-/**
- * Two-layer glow, matching the crown effect on the Classement page:
- *
- *   drop-shadow(0 0 6px  rgba(color, 0.85))   <- inner, tight
- *   drop-shadow(0 0 14px rgba(color, 0.4))    <- outer, soft bloom
- */
 
 const GAMEDAY_AURA = [
     `drop-shadow(0 0 6px rgba(0, 229, 255, 0.85))`,
@@ -108,10 +77,6 @@ const STATS_AURA = [
     `drop-shadow(0 0 14px rgba(249, 115, 22, 0.4))`,
 ].join(' ');
 
-/**
- * Gold aura for the Classement shortcut (crown icon in the mobile
- * top bar).
- */
 const GOLD_AURA = [
     `drop-shadow(0 0 6px rgba(255, 199, 44, 0.85))`,
     `drop-shadow(0 0 14px rgba(255, 199, 44, 0.4))`,
@@ -127,13 +92,6 @@ const MARKETPLACE_AURA = [
     `drop-shadow(0 0 14px rgba(168, 85, 247, 0.4))`,
 ].join(' ');
 
-/**
- * Contained-filament "tube" style applied to the install button so it
- * visually stands out at the bottom of the hamburger. Everything lives
- * inside the button's own bounding box: no outer glow, no drop-shadow,
- * no filter. The neon read comes from the thick cyan border (the tube)
- * sitting under a thin near-white inset ring (the filament).
- */
 const INSTALL_BUTTON_STYLE: React.CSSProperties = {
     backgroundColor: '#080D1A',
     border: '2px solid #00C8FF',
@@ -144,37 +102,16 @@ const INSTALL_BUTTON_STYLE: React.CSSProperties = {
     ].join(', '),
 };
 
-/**
- * Search popup frame, matching the marketplace offer card exactly
- * (MarketplacePage.tsx OFFER_* constants):
- *
- *   - thick cyan tube      : 2px solid #00C8FF
- *   - thin near-white core : inset 1px rgba(255, 253, 240, 0.95)
- *   - soft cyan bloom      : inset 10px rgba(0, 200, 255, 0.55)
- *   - wider cyan halo      : inset 28px rgba(0, 200, 255, 0.15)
- *
- * All inset. No outer glow, no drop-shadow — everything stays inside
- * the popup's own bounding box, matching the contained-filament
- * technique used everywhere else in the app.
- */
 const SEARCH_POPUP_STYLE: React.CSSProperties = {
     backgroundColor: '#080D1A',
     border: '2px solid #00C8FF',
     boxShadow: [
-        // Filament: a pale cyan, not white. Bright enough to read as
-        // the inner core of the neon tube, but tinted toward the
-        // tube's own #00C8FF so the whole frame reads as one cyan
-        // material rather than cyan-with-a-white-line-through-it.
         'inset 0 0 0 1px rgba(200, 245, 255, 0.9)',
         'inset 0 0 10px rgba(0, 200, 255, 0.55)',
         'inset 0 0 28px rgba(0, 200, 255, 0.15)',
     ].join(', '),
 };
 
-/**
- * Crossed hockey sticks with a puck, drawn as a small inline SVG.
- * Cyan neon look to match the reference image.
- */
 function GameDayIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     return (
         <svg
@@ -195,14 +132,6 @@ function GameDayIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     );
 }
 
-/**
- * Bar chart icon used on the mobile nav for the Statistiques page.
- *
- * Three vertical bars of increasing height, stroked in the same
- * cyan as the Game Day shortcut, with the same two-layer aura.
- * Matches the visual weight of the other mobile shortcut icons
- * (line weight 1.9, rounded joins, same drop-shadow pattern).
- */
 function StatsIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     return (
         <img
@@ -215,11 +144,6 @@ function StatsIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     );
 }
 
-/**
- * Marketplace icon: two horizontal arrows facing opposite directions.
- * viewBox is cropped (2 3 20 18) so the arrows fill the icon box the
- * same way GameDayIcon's puck and sticks fill theirs.
- */
 function MarketplaceIcon({ className = NAV_ICON_CLASS }: { className?: string }) {
     return (
         <svg
@@ -233,41 +157,17 @@ function MarketplaceIcon({ className = NAV_ICON_CLASS }: { className?: string })
             style={{ filter: MARKETPLACE_AURA }}
             aria-hidden='true'
         >
-            {/* Top arrow, pointing right */}
             <path d='M4 8 H17' />
             <path d='M14 5 L17 8 L14 11' />
-
-            {/* Bottom arrow, pointing left */}
             <path d='M20 16 H7' />
             <path d='M10 13 L7 16 L10 19' />
         </svg>
     );
 }
 
-/**
- * Navbar badge that sits centered on the marketplace icon. Shows
- * the number of unseen marketplace items (new browse offers + new
- * received responses) for the connected user.
- *
- * Hidden when:
- *   - the user is not authenticated, or
- *   - the count is zero.
- *
- * Uses useSyncExternalStore so React re-renders only when the
- * count actually changes. The subscription starts a 60-second
- * polling loop; the loop stops automatically when the last
- * subscriber (this component) unmounts.
- *
- * Rendering: the badge is absolutely positioned at the center of
- * the parent icon wrapper. The parent must be a
- * `relative inline-flex` element so the badge anchors to the icon
- * itself rather than to the whole link.
- */
 function MarketplaceBadge() {
     const { isAuthenticated } = useAuth();
-
     if (!isAuthenticated) return null;
-
     return <MarketplaceBadgeContent />;
 }
 
@@ -279,26 +179,13 @@ function MarketplaceBadgeContent() {
 
     if (notifications.total <= 0) return null;
 
-    // Gold takes priority over green. A new response on the user's
-    // own offer, or an acceptance of an offer the user sent, is
-    // more urgent than a new or modified listing in Voir les
-    // offres. When both categories have items, the badge stays
-    // gold and shows the combined count so the user still knows
-    // how many things need attention.
     const hasGold =
         notifications.unseenResponses > 0 ||
         notifications.unseenAcceptedSentResponses > 0;
 
-    const backgroundColor = hasGold
-        ? GOLD
-        : MARKETPLACE_GREEN;
-
+    const backgroundColor = hasGold ? GOLD : MARKETPLACE_GREEN;
     const color = hasGold ? '#000000' : '#04160A';
-
-    const label =
-        notifications.total > 99
-            ? '99+'
-            : String(notifications.total);
+    const label = notifications.total > 99 ? '99+' : String(notifications.total);
 
     return (
         <span
@@ -337,39 +224,18 @@ export function TopBar() {
         promptInstall,
     } = usePwaInstall();
 
-    /**
-     * Current marketplace notification counts. Used to decide where
-     * both marketplace icons should take the user (Priority 1:
-     * Reçues, Priority 2: Voir les offres, Priority 3: default).
-     *
-     * Subscribing here means TopBar re-renders whenever the counts
-     * change — the same frequency as the badge's own subscription
-     * that is already mounted below, so there is no extra
-     * notification churn. The store dedupes identical poll results,
-     * so this fires only on an actual change.
-     */
     const marketplaceNotifications = useSyncExternalStore(
         subscribeToMarketplaceNotifications,
         getMarketplaceNotificationsSnapshot,
     );
 
-    /**
-     * Target URL for both marketplace icons. When a priority
-     * applies, it carries a query param so MarketplacePage jumps
-     * straight to the correct section on mount. Otherwise it is
-     * the plain `/marketplace` path, and the section store decides
-     * what to show.
-     */
-    const marketplaceTarget = computeMarketplaceTargetPath(
-        marketplaceNotifications,
-    );
+    const marketplaceTarget = computeMarketplaceTargetPath(marketplaceNotifications);
 
     async function handleLogout() {
         await logout();
         setMobileOpen(false);
     }
 
-    // Player search state
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<PlayerSearchResult[]>([]);
     const [searching, setSearching] = useState(false);
@@ -379,10 +245,8 @@ export function TopBar() {
     const menuIconAura = useAura('mobileMenuIcon');
     const logoAura = useAura('leagueLogo');
 
-    // --- Player search: debounced fetch --------------------------------
     useEffect(() => {
         const text = searchQuery.trim();
-
         if (text.length < 2) {
             setSearchResults([]);
             setSearching(false);
@@ -390,25 +254,18 @@ export function TopBar() {
         }
 
         setSearching(true);
-
         let cancelled = false;
 
         const timer = setTimeout(() => {
             searchPlayers(text)
                 .then((data) => {
-                    if (!cancelled) {
-                        setSearchResults(data);
-                    }
+                    if (!cancelled) setSearchResults(data);
                 })
                 .catch(() => {
-                    if (!cancelled) {
-                        setSearchResults([]);
-                    }
+                    if (!cancelled) setSearchResults([]);
                 })
                 .finally(() => {
-                    if (!cancelled) {
-                        setSearching(false);
-                    }
+                    if (!cancelled) setSearching(false);
                 });
         }, 300);
 
@@ -418,38 +275,27 @@ export function TopBar() {
         };
     }, [searchQuery]);
 
-    // --- Player search: reset on route change --------------------------
     useEffect(() => {
         setSearchQuery('');
         setSearchResults([]);
         setSearchModalOpen(false);
     }, [location.pathname]);
 
-    // --- Search modal: focus input when opened ------------------------
     useEffect(() => {
         if (searchModalOpen && searchInputRef.current) {
             searchInputRef.current.focus();
         }
     }, [searchModalOpen]);
 
-    // --- Search modal: close on Escape --------------------------------
     useEffect(() => {
         if (!searchModalOpen) return;
-
         function onKeyDown(event: KeyboardEvent) {
-            if (event.key === 'Escape') {
-                setSearchModalOpen(false);
-            }
+            if (event.key === 'Escape') setSearchModalOpen(false);
         }
-
         document.addEventListener('keydown', onKeyDown);
-
-        return () => {
-            document.removeEventListener('keydown', onKeyDown);
-        };
+        return () => document.removeEventListener('keydown', onKeyDown);
     }, [searchModalOpen]);
 
-    // --- Mobile menu icon aura ----------------------------------------
     const menuRest = [
         `drop-shadow(0 0 ${auraRangeFor(menuIconAura, 'mobileMenuIcon', 0).toFixed(2)}px #F2F5FA)`,
         `drop-shadow(0 0 ${auraRangeFor(menuIconAura, 'mobileMenuIcon', 1).toFixed(2)}px #00A8FF)`,
@@ -464,9 +310,7 @@ export function TopBar() {
         `drop-shadow(0 0 ${auraRangeFor(menuIconAura, 'mobileMenuIcon', 3).toFixed(2)}px rgba(0, 168, 255, 0.8))`,
     ].join(' ');
 
-    // --- League logo --------------------------------------------------
-    const logoLayer = (idx: number) =>
-        auraRangeFor(logoAura, 'leagueLogo', idx);
+    const logoLayer = (idx: number) => auraRangeFor(logoAura, 'leagueLogo', idx);
 
     const logoRest = [
         `drop-shadow(0 0 ${(logoLayer(0) * LEAGUE_LOGO_PULSE_REST_SCALE).toFixed(2)}px #F2F5FA)`,
@@ -498,9 +342,7 @@ export function TopBar() {
     return (
         <>
             <nav className='relative flex flex-1 items-center gap-x-6'>
-                <Link to='/' className='flex items-center'>
-                    {/* League logo: FIXED size. Never touched by
-                        NAV_ICON_CLASS. */}
+                <Link to='/' replace className='flex items-center'>
                     <img
                         src='/images/league/logo_07_beaver.png'
                         alt='Ligue Keeper'
@@ -513,12 +355,10 @@ export function TopBar() {
                     />
                 </Link>
 
-                {/*
-                 * Desktop nav.
-                 */}
                 <div className='hidden flex-1 items-center justify-around md:flex'>
                     <Link
                         to='/game-day'
+                        replace
                         className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/game-day'
                             ? 'font-medium text-primary'
                             : 'text-muted-foreground hover:text-foreground'
@@ -530,6 +370,7 @@ export function TopBar() {
 
                     <Link
                         to='/blessures'
+                        replace
                         className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/blessures'
                             ? 'font-medium text-primary'
                             : 'text-muted-foreground hover:text-foreground'
@@ -541,6 +382,7 @@ export function TopBar() {
 
                     <Link
                         to='/classement'
+                        replace
                         className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/classement'
                             ? 'font-medium text-primary'
                             : 'text-muted-foreground hover:text-foreground'
@@ -552,6 +394,7 @@ export function TopBar() {
 
                     <Link
                         to={marketplaceTarget}
+                        replace
                         className={`relative flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/marketplace'
                             ? 'font-medium text-primary'
                             : 'text-muted-foreground hover:text-foreground'
@@ -568,6 +411,7 @@ export function TopBar() {
                         {isCommissioner && (
                             <Link
                                 to='/admin'
+                                replace
                                 aria-label='Administration'
                                 className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/admin'
                                     ? 'font-medium text-primary'
@@ -582,6 +426,7 @@ export function TopBar() {
                         {isAuthenticated && (
                             <Link
                                 to='/profil'
+                                replace
                                 aria-label='Profil'
                                 className={`transition-colors ${location.pathname === '/profil'
                                     ? 'text-primary'
@@ -601,6 +446,7 @@ export function TopBar() {
                         {!isAuthenticated && (
                             <Link
                                 to='/connexion'
+                                replace
                                 className={`flex items-center gap-1.5 text-sm transition-colors ${location.pathname === '/connexion'
                                     ? 'font-medium text-primary'
                                     : 'text-muted-foreground hover:text-foreground'
@@ -613,20 +459,10 @@ export function TopBar() {
                     </div>
                 </div>
 
-                {/*
-                 * Right-aligned group: mobile shortcut icons
-                 * (Blessures, Marketplace, Game Day, Classement)
-                 * + Search + Déconnexion (desktop) + Hamburger
-                 * (mobile).
-                 *
-                 * Gap is slightly tighter on mobile (gap-3) than
-                 * on tablet+ (gap-5) so the six icons fit on a
-                 * 375px phone while still having breathing room.
-                 */}
                 <div className='ml-auto flex items-center gap-3 md:gap-5'>
-                    {/* Statistiques shortcut — mobile only. */}
                     <Link
                         to='/statistiques'
+                        replace
                         aria-label='Statistiques'
                         onClick={(e) => {
                             if (location.pathname === '/statistiques') {
@@ -645,24 +481,9 @@ export function TopBar() {
                         <StatsIcon className={NAV_ICON_CLASS} />
                     </Link>
 
-                    {/* Marketplace shortcut — mobile only.
-
-                        The SVG is rendered directly inside the <a>
-                        with the same NAV_ICON_CLASS the other mobile
-                        shortcut icons use. An inline-block wrapper
-                        around it (as we tried first) changes the
-                        icon's baseline inside the inline <a> and
-                        shifts it up. Rendering the SVG bare keeps it
-                        on the exact line box it had before the badge
-                        existed.
-
-                        The badge is absolutely positioned against
-                        the <a> (which is already `relative`), and
-                        centers on the <a>'s padding box. Because the
-                        <a> is a symmetric p-2 box around the icon,
-                        the badge effectively centers on the icon. */}
                     <Link
                         to={marketplaceTarget}
+                        replace
                         aria-label='Marketplace'
                         className={`relative cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/marketplace'
                             ? 'text-primary'
@@ -673,9 +494,9 @@ export function TopBar() {
                         <MarketplaceBadge />
                     </Link>
 
-                    {/* Game Day shortcut — mobile only. */}
                     <Link
                         to='/game-day'
+                        replace
                         aria-label='Game Day'
                         className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/game-day'
                             ? 'text-primary'
@@ -685,11 +506,9 @@ export function TopBar() {
                         <GameDayIcon className={NAV_ICON_CLASS} />
                     </Link>
 
-                    {/* Golden Classement shortcut — mobile only.
-                        Uses the Crown icon in the same gold aura the
-                        page header uses. */}
                     <Link
                         to='/classement'
+                        replace
                         aria-label='Classement'
                         className={`cursor-pointer rounded-lg bg-transparent p-2 transition-colors hover:bg-secondary md:hidden ${location.pathname === '/classement'
                             ? 'text-primary'
@@ -698,10 +517,7 @@ export function TopBar() {
                     >
                         <Crown
                             className={NAV_ICON_CLASS}
-                            style={{
-                                color: GOLD,
-                                filter: GOLD_AURA,
-                            }}
+                            style={{ color: GOLD, filter: GOLD_AURA }}
                         />
                     </Link>
 
@@ -713,10 +529,7 @@ export function TopBar() {
                     >
                         <Search
                             className={NAV_ICON_CLASS}
-                            style={{
-                                color: SEARCH_WHITE,
-                                filter: SEARCH_AURA,
-                            }}
+                            style={{ color: SEARCH_WHITE, filter: SEARCH_AURA }}
                         />
                     </button>
 
@@ -754,11 +567,11 @@ export function TopBar() {
                             <div className='flex flex-col gap-1 p-4 pt-0'>
                                 {MOBILE_NAV_ITEMS.map((item) => {
                                     const isActive = location.pathname === item.to;
-
                                     return (
                                         <Link
                                             key={item.to}
                                             to={item.to}
+                                            replace
                                             onClick={() => setMobileOpen(false)}
                                             className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${isActive
                                                 ? 'bg-secondary font-medium text-primary'
@@ -775,6 +588,7 @@ export function TopBar() {
                                     {isCommissioner && (
                                         <Link
                                             to='/admin'
+                                            replace
                                             onClick={() => setMobileOpen(false)}
                                             className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
                                         >
@@ -788,13 +602,10 @@ export function TopBar() {
                                             <p className='px-3 py-1 text-xs uppercase tracking-wide text-white'>
                                                 Style page joueur
                                             </p>
-
                                             <div className='flex gap-1 px-2 py-1'>
                                                 <button
                                                     type='button'
-                                                    onClick={() => {
-                                                        void updatePlayerPageStyle('Neon');
-                                                    }}
+                                                    onClick={() => void updatePlayerPageStyle('Neon')}
                                                     className={`flex-1 cursor-pointer rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${playerPageStyle === 'Neon'
                                                         ? 'bg-[#00A8FF] text-[#080D1A]'
                                                         : 'bg-transparent text-foreground hover:bg-secondary'
@@ -802,12 +613,9 @@ export function TopBar() {
                                                 >
                                                     Neon
                                                 </button>
-
                                                 <button
                                                     type='button'
-                                                    onClick={() => {
-                                                        void updatePlayerPageStyle('Classic');
-                                                    }}
+                                                    onClick={() => void updatePlayerPageStyle('Classic')}
                                                     className={`flex-1 cursor-pointer rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${playerPageStyle === 'Classic'
                                                         ? 'bg-[#00A8FF] text-[#080D1A]'
                                                         : 'bg-transparent text-foreground hover:bg-secondary'
@@ -832,15 +640,16 @@ export function TopBar() {
                                         <>
                                             <Link
                                                 to='/connexion'
+                                                replace
                                                 onClick={() => setMobileOpen(false)}
                                                 className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
                                             >
                                                 <LogIn className='h-4 w-4' />
                                                 <span>Connexion</span>
                                             </Link>
-
                                             <Link
                                                 to='/inscription'
+                                                replace
                                                 onClick={() => setMobileOpen(false)}
                                                 className='flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground hover:bg-secondary'
                                             >
@@ -850,58 +659,36 @@ export function TopBar() {
                                         </>
                                     )}
 
-                                    {!isInstalled &&
-                                        (canInstall ||
-                                            isIosSafari ||
-                                            isFirefox) && (
-                                            <div className='mt-3 border-t border-border pt-3'>
-                                                {canInstall && (
-                                                    <button
-                                                        type='button'
-                                                        onClick={() => {
-                                                            void promptInstall();
-                                                        }}
-                                                        className='flex w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg px-3 py-3 text-center text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-all hover:brightness-110'
-                                                        style={INSTALL_BUTTON_STYLE}
-                                                    >
-                                                        <Download
-                                                            className='h-5 w-5 shrink-0'
-                                                            aria-hidden='true'
-                                                        />
-                                                        <span className='leading-tight'>
-                                                            Installer l'application
-                                                        </span>
-                                                    </button>
-                                                )}
+                                    {!isInstalled && (canInstall || isIosSafari || isFirefox) && (
+                                        <div className='mt-3 border-t border-border pt-3'>
+                                            {canInstall && (
+                                                <button
+                                                    type='button'
+                                                    onClick={() => void promptInstall()}
+                                                    className='flex w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg px-3 py-3 text-center text-sm font-bold uppercase tracking-wider text-[#F2F5FA] transition-all hover:brightness-110'
+                                                    style={INSTALL_BUTTON_STYLE}
+                                                >
+                                                    <Download className='h-5 w-5 shrink-0' aria-hidden='true' />
+                                                    <span className='leading-tight'>Installer l'application</span>
+                                                </button>
+                                            )}
 
-                                                {!canInstall && isIosSafari && (
-                                                    <IosShareHint />
-                                                )}
+                                            {!canInstall && isIosSafari && <IosShareHint />}
 
-                                                {!canInstall && isFirefox && (
-                                                    <div className='rounded-lg px-3 py-2 text-xs'>
-                                                        <div className='flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-foreground'>
-                                                            <Download
-                                                                className='h-4 w-4 shrink-0'
-                                                                aria-hidden='true'
-                                                            />
-                                                            <span className='leading-tight'>
-                                                                Installer l'application
-                                                            </span>
-                                                        </div>
-
-                                                        <p className='mt-1 leading-relaxed text-muted-foreground'>
-                                                            Ouvrez le menu du navigateur puis
-                                                            choisissez{' '}
-                                                            <span className='font-semibold text-foreground'>
-                                                                « Installer »
-                                                            </span>
-                                                            .
-                                                        </p>
+                                            {!canInstall && isFirefox && (
+                                                <div className='rounded-lg px-3 py-2 text-xs'>
+                                                    <div className='flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-foreground'>
+                                                        <Download className='h-4 w-4 shrink-0' aria-hidden='true' />
+                                                        <span className='leading-tight'>Installer l'application</span>
                                                     </div>
-                                                )}
-                                            </div>
-                                        )}
+                                                    <p className='mt-1 leading-relaxed text-muted-foreground'>
+                                                        Ouvrez le menu du navigateur puis choisissez{' '}
+                                                        <span className='font-semibold text-foreground'>« Installer »</span>.
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </SheetContent>
@@ -927,16 +714,14 @@ export function TopBar() {
                                 className='flex items-center gap-2 border-b px-3 py-2.5'
                                 style={{
                                     borderColor: 'rgba(0, 168, 255, 0.35)',
-                                    background:
-                                        'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))',
+                                    background: 'linear-gradient(180deg, rgba(0, 168, 255, 0.12), rgba(0, 168, 255, 0.02))',
                                 }}
                             >
                                 <Search
                                     className='h-4 w-4 shrink-0'
                                     style={{
                                         color: '#00E5FF',
-                                        filter:
-                                            'drop-shadow(0 0 6px rgba(0, 229, 255, 0.85)) drop-shadow(0 0 14px rgba(0, 229, 255, 0.4))',
+                                        filter: 'drop-shadow(0 0 6px rgba(0, 229, 255, 0.85)) drop-shadow(0 0 14px rgba(0, 229, 255, 0.4))',
                                     }}
                                 />
 
@@ -946,14 +731,9 @@ export function TopBar() {
                                     value={searchQuery}
                                     autoComplete='off'
                                     placeholder='RECHERCHER UN JOUEUR'
-                                    onChange={(event) =>
-                                        setSearchQuery(event.target.value)
-                                    }
+                                    onChange={(event) => setSearchQuery(event.target.value)}
                                     className='w-full bg-transparent text-sm font-semibold uppercase tracking-wider text-[#00E5FF] placeholder:text-[#00E5FF]/40 focus:outline-none'
-                                    style={{
-                                        textShadow:
-                                            '0 0 8px rgba(0, 229, 255, 0.35)',
-                                    }}
+                                    style={{ textShadow: '0 0 8px rgba(0, 229, 255, 0.35)' }}
                                 />
 
                                 <button
@@ -967,21 +747,13 @@ export function TopBar() {
                             </div>
 
                             <div className='max-h-80 overflow-y-auto'>
-                                {searchQuery.trim().length >= 2 &&
-                                    searching &&
-                                    searchResults.length === 0 && (
-                                        <p className='px-3 py-3 text-sm text-muted-foreground'>
-                                            Recherche...
-                                        </p>
-                                    )}
+                                {searchQuery.trim().length >= 2 && searching && searchResults.length === 0 && (
+                                    <p className='px-3 py-3 text-sm text-muted-foreground'>Recherche...</p>
+                                )}
 
-                                {searchQuery.trim().length >= 2 &&
-                                    !searching &&
-                                    searchResults.length === 0 && (
-                                        <p className='px-3 py-3 text-sm text-muted-foreground'>
-                                            Aucun joueur trouvé.
-                                        </p>
-                                    )}
+                                {searchQuery.trim().length >= 2 && !searching && searchResults.length === 0 && (
+                                    <p className='px-3 py-3 text-sm text-muted-foreground'>Aucun joueur trouvé.</p>
+                                )}
 
                                 {searchResults.map((p) => (
                                     <button
@@ -989,15 +761,11 @@ export function TopBar() {
                                         type='button'
                                         onClick={() => handlePickResult(p)}
                                         className='flex w-full cursor-pointer items-center justify-between gap-2 border-b px-3 py-2 text-left text-sm transition-colors last:border-b-0 hover:bg-[#00A8FF]/10'
-                                        style={{
-                                            borderColor:
-                                                'rgba(0, 168, 255, 0.12)',
-                                        }}
+                                        style={{ borderColor: 'rgba(0, 168, 255, 0.12)' }}
                                     >
                                         <span className='truncate font-semibold text-foreground'>
                                             {p.firstName} {p.lastName}
                                         </span>
-
                                         <span className='shrink-0 text-xs uppercase tracking-wider text-[#7DD3FC]'>
                                             {p.nhlTeamAbbreviation} · {p.position}
                                         </span>
