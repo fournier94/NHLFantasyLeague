@@ -341,8 +341,8 @@ export function TopBar() {
 
     return (
         <>
-            <nav className='relative flex flex-1 items-center gap-x-6'>
-                <Link to='/' replace className='flex items-center'>
+            <nav className='relative flex flex-1 items-center justify-between md:justify-start md:gap-x-6'>
+                <Link to='/' replace className='mr-2 flex items-center md:mr-0'>
                     <img
                         src='/images/league/logo_07_beaver.png'
                         alt='Ligue Keeper'
@@ -459,7 +459,7 @@ export function TopBar() {
                     </div>
                 </div>
 
-                <div className='ml-auto flex items-center gap-3 md:gap-5'>
+                <div className='contents md:ml-auto md:flex md:items-center md:gap-5'>
                     <Link
                         to='/statistiques'
                         replace
