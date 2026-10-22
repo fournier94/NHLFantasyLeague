@@ -64,7 +64,7 @@ namespace NhlFantasyLeague.api.Services
 
         // ----- Season 2026-2027 -----
         private const string CurrentSeasonName = "2026-2027";
-        private const int CurrentSeasonNhlSeasonCode = 20262027;
+        private const int CurrentSeasonNhlSeasonCode = NhlFantasyLeague.api.Constants.SeasonCodes.Current;
         private static readonly DateOnly CurrentSeasonStartDate = new DateOnly(2026, 09, 28);
         private static readonly DateOnly CurrentSeasonEndDate = new DateOnly(2027, 6, 30);
 

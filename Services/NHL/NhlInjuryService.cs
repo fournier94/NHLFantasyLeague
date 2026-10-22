@@ -354,6 +354,17 @@ namespace NhlFantasyLeague.api.Services.NHL
             var unmatched = 0;
             var unmatchedNames = new List<string>();
 
+            // Load ALL open spells once. This prevents an N+1 query
+            // inside ApplyInjuryAsync (which used to query the DB
+            // for every single injured player).
+            var allOpenSpells = await _dbContext.PlayerInjuryHistories
+                .Where(h => h.ResolvedAt == null)
+                .ToListAsync(ct);
+
+            var openSpellsByPlayerId = allOpenSpells
+                .GroupBy(h => h.PlayerId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
             foreach (var team in payload.Teams)
             {
                 var teamId = ResolveTeamId(
@@ -423,7 +434,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                         continue;
                     }
 
-                    await ApplyInjuryAsync(match, row, now);
+                    ApplyInjuryAsync(match, row, now, openSpellsByPlayerId);
                     matched++;
                 }
             }
@@ -571,7 +582,7 @@ namespace NhlFantasyLeague.api.Services.NHL
             return strong && clearLead ? best.Player : null;
         }
 
-        private async Task ApplyInjuryAsync(Player player, NhlInjuryPlayer row, DateTime now)
+        private void ApplyInjuryAsync(Player player, NhlInjuryPlayer row, DateTime now, Dictionary<int, List<PlayerInjuryHistory>> openSpellsByPlayerId)
         {
             player.IsInjured = true;
             player.InjuryStatus = row.Status;
@@ -590,48 +601,22 @@ namespace NhlFantasyLeague.api.Services.NHL
             var teamAbbrev = GetTeamAbbreviation(player);
             var status = (row.Status ?? string.Empty).Trim();
 
-            // Look in the local (tracked) set first, then in the database.
-            // Both lookups are trimmed and case-insensitive so cosmetic
-            // ESPN changes never open a brand new spell.
-            // 1. Try the local (tracked) set first. This catches rows that
-            //    were opened earlier in this same refresh cycle.
-            var open = _dbContext.PlayerInjuryHistories.Local
-                .FirstOrDefault(h =>
-                    h.PlayerId == player.Id &&
-                    h.ResolvedAt == null &&
-                    string.Equals(
-                        h.InjuryStatus.Trim(),
-                        status,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(
-                        h.TeamAbbreviation,
-                        teamAbbrev,
-                        StringComparison.OrdinalIgnoreCase));
-
-            // 2. Fall back to the database. Load the player's open spells
-            //    once and compare in memory: EF Core cannot translate the
-            //    StringComparison overload.
-            //
-            //    NOTE: must stay tracked, because we set LastSeenAt on a
-            //    match below.
-            if (open == null)
+            if (!openSpellsByPlayerId.TryGetValue(player.Id, out var openSpellsForPlayer))
             {
-                var openSpellsForPlayer = await _dbContext.PlayerInjuryHistories
-                    .Where(h =>
-                        h.PlayerId == player.Id &&
-                        h.ResolvedAt == null)
-                    .ToListAsync();
-
-                open = openSpellsForPlayer.FirstOrDefault(h =>
-                    string.Equals(
-                        h.InjuryStatus.Trim(),
-                        status,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(
-                        h.TeamAbbreviation,
-                        teamAbbrev,
-                        StringComparison.OrdinalIgnoreCase));
+                openSpellsForPlayer = new List<PlayerInjuryHistory>();
+                openSpellsByPlayerId[player.Id] = openSpellsForPlayer;
             }
+
+            var open = openSpellsForPlayer.FirstOrDefault(h =>
+                h.ResolvedAt == null &&
+                string.Equals(
+                    h.InjuryStatus.Trim(),
+                    status,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    h.TeamAbbreviation,
+                    teamAbbrev,
+                    StringComparison.OrdinalIgnoreCase));
 
             if (open != null)
             {
@@ -639,7 +624,7 @@ namespace NhlFantasyLeague.api.Services.NHL
                 return;
             }
 
-            _dbContext.PlayerInjuryHistories.Add(new PlayerInjuryHistory
+            var newSpell = new PlayerInjuryHistory
             {
                 PlayerId = player.Id,
                 InjuryStatus = status,
@@ -648,7 +633,10 @@ namespace NhlFantasyLeague.api.Services.NHL
                 FirstSeenAt = now,
                 LastSeenAt = now,
                 ResolvedAt = null
-            });
+            };
+
+            _dbContext.PlayerInjuryHistories.Add(newSpell);
+            openSpellsForPlayer.Add(newSpell);
         }
 
         /// <summary>

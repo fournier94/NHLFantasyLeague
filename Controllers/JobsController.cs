@@ -27,8 +27,8 @@ namespace NhlFantasyLeague.api.Controllers
 
         [HttpPost("refresh-all/start")]
         public IActionResult StartRefreshAll(
-            [FromQuery] int seasonCode = 20262027,
-            [FromQuery] int delayMsBetweenPlayers = 500)
+       [FromQuery] int seasonCode = NhlFantasyLeague.api.Constants.SeasonCodes.Current,
+       [FromQuery] int delayMsBetweenPlayers = 500)
         {
             var job = _jobs.Start("refresh-all", async (ctx, sp) =>
             {
@@ -150,9 +150,9 @@ namespace NhlFantasyLeague.api.Controllers
         /// </summary>
         [HttpPost("refresh-everything/start")]
         public IActionResult StartRefreshEverything(
-            [FromQuery] int seasonCode = 20262027,
-            [FromQuery] int delayMsBetweenPlayers = 500,
-            [FromQuery] int delayMsBetweenCalls = 500)
+     [FromQuery] int seasonCode = NhlFantasyLeague.api.Constants.SeasonCodes.Current,
+     [FromQuery] int delayMsBetweenPlayers = 500,
+     [FromQuery] int delayMsBetweenCalls = 500)
         {
             var job = _jobs.Start("refresh-everything", async (ctx, sp) =>
             {
